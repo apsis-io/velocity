@@ -8,20 +8,33 @@ immutability.
 ## Cell states
 
 ```text
-             IntoShared
- unique --------------------> shared
-   |  \                         |  \
-   |   \ Move -> unique        |   \ Clone -> shared (+1 handle)
-   |                            |    \
-   | IntoValue                       |     \ IntoOwner (sole, unborrowed)
-   |                            |      ----------------------------> unique
-   v                            v
- released <---------------- final explicit Release
+                    IntoShared
+        .--------------------------------> shared
+        |                                    | \ Clone -> shared (+1 handle)
+        |         <-- IntoOwner (sole, unborrowed) --
+        |
+ unique -+-- Move -> unique
+        |-- IntoValue -> bare T (no Drop)
+        |-- Map -> unique (new cell over U; this cell released)
+        |
+        |             Freeze
+        '--------------------------------> frozen
+                                             | \ Clone -> frozen (+1 handle)
+                  <-- IntoOwner (sole, unborrowed) --
+
+ any mode --- final explicit Release ---> released
 ```
 
-A unique cell has one active Owner and no Shared handles. A shared cell has no
-Owner and one or more explicitly cloned Shared handles. A released cell has no
-value, readers, writer, Owner, or Shared handle.
+A unique cell has one active Owner and no counted handles. A shared cell has no
+Owner and one or more explicitly cloned Shared handles. A frozen cell is a
+shared cell that can never take a write borrow: `Frozen[T]` exposes no write
+operation, so read-only is enforced by the type rather than rejected at
+runtime. A released cell has no value, readers, writer, or handle of any kind.
+
+`Map` is the only transition that produces a cell over a different type. It
+releases the source cell and hands the source Drop to the derived cell, which
+runs the derived Drop first and the source Drop second, against the retained
+source value. The callback must not release the source value itself.
 
 Each public handle is separately active, moved, or released. Pointer aliases of
 a handle observe its transition together; assigning a `*Shared[T]` does not
@@ -60,6 +73,15 @@ not retried.
 `runtime.AddCleanup` protects only leaked advanced borrow leases and emits a
 leak diagnostic under `velocitydebug`. It never decrements Owner/Shared handle
 counts, invokes Drop, or provides deterministic correctness.
+
+That protection is most of the cost of an advanced borrow: it accounts for four
+of the five allocations `Borrow` makes. `BorrowUntracked` and
+`BorrowMutUntracked` skip it, and are otherwise identical in preconditions,
+conflicts, and returned type. They suit callers whose release is guaranteed on
+every path including panics — `dedupe`'s borrowed-input API is one — and are
+wrong anywhere release is merely intended, because a handle that is never
+released then blocks its cell permanently. Scoped `Read`/`Write` remain the
+default: they cannot leak and allocate once.
 
 ## Alias boundary
 

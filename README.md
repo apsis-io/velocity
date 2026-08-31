@@ -89,6 +89,34 @@ Drop runs at most once on explicit final release. Its first error is returned
 once and retained by `State`. Runtime cleanup never runs Drop. A Clone is only
 as independent as its implementation; velocity cannot validate clone quality.
 
+## Freeze and transform
+
+`Freeze` gives up mutation for a counted read-only handle. `Frozen[T]` has no
+`Write`, `BorrowMut`, or `Update` to call, so this is enforced by the type
+rather than rejected at runtime; `IntoOwner` thaws the sole unborrowed handle
+back:
+
+```go
+frozen, err := owner.Freeze()
+peer, err := frozen.Clone()      // counted, like Shared
+defer peer.Release()
+defer frozen.Release()
+```
+
+`Map` transforms an owned value into another type while keeping cleanup
+intact — unlike `IntoValue`, which exits ownership without running Drop:
+
+```go
+writer, err := file.Map(
+    func(f *os.File) (*bufio.Writer, error) { return bufio.NewWriter(f), nil },
+    ownership.WithDrop(func(w *bufio.Writer) error { return w.Flush() }),
+)
+// Releasing writer flushes it, then closes the file underneath.
+```
+
+The callback must not close the source value itself: the source Drop still
+runs afterwards.
+
 ## Safety boundary
 
 This package enforces borrow state at runtime. It is not Rust ownership and does

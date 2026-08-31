@@ -48,6 +48,31 @@ This records current selections, not superseded planning alternatives.
   call Goexit. Errors and context causes are the supported failure paths.
 - This is runtime borrow-state enforcement, not compile-time ownership, deep
   immutability, rollback, or alias revocation.
+- `Frozen[T]` is the one exception to "runtime enforcement": it exposes no
+  write operation at all, so read-only is a property of the type rather than
+  a conflict rejected at runtime. A flag on `Shared` could not provide that,
+  which is why it is a distinct type rather than a mode bit. It is
+  reference-counted like `Shared`, and `IntoOwner` thaws the sole unborrowed
+  handle back to a mutable `Owner`.
+- `Owner.Map[U]` is the only transition producing a cell over a different
+  type, and exists because `IntoValue` — previously the only exit — does not
+  run Drop, so wrapping an owned resource silently discarded its cleanup.
+  The derived cell's Drop runs the derived policy first, then the source
+  Drop against the retained source value: unwrap before closing what was
+  wrapped. Caller obligation, documented at the method: `fn` must not
+  release the source value, since the source Drop still runs later. `Map`
+  holds an exclusive lease across `fn` and commits the transfer in the same
+  critical section that releases it, so no borrow can interleave after `fn`
+  has already produced the derived value; a failed `fn` leaves the source
+  `Owner` untouched.
+- `Borrow{,Mut}Untracked` skip the `runtime.AddCleanup` leak net, which is
+  four of the five allocations a tracked advanced borrow makes (379 ns ->
+  161 ns, 5 -> 2 allocs). They are for callers whose release is guaranteed
+  on every path including panics, and are wrong where release is merely
+  intended: an unreleased handle then blocks its cell permanently instead of
+  being reclaimed. `dedupe`'s borrowed-input API is the demonstrated caller.
+  Scoped `Read`/`Write` stay the default — they cannot leak and allocate
+  once.
 
 ## Opcodes and opruntime (implemented)
 
