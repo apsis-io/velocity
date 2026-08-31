@@ -5,6 +5,7 @@ import (
 	"slices"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/apsis-io/velocity/ownership"
 )
@@ -96,7 +97,7 @@ func TestBorrowConflictsAndRelease(t *testing.T) {
 	}
 }
 
-func TestMoveTakeAndCleanup(t *testing.T) {
+func TestMoveIntoValueAndCleanup(t *testing.T) {
 	var drops atomic.Int32
 	owner := mustOwner(t, 7, ownership.WithDrop(func(int) error { drops.Add(1); return nil }))
 	moved, err := owner.Move()
@@ -109,9 +110,9 @@ func TestMoveTakeAndCleanup(t *testing.T) {
 	if err := owner.Release(); err != nil {
 		t.Fatal(err)
 	}
-	value, err := moved.Take()
+	value, err := moved.IntoValue()
 	if err != nil || value != 7 {
-		t.Fatalf("Take = (%d, %v)", value, err)
+		t.Fatalf("IntoValue = (%d, %v)", value, err)
 	}
 	if err := moved.Close(); err != nil {
 		t.Fatal(err)
@@ -121,7 +122,7 @@ func TestMoveTakeAndCleanup(t *testing.T) {
 	}
 }
 
-func TestSharedCloneReleaseAndTryUnwrap(t *testing.T) {
+func TestSharedCloneReleaseAndIntoOwner(t *testing.T) {
 	owner := mustOwner(t, 3)
 	shared, err := owner.IntoShared()
 	if err != nil {
@@ -131,22 +132,22 @@ func TestSharedCloneReleaseAndTryUnwrap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := shared.TryUnwrap(); !errors.Is(err, ownership.ErrConflict) {
-		t.Fatalf("TryUnwrap with clone = %v", err)
+	if _, err := shared.IntoOwner(); !errors.Is(err, ownership.ErrConflict) {
+		t.Fatalf("IntoOwner with clone = %v", err)
 	}
 	if err := clone.Release(); err != nil {
 		t.Fatal(err)
 	}
-	unwrapped, err := shared.TryUnwrap()
+	unwrapped, err := shared.IntoOwner()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := shared.Close(); err != nil {
 		t.Fatal(err)
 	}
-	value, err := unwrapped.Take()
+	value, err := unwrapped.IntoValue()
 	if err != nil || value != 3 {
-		t.Fatalf("Take = (%d, %v)", value, err)
+		t.Fatalf("IntoValue = (%d, %v)", value, err)
 	}
 }
 
@@ -170,6 +171,45 @@ func TestSharedReleaseRules(t *testing.T) {
 	}
 	if drops.Load() != 1 {
 		t.Fatalf("drops = %d", drops.Load())
+	}
+}
+
+func TestDropCanReenterOwnerRelease(t *testing.T) {
+	var owner *ownership.Owner[int]
+	owner = mustOwner(t, 9, ownership.WithDrop(func(int) error {
+		return owner.Release()
+	}))
+	done := make(chan error, 1)
+	go func() { done <- owner.Release() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Release = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("reentrant Owner.Release deadlocked")
+	}
+}
+
+func TestDropCanReenterFinalSharedRelease(t *testing.T) {
+	var reentrant *ownership.Shared[int]
+	owner := mustOwner(t, 9, ownership.WithDrop(func(int) error {
+		return reentrant.Release()
+	}))
+	var err error
+	reentrant, err = owner.IntoShared()
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- reentrant.Release() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Release = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("reentrant Shared.Release deadlocked")
 	}
 }
 
@@ -201,6 +241,42 @@ func TestDropRunsTerminallyOnceAndRetainsError(t *testing.T) {
 	}
 }
 
+func TestSnapshotChecksHandleBeforeCloneConfiguration(t *testing.T) {
+	owner := mustOwner(t, 1)
+	moved, err := owner.Move()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := owner.Snapshot(); !errors.Is(err, ownership.ErrMoved) {
+		t.Fatalf("moved Snapshot = %v", err)
+	}
+	if _, err := moved.Snapshot(); !errors.Is(err, ownership.ErrNoClone) {
+		t.Fatalf("live Snapshot = %v", err)
+	}
+	if err := moved.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := moved.Snapshot(); !errors.Is(err, ownership.ErrReleased) {
+		t.Fatalf("released Snapshot = %v", err)
+	}
+
+	owner = mustOwner(t, 1)
+	shared, err := owner.IntoShared()
+	if err != nil {
+		t.Fatal(err)
+	}
+	unwrapped, err := shared.IntoOwner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := shared.Snapshot(); !errors.Is(err, ownership.ErrMoved) {
+		t.Fatalf("unwrapped Shared Snapshot = %v", err)
+	}
+	if err := unwrapped.Release(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSnapshotAndCloneValidation(t *testing.T) {
 	owner := mustOwner(t, []int{1, 2})
 	if _, err := owner.Snapshot(); !errors.Is(err, ownership.ErrNoClone) {
@@ -223,6 +299,14 @@ func TestSnapshotAndCloneValidation(t *testing.T) {
 }
 
 func TestOptionsAndProjectionErrors(t *testing.T) {
+	_, err := ownership.New(1, (ownership.Option[int])(nil))
+	if !errors.Is(err, ownership.ErrInvalidConfig) || !errors.Is(err, ownership.ErrNilOption) || errors.Is(err, ownership.ErrProjection) {
+		t.Fatalf("nil option = %v", err)
+	}
+	var configErr *ownership.ConfigError
+	if !errors.As(err, &configErr) || configErr.Option != "option 0" {
+		t.Fatalf("nil option wrapper = %#v", err)
+	}
 	if _, err := ownership.New(1, ownership.WithDrop[int](nil)); !errors.Is(err, ownership.ErrInvalidConfig) {
 		t.Fatalf("nil drop = %v", err)
 	}

@@ -48,6 +48,76 @@ func TestConcurrentReadersExcludeWriter(t *testing.T) {
 	}
 }
 
+func TestConcurrentWriteBorrowUpdateConflicts(t *testing.T) {
+	owner := mustOwner(t, 0)
+	borrow, err := owner.BorrowMut()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered := make(chan struct{})
+	leave := make(chan struct{})
+	first := make(chan error, 1)
+	go func() {
+		_, err := borrow.Update(func(value *int) (struct{}, error) {
+			close(entered)
+			<-leave
+			*value++
+			return struct{}{}, nil
+		})
+		first <- err
+	}()
+	<-entered
+	if _, err := borrow.Update(func(value *int) (struct{}, error) {
+		*value++
+		return struct{}{}, nil
+	}); !errors.Is(err, ownership.ErrConflict) {
+		t.Fatalf("concurrent Update = %v", err)
+	}
+	close(leave)
+	if err := <-first; err != nil {
+		t.Fatal(err)
+	}
+	if err := borrow.Release(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestConcurrentBorrowReleaseDoesNotLoseRelease(t *testing.T) {
+	owner := mustOwner(t, 1)
+	borrow, err := owner.Borrow()
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered := make(chan struct{})
+	leave := make(chan struct{})
+	projected := make(chan error, 1)
+	go func() {
+		_, err := borrow.Project(func(int) (struct{}, error) {
+			close(entered)
+			<-leave
+			return struct{}{}, nil
+		})
+		projected <- err
+	}()
+	<-entered
+	if err := borrow.Release(); !errors.Is(err, ownership.ErrConflict) {
+		t.Fatalf("Release during Project = %v", err)
+	}
+	close(leave)
+	if err := <-projected; err != nil {
+		t.Fatal(err)
+	}
+	if err := borrow.Release(); err != nil {
+		t.Fatalf("Release after Project = %v", err)
+	}
+	if state := owner.State(); state.Readers != 0 {
+		t.Fatalf("state = %+v", state)
+	}
+	if _, err := borrow.Project(func(int) (struct{}, error) { return struct{}{}, nil }); !errors.Is(err, ownership.ErrReleased) {
+		t.Fatalf("Project after Release = %v", err)
+	}
+}
+
 func TestConcurrentReleaseRunsDropOnce(t *testing.T) {
 	var drops atomic.Int32
 	owner := mustOwner(t, 1, ownership.WithDrop(func(int) error {

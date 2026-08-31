@@ -44,13 +44,10 @@ type cell[T any] struct {
 	writer  bool
 	shares  int
 
-	drop         traits.Drop[T]
-	clone        traits.Clone[T]
-	dropErr      error
-	dropStarted  bool
-	dropFinished bool
-	dropWait     chan struct{}
-	nextID       uint64
+	drop    traits.Drop[T]
+	clone   traits.Clone[T]
+	dropErr error
+	nextID  uint64
 }
 
 type handle struct {
@@ -80,6 +77,12 @@ func (c *cell[T]) stateFor(h *handle) State {
 }
 
 func (c *cell[T]) conflict(op Operation) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.conflictLocked(op)
+}
+
+func (c *cell[T]) conflictLocked(op Operation) error {
 	return &ConflictError{Operation: op, Readers: c.readers, Writer: c.writer, Shares: c.shares}
 }
 
@@ -109,7 +112,7 @@ func (c *cell[T]) acquireRead(h *handle, expected mode) (*lease[T], error) {
 		return nil, &MovedError{Operation: OpBorrow}
 	}
 	if c.writer {
-		return nil, c.conflict(OpBorrow)
+		return nil, c.conflictLocked(OpBorrow)
 	}
 	c.readers++
 	h.borrows++
@@ -127,7 +130,7 @@ func (c *cell[T]) acquireWrite(h *handle, expected mode) (*lease[T], error) {
 		return nil, &MovedError{Operation: OpBorrowMut}
 	}
 	if c.writer || c.readers != 0 {
-		return nil, c.conflict(OpBorrowMut)
+		return nil, c.conflictLocked(OpBorrowMut)
 	}
 	c.writer = true
 	h.borrows++
@@ -150,26 +153,4 @@ func (c *cell[T]) releaseLease(l *lease[T]) bool {
 	}
 	l.issuer.borrows--
 	return true
-}
-
-func (c *cell[T]) project(l *lease[T], fn func(T) (any, error)) (any, error) {
-	c.mu.Lock()
-	if l == nil || l.released || l.kind != borrowRead {
-		c.mu.Unlock()
-		return nil, &ReleasedError{Operation: OpProject}
-	}
-	value := c.value
-	c.mu.Unlock()
-	return fn(value)
-}
-
-func (c *cell[T]) update(l *lease[T], fn func(*T) (any, error)) (any, error) {
-	c.mu.Lock()
-	if l == nil || l.released || l.kind != borrowWrite {
-		c.mu.Unlock()
-		return nil, &ReleasedError{Operation: OpUpdate}
-	}
-	value := &c.value
-	c.mu.Unlock()
-	return fn(value)
 }

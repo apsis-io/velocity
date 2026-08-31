@@ -60,7 +60,7 @@ func BenchmarkOwner(b *testing.B) {
 		for b.Loop() {
 			owner, _ := ownership.New(1)
 			moved, _ := owner.Move()
-			ownershipSink, _ = moved.Take()
+			ownershipSink, _ = moved.IntoValue()
 		}
 	})
 	b.Run("conflict", func(b *testing.B) {
@@ -105,8 +105,8 @@ func BenchmarkShared(b *testing.B) {
 		for b.Loop() {
 			owner, _ := ownership.New(1)
 			shared, _ := owner.IntoShared()
-			owner, _ = shared.TryUnwrap()
-			ownershipSink, _ = owner.Take()
+			owner, _ = shared.IntoOwner()
+			ownershipSink, _ = owner.IntoValue()
 		}
 	})
 }

@@ -45,10 +45,5 @@ func (a WriteAccess[T]) Update[R any](fn func(*T) (R, error)) (R, error) {
 		var zero R
 		return zero, &ReleasedError{Operation: OpUpdate}
 	}
-	if err := a.lease.begin(borrowWrite, OpUpdate); err != nil {
-		var zero R
-		return zero, err
-	}
-	defer a.lease.end()
-	return fn(&a.lease.cell.value)
+	return a.lease.withWrite(OpUpdate, fn)
 }

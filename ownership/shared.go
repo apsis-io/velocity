@@ -71,7 +71,7 @@ func (s *Shared[T]) Read[R any](fn func(ReadAccess[T]) (R, error)) (R, error) {
 		var zero R
 		return zero, err
 	}
-	defer borrow.Release()
+	defer borrow.closeScoped()
 	return fn(ReadAccess[T]{lease: borrow.lease})
 }
 
@@ -86,7 +86,7 @@ func (s *Shared[T]) Write[R any](fn func(WriteAccess[T]) (R, error)) (R, error) 
 		var zero R
 		return zero, err
 	}
-	defer borrow.Release()
+	defer borrow.closeScoped()
 	return fn(WriteAccess[T]{lease: borrow.lease})
 }
 
@@ -97,6 +97,11 @@ func (s *Shared[T]) Snapshot() (T, error) {
 		return zero, &ReleasedError{Operation: OpSnapshot}
 	}
 	s.c.mu.Lock()
+	if err := s.c.checkHandle(&s.h, OpSnapshot); err != nil {
+		s.c.mu.Unlock()
+		var zero T
+		return zero, err
+	}
 	clone := s.c.clone
 	s.c.mu.Unlock()
 	if clone == nil {
@@ -108,20 +113,20 @@ func (s *Shared[T]) Snapshot() (T, error) {
 	})
 }
 
-// TryUnwrap consumes the sole unborrowed Shared handle and returns a unique
+// IntoOwner consumes the sole unborrowed Shared handle and returns a unique
 // Owner. On conflict, it leaves the Shared handle unchanged.
-func (s *Shared[T]) TryUnwrap() (*Owner[T], error) {
+func (s *Shared[T]) IntoOwner() (*Owner[T], error) {
 	if s == nil || s.c == nil {
-		return nil, &ReleasedError{Operation: OpTryUnwrap}
+		return nil, &ReleasedError{Operation: OpIntoOwner}
 	}
 	c := s.c
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if err := c.checkHandle(&s.h, OpTryUnwrap); err != nil {
+	if err := c.checkHandle(&s.h, OpIntoOwner); err != nil {
 		return nil, err
 	}
 	if c.mode != modeShared || c.shares != 1 || s.h.borrows != 0 || c.readers != 0 || c.writer {
-		return nil, c.conflict(OpTryUnwrap)
+		return nil, c.conflictLocked(OpIntoOwner)
 	}
 	s.h.state = handleMoved
 	c.shares = 0
@@ -136,13 +141,9 @@ func (s *Shared[T]) Release() error {
 		return nil
 	}
 	c := s.c
-	value, drop, wait, first, err := c.beginSharedRelease(&s.h)
+	value, drop, first, err := c.beginSharedRelease(&s.h)
 	if err != nil {
 		return err
-	}
-	if wait != nil {
-		<-wait
-		return nil
 	}
 	if !first {
 		return nil
@@ -159,28 +160,25 @@ func (s *Shared[T]) Release() error {
 // Close is an exact alias of Release.
 func (s *Shared[T]) Close() error { return s.Release() }
 
-func (c *cell[T]) beginSharedRelease(h *handle) (value T, drop func(T) error, wait <-chan struct{}, first bool, err error) {
+func (c *cell[T]) beginSharedRelease(h *handle) (value T, drop func(T) error, first bool, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if h.state == handleMoved || h.state == handleReleased || c.mode == modeReleased {
-		if c.dropStarted && !c.dropFinished {
-			return value, nil, c.dropWait, false, nil
-		}
-		return value, nil, nil, false, nil
+		return value, nil, false, nil
 	}
 	if h.borrows != 0 {
-		return value, nil, nil, false, c.conflict(OpRelease)
+		return value, nil, false, c.conflictLocked(OpRelease)
 	}
 	if c.mode != modeShared {
-		return value, nil, nil, false, &MovedError{Operation: OpRelease}
+		return value, nil, false, &MovedError{Operation: OpRelease}
 	}
 	if c.shares > 1 {
 		h.state = handleReleased
 		c.shares--
-		return value, nil, nil, false, nil
+		return value, nil, false, nil
 	}
 	if c.readers != 0 || c.writer {
-		return value, nil, nil, false, c.conflict(OpRelease)
+		return value, nil, false, c.conflictLocked(OpRelease)
 	}
 	h.state = handleReleased
 	c.shares = 0
@@ -188,7 +186,5 @@ func (c *cell[T]) beginSharedRelease(h *handle) (value T, drop func(T) error, wa
 	var zero T
 	c.value = zero
 	c.mode = modeReleased
-	c.dropStarted = true
-	c.dropWait = make(chan struct{})
-	return value, c.drop, nil, true, nil
+	return value, c.drop, true, nil
 }

@@ -76,11 +76,11 @@ func FuzzOwnershipModel(f *testing.F) {
 				}
 			case 8:
 				if len(shared) == 1 {
-					if next, err := shared[0].TryUnwrap(); err == nil {
+					if next, err := shared[0].IntoOwner(); err == nil {
 						owner = next
 						shared = nil
 					} else if !knownLifecycleError(err) {
-						t.Fatalf("TryUnwrap: %v", err)
+						t.Fatalf("IntoOwner: %v", err)
 					}
 				}
 			case 9:

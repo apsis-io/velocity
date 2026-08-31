@@ -19,6 +19,7 @@ type lease[T any] struct {
 	issuer   *handle
 	id       uint64
 	kind     borrowKind
+	closing  bool
 	released bool
 	active   int
 }
@@ -26,7 +27,7 @@ type lease[T any] struct {
 func (l *lease[T]) begin(kind borrowKind, op Operation) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.released || l.kind != kind {
+	if l.closing || l.released || l.kind != kind {
 		return &ReleasedError{Operation: op}
 	}
 	l.active++
@@ -36,19 +37,53 @@ func (l *lease[T]) begin(kind borrowKind, op Operation) error {
 func (l *lease[T]) end() {
 	l.mu.Lock()
 	l.active--
+	if l.closing && l.active == 0 && !l.released {
+		l.cell.releaseLease(l)
+	}
 	l.mu.Unlock()
 }
 
-func (l *lease[T]) release() bool {
+func (l *lease[T]) closeScoped() {
+	l.mu.Lock()
+	l.closing = true
+	if l.active == 0 && !l.released {
+		l.cell.releaseLease(l)
+	}
+	l.mu.Unlock()
+}
+
+func (l *lease[T]) withWrite[R any](op Operation, fn func(*T) (R, error)) (R, error) {
+	l.mu.Lock()
+	if l.closing || l.released || l.kind != borrowWrite {
+		l.mu.Unlock()
+		var zero R
+		return zero, &ReleasedError{Operation: op}
+	}
+	if l.active != 0 {
+		l.mu.Unlock()
+		var zero R
+		return zero, l.cell.conflict(op)
+	}
+	l.active++
+	l.mu.Unlock()
+	defer l.end()
+
+	l.cell.mu.Lock()
+	value := &l.cell.value
+	l.cell.mu.Unlock()
+	return fn(value)
+}
+
+func (l *lease[T]) release(op Operation) (released bool, err error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if l.released {
-		return false
+		return false, nil
 	}
 	if l.active != 0 {
-		return false
+		return false, l.cell.conflict(op)
 	}
-	return l.cell.releaseLease(l)
+	return l.cell.releaseLease(l), nil
 }
 
 // ReadBorrow is an explicitly released shared read borrow. It must not be
@@ -95,21 +130,25 @@ func (b *ReadBorrow[T]) Release() error {
 	if b == nil || b.lease == nil {
 		return nil
 	}
-	b.lease.mu.Lock()
-	active := b.lease.active
-	b.lease.mu.Unlock()
-	if active != 0 {
-		return b.lease.cell.conflict(OpRelease)
-	}
-	if b.lease.release() {
+	released, err := b.lease.release(OpRelease)
+	if released {
 		b.cleanup.Stop()
 	}
 	runtime.KeepAlive(b)
-	return nil
+	return err
 }
 
 // Close is an exact alias of Release.
 func (b *ReadBorrow[T]) Close() error { return b.Release() }
+
+func (b *ReadBorrow[T]) closeScoped() {
+	if b == nil || b.lease == nil {
+		return
+	}
+	b.cleanup.Stop()
+	b.lease.closeScoped()
+	runtime.KeepAlive(b)
+}
 
 // WriteBorrow is an explicitly released exclusive mutable borrow. It must not
 // be copied after first use.
@@ -137,13 +176,7 @@ func (b *WriteBorrow[T]) Update[R any](fn func(*T) (R, error)) (R, error) {
 		var zero R
 		return zero, &ReleasedError{Operation: OpUpdate}
 	}
-	if err := b.lease.begin(borrowWrite, OpUpdate); err != nil {
-		var zero R
-		return zero, err
-	}
-	defer b.lease.end()
-
-	result, err := fn(&b.lease.cell.value)
+	result, err := b.lease.withWrite(OpUpdate, fn)
 	runtime.KeepAlive(b)
 	return result, err
 }
@@ -153,24 +186,29 @@ func (b *WriteBorrow[T]) Release() error {
 	if b == nil || b.lease == nil {
 		return nil
 	}
-	b.lease.mu.Lock()
-	active := b.lease.active
-	b.lease.mu.Unlock()
-	if active != 0 {
-		return b.lease.cell.conflict(OpRelease)
-	}
-	if b.lease.release() {
+	released, err := b.lease.release(OpRelease)
+	if released {
 		b.cleanup.Stop()
 	}
 	runtime.KeepAlive(b)
-	return nil
+	return err
 }
 
 // Close is an exact alias of Release.
 func (b *WriteBorrow[T]) Close() error { return b.Release() }
 
+func (b *WriteBorrow[T]) closeScoped() {
+	if b == nil || b.lease == nil {
+		return
+	}
+	b.cleanup.Stop()
+	b.lease.closeScoped()
+	runtime.KeepAlive(b)
+}
+
 func cleanupLease[T any](lease *lease[T]) {
-	if lease.release() {
+	released, _ := lease.release(OpRelease)
+	if released {
 		logLeakedBorrow(lease.id, lease.kind)
 	}
 }

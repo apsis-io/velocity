@@ -13,6 +13,7 @@ var (
 	ErrInvalidConfig   = errors.New("invalid ownership configuration")
 	ErrProjection      = errors.New("invalid ownership projection")
 	ErrDuplicateOption = errors.New("duplicate ownership option")
+	ErrNilOption       = errors.New("nil ownership option")
 )
 
 type Operation string
@@ -21,10 +22,10 @@ const (
 	OpBorrow     Operation = "borrow"
 	OpBorrowMut  Operation = "borrow mutable"
 	OpMove       Operation = "move"
-	OpTake       Operation = "take"
+	OpIntoValue  Operation = "into value"
 	OpIntoShared Operation = "into shared"
 	OpClone      Operation = "clone shared"
-	OpTryUnwrap  Operation = "try unwrap"
+	OpIntoOwner  Operation = "into owner"
 	OpRelease    Operation = "release"
 	OpProject    Operation = "project"
 	OpUpdate     Operation = "update"

@@ -13,7 +13,7 @@ immutability.
    |  \                         |  \
    |   \ Move -> unique        |   \ Clone -> shared (+1 handle)
    |                            |    \
-   | Take                       |     \ TryUnwrap (sole, unborrowed)
+   | IntoValue                       |     \ IntoOwner (sole, unborrowed)
    |                            |      ----------------------------> unique
    v                            v
  released <---------------- final explicit Release
@@ -29,9 +29,11 @@ increment the handle count. Call `Clone` explicitly.
 
 ## Borrow invariants
 
-- Zero or more read borrows coexist.
-- One write borrow excludes every reader and writer.
-- Acquisition, move, take, share, unwrap, and release conflicts fail
+- Zero or more read borrows coexist, including concurrent projections through
+  the same read-borrow handle.
+- One write borrow excludes every reader and writer. Concurrent updates through
+  the same write capability also conflict rather than sharing `*T`.
+- Acquisition, access, move, take, share, unwrap, and release conflicts fail
   immediately with a typed error. Nothing waits internally.
 - A handle cannot release while it owns an advanced borrow. A non-final Shared
   handle can release while another handle owns a read; final release cannot.
@@ -43,14 +45,17 @@ increment the handle count. Call `Clone` explicitly.
 ## Transfer and release
 
 `Move` returns a fresh Owner over the same cell and invalidates the old handle.
-`Take` consumes the Owner and returns bare T without invoking Drop.
-`IntoShared` consumes unique ownership. `TryUnwrap` is the inverse only when its
+`IntoValue` consumes the Owner and returns bare T without invoking Drop.
+`IntoShared` consumes unique ownership. `IntoOwner` is the inverse only when its
 Shared handle is the sole handle and there are no borrows.
 
-Release and Close are exact aliases. Final release commits the cell to released,
-detaches and zeroes its value, and unlocks before invoking Drop. Drop runs at
-most once. Its error is returned by the first release only, retained in State,
-and not retried.
+Release and Close are exact aliases and linearizable: nil means the borrow or
+handle was released (or already released), never that release was deferred.
+Final release commits the cell to released, detaches and zeroes its value, and
+unlocks before invoking Drop. Drop runs at most once. Concurrent or reentrant
+later releases return nil immediately instead of waiting for Drop. Its error is
+returned by the first release only, retained in State after Drop returns, and
+not retried.
 
 `runtime.AddCleanup` protects only leaked advanced borrow leases and emits a
 leak diagnostic under `velocitydebug`. It never decrements Owner/Shared handle
