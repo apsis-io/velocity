@@ -133,6 +133,58 @@ err = table.Dispatch(opcodes.Instruction{Op: opPrint, A: 42})
 the first error; it is a thin convenience loop around `Table.Dispatch`, not
 a bytecode program format. Neither package depends on `ownership`.
 
+## Dedupe
+
+`dedupe.Group[K, V]` suppresses duplicate concurrent work per key and shares
+the result as an `*ownership.Shared[V]` handle — every caller of a dedup
+round gets its own independently released clone:
+
+```go
+group, err := dedupe.New[string, Report](ctx)
+
+shared, err := group.Do(ctx, "report-42", func(ctx context.Context) (Report, error) {
+    return fetchReport(ctx, 42)
+})
+defer shared.Release()
+```
+
+`Forget` stops tracking a key without interrupting work already in flight;
+`Cancel` actively cancels it. `DoBatch` runs one function over several keys
+and aligns the result map to the request, reporting `ErrMissingResult` for
+any key the function didn't return. Backends are constructor-selectable
+(`WithMutexBackend`, `WithXsyncBackend`, `WithSharded`).
+
+## Async and resilience
+
+`async.Gather`/`Race`/`FirstSuccess` run a `Plan[T]` of labeled tasks under
+an explicit `Limit` (`async.Limited(n)` or `async.Unlimited` — no implicit
+"unbounded" default):
+
+```go
+plan, err := async.NewPlan(async.Limited(4),
+    async.Task[int]{Label: "a", Run: fetchA},
+    async.Task[int]{Label: "b", Run: fetchB},
+)
+outcomes, err := async.Gather(ctx, plan) // source-index order, errors.Join'd
+```
+
+`async.Broadcast` fans one `*ownership.Owner[T]` out to concurrent workers
+using `Owner[T].Read`'s existing concurrent-read guarantee. `async.Pipeline`
+chains heterogeneously-typed stages via a generic `Then[R any]` method.
+`async.Group` wraps `sync.WaitGroup.Go` with panic recovery and a
+context-aware `Close`.
+
+`resilience.Retry` runs a function under a `Policy` (attempt limit, optional
+error `Classifier`, `Backoff`, injectable `Clock`):
+
+```go
+backoff, err := resilience.ExponentialBackoff(100*time.Millisecond, 5*time.Second, 0.2)
+value, err := resilience.Retry(ctx, resilience.Policy{
+    MaxAttempts: 5,
+    Backoff:     backoff,
+}, fetch)
+```
+
 ## Development
 
 `just` is optional; every recipe maps to these commands:

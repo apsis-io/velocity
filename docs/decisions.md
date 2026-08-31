@@ -95,34 +95,92 @@ This records current selections, not superseded planning alternatives.
   remain. Public stats include aggregates and copied active-operation iterators.
 - Raw dedupe keys are hidden unless callers configure a safe label projection.
 
-## Deferred dedupe
+## Dedupe (implemented)
 
-- Constructor-required group with required base context, caller-interest
-  contexts, cancellation only after every caller leaves, and key retention until
-  even non-cooperative work actually exits.
-- Ordinary blocking Do plus typed reusable futures, explicit Release, Forget
-  versus Cancel separation, aligned native batch results, missing-result errors,
-  and constructor-selectable built-in mutex/xsync/sharded registries.
-- A borrowed API has read and mutable forms. The leader loans an Owner input;
-  acquisition conflicts fail before key registration, duplicate inputs remain
-  untouched, the loan lasts for the generation, and releases before result R is
-  published.
-- Comparable keys follow ordinary Go map hazards. A sharded backend uses Go
-  1.27 generic `hash/maphash` hashing.
+Rewrites the best of `janos`/`resenje.org` `singleflight` and
+`samber/go-singleflightx` as `dedupe`, woven through `ownership` rather than
+treated as an afterthought:
 
-## Deferred async and resilience
+- `dedupe.New[K, V]` is constructor-required (no zero-value `Group`, unlike
+  both source libraries) and takes a base context plus options, including
+  Group-level `WithResultDrop`/`WithResultClone` (one Drop/Clone policy per
+  key-space, mirroring `ownership.New`).
+- `Do`'s result is `*ownership.Shared[V]`, not a plain `V` — every caller of a
+  dedup round (leader and every follower) gets its own independently
+  `Clone()`d handle, released independently. This replaces dedupe's own
+  "everyone left" bookkeeping for the result's lifecycle with
+  `ownership.Shared`'s existing handle-count/Release machinery: a configured
+  `WithResultDrop` now runs automatically, exactly once, when the last caller
+  releases its handle. Fixes a real gap found in janos's fork: it deletes its
+  map entry as soon as the waiter count hits zero even if the work is still
+  running (non-cooperative), racing a second execution for a later `Do` —
+  here, key retention/deletion happens in the leader's own deferred cleanup
+  after the work actually returns.
+- No `Future` type. Go is already colorblind (no async/await split), and
+  `ownership.Shared[V]` already is the reusable/releasable handle a
+  Future/Promise would have provided — a caller wanting non-blocking dedup
+  just calls `Do` from its own goroutine.
+- `Forget` (stop tracking, in-flight work keeps running) versus `Cancel`
+  (actively cancel the in-flight work now) are separate, matching the brief.
+- `DoBatch` aligns its output map to the requested keys with real
+  `ErrMissingResult` errors (not samber's `Valid bool` flag), and — after a
+  review round — routes every key through the same per-key call registry
+  `Do` uses, so overlapping `Do`/`DoBatch` calls for the same key properly
+  share in-flight work rather than each batch bypassing dedup entirely.
+  Multiple newly-led keys within one `DoBatch` call share one `execution` so
+  a single key's abandonment can't prematurely cancel work other keys in the
+  same batch still need, and can't silently fail to cancel work nobody wants
+  anymore either.
+- Constructor-selectable backends: mutex-map (default), `xsync.Map`, and a
+  sharded mutex-map hashing `K` via Go's generic, seed-based
+  `hash/maphash.Comparable[K]` — no caller-supplied hasher needed, unlike
+  samber's `Hasher[K]`.
+- Panic handling follows conc's `panics.Catcher` pattern (recover, capture
+  stack, first-panic-wins, re-panic in the waiter's own `Do`/`DoBatch` call)
+  through one shared internal helper, rather than samber's duplicated
+  crash-forcing logic or janos's bare recover-and-close.
 
-- `async` uses required positive limits or an explicit Unlimited value,
-  completion-ordered Gather/Race/FirstSuccess and single-use iterator runs from
-  immutable plans. Stable source index plus optional label permits order
-  reconstruction. Take/Last are recipes, not APIs.
-- Concrete fluent heterogeneous pipelines use Go 1.27 generic `Then` methods;
-  stages fail fast under one run context with optional narrower stage contexts.
-- `resilience` starts with explicit policy-driven Retry, classifiers,
-  cancellation-aware backoff/jitter, and injectable clocks. Breakers/limiters
-  are future composition work.
-- Future operational goroutines belong to object-owned WaitGroup.Go lifecycles.
-  Context-aware Close uses explicit active counters and a terminal channel, not
-  accumulating waiter goroutines.
-- Root Task/Outcome/ID representation and registry defaults remain benchmark
-  decisions rather than committed API.
+## Async and resilience (implemented)
+
+Rewrites the best of `AaronJan/Hunch` and `sourcegraph/conc` as `async` +
+`resilience`:
+
+- `async.Limit`/`Unlimited`/`Limited` force callers to say what they mean
+  about concurrency bounds; `NewPlan` validates eagerly and copies its tasks
+  so the returned `Plan[T]` is genuinely immutable. `Task[T]` carries an
+  optional `Label`; `Outcome[T]` carries the source `Index`, `Label`,
+  `Value`, and `Err` — stable index plus label, as specified.
+- `Gather` reserves each task's output slot eagerly at scheduling time
+  (conc's `resultAggregator` pattern), not Hunch's completion-order-then-sort
+  — source-index order with zero post-hoc sorting, errors joined via
+  `errors.Join`.
+- `Race`/`FirstSuccess` return promptly on the first completion (matching
+  Hunch's actual `Take` behavior and the brief's "first completion wins"),
+  draining canceled siblings into an already-buffered completion channel
+  rather than blocking the return on `wg.Wait()`. A non-cooperative sibling
+  (one that ignores `ctx.Done()`) may keep running in the background after
+  return — documented, not hidden. `Take`/`Last` are recipes over `Gather`'s
+  result slice, not separate API functions.
+- `Broadcast[T, R]` is the concrete ownership integration point: it fans one
+  `*ownership.Owner[T]` input out to N concurrent workers by relying on
+  `Owner[T].Read` already permitting concurrent scoped reads — zero new
+  ownership primitives needed, genuine reuse of an existing guarantee.
+- `Pipeline[T]`'s `Then[R any]` is a Go 1.27 generic method (declaring its
+  own type parameter beyond the receiver's `T`), giving a fluent,
+  heterogeneously-typed chain; stages fail fast under one run context.
+- `async.Group` wraps stdlib `sync.WaitGroup.Go` (native since Go 1.25,
+  confirmed present in Go 1.27) with conc-style panic recovery — the stdlib
+  version is a bare `Add`/`Done` wrapper with no `recover()` at all.
+  `Close(ctx)` decrements an active-op counter and closes one shared
+  terminal channel once it hits zero, so concurrent `Close` callers share
+  one channel instead of each spawning their own waiter.
+- `resilience.Retry` takes an explicit `Policy` (required positive
+  `MaxAttempts`, optional `Classifier`, `Backoff`, injectable `Clock`).
+  `ExponentialBackoff(base, max, jitter) (Backoff, error)` validates eagerly
+  (house style: fail fast at construction, not first use) and — after a
+  review round caught a real bug — computes into a fresh local per call
+  instead of mutating its captured `base` parameter, which had been silently
+  corrupting every subsequent call's delay. Circuit breakers/limiters remain
+  deferred, as the original brief specified.
+- Root `Task`/`Outcome`/`ID` registry defaults remain future benchmark
+  decisions, not committed API, per the original brief.
