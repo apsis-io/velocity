@@ -230,5 +230,9 @@ go test ./ownership -run '^$' -fuzz '^FuzzOwnershipModel$' -fuzztime 30s
 go test ./... -run '^$' -bench . -benchmem
 ```
 
-The nested `benchmarks` module pins future comparison dependencies. It contains
-no benchmark source or machine-specific result report yet.
+The nested `benchmarks` module holds head-to-head comparisons against the
+libraries `dedupe` and `async` drew from — `resenje.org/singleflight`,
+`go-singleflightx`, `x/sync`, and `hunch` — plus a `dedupe` backend
+comparison. It is a separate module, so those do not run under
+`go test ./...`; see [`benchmarks/README.md`](benchmarks/README.md) for how to
+run them, what each arm does and does not do, and an indicative result table.

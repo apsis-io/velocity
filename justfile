@@ -22,3 +22,6 @@ fuzz duration="30s":
 
 bench:
     go test ./... -run '^$' -bench . -benchmem
+
+bench-compare count="5":
+    go -C benchmarks test ./... -run '^$' -bench . -benchmem -count={{count}}
