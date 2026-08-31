@@ -8,6 +8,7 @@ var (
 	ErrInvalidConfig      = errors.New("dedupe: invalid configuration")
 	ErrNilContext         = errors.New("dedupe: nil context")
 	ErrNilFunction        = errors.New("dedupe: nil function")
+	ErrNilOwner           = errors.New("dedupe: nil owner")
 	ErrNilOption          = errors.New("dedupe: nil option")
 	ErrDuplicateOption    = errors.New("dedupe: duplicate option")
 	ErrUnsupportedBackend = errors.New("dedupe: unsupported backend")

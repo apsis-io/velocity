@@ -6,12 +6,37 @@ import (
 	"time"
 
 	"github.com/apsis-io/velocity/dedupe"
+	"github.com/apsis-io/velocity/ownership"
 )
 
 var (
 	benchmarkHookKey      int
 	benchmarkHookDuration time.Duration
 )
+
+func BenchmarkDoBorrowed(b *testing.B) {
+	group, err := dedupe.New[int, int](context.Background())
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		input, err := ownership.New(1)
+		if err != nil {
+			b.Fatal(err)
+		}
+		handle, err := group.DoBorrowed(context.Background(), 1, input, func(_ context.Context, value int) (int, error) { return value, nil })
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := handle.Release(); err != nil {
+			b.Fatal(err)
+		}
+		if err := input.Release(); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
 
 func BenchmarkDo(b *testing.B) {
 	b.Run("no-hooks", func(b *testing.B) {
