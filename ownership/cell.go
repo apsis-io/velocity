@@ -144,6 +144,13 @@ func (c *cell[T]) acquireWrite(h *handle, expected mode) (*lease[T], error) {
 func (c *cell[T]) releaseLease(l *lease[T]) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.releaseLeaseLocked(l)
+}
+
+// releaseLeaseLocked assumes c.mu is held. Map needs to release its lease and
+// commit the transfer in one critical section, so that no borrow can be
+// acquired in between.
+func (c *cell[T]) releaseLeaseLocked(l *lease[T]) bool {
 	if l.released {
 		return false
 	}

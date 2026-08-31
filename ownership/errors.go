@@ -25,6 +25,7 @@ const (
 	OpIntoValue  Operation = "into value"
 	OpIntoShared Operation = "into shared"
 	OpFreeze     Operation = "freeze"
+	OpMap        Operation = "map"
 	OpClone      Operation = "clone shared"
 	OpIntoOwner  Operation = "into owner"
 	OpRelease    Operation = "release"
