@@ -1,0 +1,6 @@
+*.o
+*.test
+*.out
+*.prof
+coverage.*
+.code-review-graph/
