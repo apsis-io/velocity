@@ -1,9 +1,6 @@
 package ownership
 
-import (
-	"fmt"
-	"runtime"
-)
+import "runtime"
 
 // Owner holds the unique ownership handle for a value. It must not be copied
 // after first use.
@@ -15,14 +12,12 @@ type Owner[T any] struct {
 
 // New creates a unique owner.
 func New[T any](value T, opts ...Option[T]) (*Owner[T], error) {
-	cfg := config[T]{}
-	for i, opt := range opts {
-		if opt == nil {
-			return nil, &ConfigError{Option: fmt.Sprintf("option %d", i), Reason: ErrNilOption}
-		}
-		if err := opt.apply(&cfg); err != nil {
-			return nil, err
-		}
+	if len(opts) == 0 {
+		return &Owner[T]{c: &cell[T]{value: value, mode: modeUnique}}, nil
+	}
+	cfg, err := buildConfig(opts)
+	if err != nil {
+		return nil, err
 	}
 	return &Owner[T]{c: &cell[T]{value: value, mode: modeUnique, drop: cfg.drop, clone: cfg.clone}}, nil
 }

@@ -1,6 +1,10 @@
 package ownership
 
-import "github.com/apsis-io/velocity/traits"
+import (
+	"fmt"
+
+	"github.com/apsis-io/velocity/traits"
+)
 
 type config[T any] struct {
 	drop  traits.Drop[T]
@@ -15,6 +19,21 @@ type Option[T any] interface {
 type optionFunc[T any] func(*config[T]) error
 
 func (f optionFunc[T]) apply(cfg *config[T]) error { return f(cfg) }
+
+// buildConfig validates and applies opts. Callers handle the empty case
+// themselves so the common no-option path never forces cfg to escape.
+func buildConfig[T any](opts []Option[T]) (config[T], error) {
+	cfg := config[T]{}
+	for i, opt := range opts {
+		if opt == nil {
+			return cfg, &ConfigError{Option: fmt.Sprintf("option %d", i), Reason: ErrNilOption}
+		}
+		if err := opt.apply(&cfg); err != nil {
+			return cfg, err
+		}
+	}
+	return cfg, nil
+}
 
 // WithDrop configures the callback run at most once on explicit final release.
 func WithDrop[T any](drop traits.Drop[T]) Option[T] {

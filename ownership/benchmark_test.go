@@ -74,6 +74,14 @@ func BenchmarkOwner(b *testing.B) {
 	})
 }
 
+func BenchmarkNewShared(b *testing.B) {
+	b.ReportAllocs()
+	for b.Loop() {
+		shared, _ := ownership.NewShared(1)
+		_ = shared.Release()
+	}
+}
+
 func BenchmarkShared(b *testing.B) {
 	b.Run("clone-release", func(b *testing.B) {
 		owner, _ := ownership.New(1)

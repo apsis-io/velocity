@@ -2,6 +2,18 @@ package ownership
 
 import "runtime"
 
+// NewShared creates a shared handle with one reference.
+func NewShared[T any](value T, opts ...Option[T]) (*Shared[T], error) {
+	if len(opts) == 0 {
+		return &Shared[T]{c: &cell[T]{value: value, mode: modeShared, shares: 1}}, nil
+	}
+	cfg, err := buildConfig(opts)
+	if err != nil {
+		return nil, err
+	}
+	return &Shared[T]{c: &cell[T]{value: value, mode: modeShared, shares: 1, drop: cfg.drop, clone: cfg.clone}}, nil
+}
+
 // Shared is one explicitly counted handle to a borrow-checked shared value. It
 // must not be copied; use Clone to create another handle.
 type Shared[T any] struct {

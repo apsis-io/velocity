@@ -234,16 +234,7 @@ func capturePanic(target **PanicError) {
 }
 
 func (g *Group[K, V]) share(value V) (*ownership.Shared[V], error) {
-	owner, err := ownership.New(value, g.resultOptions()...)
-	if err != nil {
-		return nil, err
-	}
-	shared, err := owner.IntoShared()
-	if err != nil {
-		_ = owner.Release()
-		return nil, err
-	}
-	return shared, nil
+	return ownership.NewShared(value, g.resultOptions()...)
 }
 
 func (g *Group[K, V]) resultOptions() []ownership.Option[V] {
