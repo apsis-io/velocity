@@ -17,7 +17,23 @@ func FuzzOwnershipModel(f *testing.F) {
 		var writes []*ownership.WriteBorrow[int]
 
 		for _, op := range ops {
-			switch op % 10 {
+			switch op % 12 {
+			case 10:
+				if owner != nil {
+					if borrow, err := owner.BorrowUntracked(); err == nil {
+						reads = append(reads, borrow)
+					} else if !knownLifecycleError(err) {
+						t.Fatalf("BorrowUntracked: %v", err)
+					}
+				}
+			case 11:
+				if owner != nil {
+					if borrow, err := owner.BorrowMutUntracked(); err == nil {
+						writes = append(writes, borrow)
+					} else if !knownLifecycleError(err) {
+						t.Fatalf("BorrowMutUntracked: %v", err)
+					}
+				}
 			case 0:
 				if owner != nil {
 					if borrow, err := owner.Borrow(); err == nil {

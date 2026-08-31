@@ -24,7 +24,7 @@ func (g *Group[K, V]) DoBorrowed[I any](ctx context.Context, key K, input *owner
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	borrow, err := input.Borrow()
+	borrow, err := input.BorrowUntracked()
 	if err != nil {
 		return nil, err
 	}
@@ -50,7 +50,7 @@ func (g *Group[K, V]) DoBorrowedMut[I any](ctx context.Context, key K, input *ow
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	borrow, err := input.BorrowMut()
+	borrow, err := input.BorrowMutUntracked()
 	if err != nil {
 		return nil, err
 	}

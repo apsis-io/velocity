@@ -45,6 +45,16 @@ func BenchmarkOwner(b *testing.B) {
 			_ = borrow.Release()
 		}
 	})
+	b.Run("advanced-read-untracked", func(b *testing.B) {
+		owner, _ := ownership.New(1)
+		defer owner.Release()
+		b.ReportAllocs()
+		for b.Loop() {
+			borrow, _ := owner.BorrowUntracked()
+			ownershipSink, _ = borrow.Project(func(value int) (int, error) { return value, nil })
+			_ = borrow.Release()
+		}
+	})
 	b.Run("scoped-write", func(b *testing.B) {
 		owner, _ := ownership.New(1)
 		defer owner.Release()

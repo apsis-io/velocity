@@ -106,6 +106,12 @@ func newReadBorrow[T any](lease *lease[T]) *ReadBorrow[T] {
 	return borrow
 }
 
+// newUntrackedReadBorrow omits the cleanup registration. A zero runtime.Cleanup
+// tolerates Stop, so Release and closeScoped need no special case.
+func newUntrackedReadBorrow[T any](lease *lease[T]) *ReadBorrow[T] {
+	return &ReadBorrow[T]{lease: lease}
+}
+
 // Project invokes fn with a shallow copy of T while this borrow remains live.
 func (b *ReadBorrow[T]) Project[R any](fn func(T) (R, error)) (R, error) {
 	if fn == nil {
@@ -159,6 +165,12 @@ func newWriteBorrow[T any](lease *lease[T]) *WriteBorrow[T] {
 	borrow := &WriteBorrow[T]{lease: lease}
 	borrow.cleanup = runtime.AddCleanup(borrow, cleanupLease[T], lease)
 	return borrow
+}
+
+// newUntrackedWriteBorrow omits the cleanup registration, as
+// newUntrackedReadBorrow does.
+func newUntrackedWriteBorrow[T any](lease *lease[T]) *WriteBorrow[T] {
+	return &WriteBorrow[T]{lease: lease}
 }
 
 // Update invokes fn with exclusive mutable access while this borrow remains

@@ -72,6 +72,31 @@ func (s *Shared[T]) BorrowMut() (*WriteBorrow[T], error) {
 	return newWriteBorrow(lease), nil
 }
 
+// BorrowUntracked is Borrow without the runtime cleanup that reclaims a
+// leaked borrow. See Owner.BorrowUntracked for the trade it makes.
+func (s *Shared[T]) BorrowUntracked() (*ReadBorrow[T], error) {
+	if s == nil || s.c == nil {
+		return nil, &ReleasedError{Operation: OpBorrow}
+	}
+	lease, err := s.c.acquireRead(&s.h, modeShared)
+	if err != nil {
+		return nil, err
+	}
+	return newUntrackedReadBorrow(lease), nil
+}
+
+// BorrowMutUntracked is BorrowMut with the same trade BorrowUntracked makes.
+func (s *Shared[T]) BorrowMutUntracked() (*WriteBorrow[T], error) {
+	if s == nil || s.c == nil {
+		return nil, &ReleasedError{Operation: OpBorrowMut}
+	}
+	lease, err := s.c.acquireWrite(&s.h, modeShared)
+	if err != nil {
+		return nil, err
+	}
+	return newUntrackedWriteBorrow(lease), nil
+}
+
 // Read runs fn under a callback-scoped shared read borrow.
 func (s *Shared[T]) Read[R any](fn func(ReadAccess[T]) (R, error)) (R, error) {
 	if fn == nil {

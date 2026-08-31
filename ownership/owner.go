@@ -54,6 +54,36 @@ func (o *Owner[T]) BorrowMut() (*WriteBorrow[T], error) {
 	return newWriteBorrow(lease), nil
 }
 
+// BorrowUntracked is Borrow without the runtime cleanup that reclaims a
+// leaked borrow. It allocates less, but a caller that never releases the
+// returned handle blocks this cell permanently rather than having the borrow
+// reclaimed once the handle becomes unreachable.
+//
+// Prefer the scoped Read, which cannot leak. Prefer Borrow whenever release
+// is not obviously guaranteed on every path, including panics.
+func (o *Owner[T]) BorrowUntracked() (*ReadBorrow[T], error) {
+	if o == nil || o.c == nil {
+		return nil, &ReleasedError{Operation: OpBorrow}
+	}
+	lease, err := o.c.acquireRead(&o.h, modeUnique)
+	if err != nil {
+		return nil, err
+	}
+	return newUntrackedReadBorrow(lease), nil
+}
+
+// BorrowMutUntracked is BorrowMut with the same trade BorrowUntracked makes.
+func (o *Owner[T]) BorrowMutUntracked() (*WriteBorrow[T], error) {
+	if o == nil || o.c == nil {
+		return nil, &ReleasedError{Operation: OpBorrowMut}
+	}
+	lease, err := o.c.acquireWrite(&o.h, modeUnique)
+	if err != nil {
+		return nil, err
+	}
+	return newUntrackedWriteBorrow(lease), nil
+}
+
 // Read runs fn under a callback-scoped shared read borrow.
 func (o *Owner[T]) Read[R any](fn func(ReadAccess[T]) (R, error)) (R, error) {
 	if fn == nil {
