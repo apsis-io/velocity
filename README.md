@@ -154,19 +154,36 @@ and aligns the result map to the request, reporting `ErrMissingResult` for
 any key the function didn't return. Backends are constructor-selectable
 (`WithMutexBackend`, `WithXsyncBackend`, `WithSharded`).
 
+`WithHooks` lets a caller supply their own instrumentation — `dedupe`
+doesn't collect metrics itself, it just calls back synchronously at points
+a caller can't observe by timing their own function, such as a follower's
+`OnComplete` duration reflecting the leader's actual work, not the
+follower's wait:
+
+```go
+group, err := dedupe.New[string, Report](ctx, dedupe.WithHooks(dedupe.Hooks[string]{
+    OnComplete: func(key string, duration time.Duration, err error) {
+        reportLatency(key, duration, err)
+    },
+}))
+```
+
 ## Async and resilience
 
 `async.Gather`/`Race`/`FirstSuccess` run a `Plan[T]` of labeled tasks under
 an explicit `Limit` (`async.Limited(n)` or `async.Unlimited` — no implicit
-"unbounded" default):
+"unbounded" default) and an explicit `Hooks` (`async.Hooks{}` for none):
 
 ```go
-plan, err := async.NewPlan(async.Limited(4),
+plan, err := async.NewPlan(async.Limited(4), async.Hooks{},
     async.Task[int]{Label: "a", Run: fetchA},
     async.Task[int]{Label: "b", Run: fetchB},
 )
 outcomes, err := async.Gather(ctx, plan) // source-index order, errors.Join'd
 ```
+
+`Hooks.OnTaskComplete` reports permit-queue wait time separately from a
+task's own run time — the split isn't visible from outside `Gather`/`Race`.
 
 `async.Broadcast` fans one `*ownership.Owner[T]` out to concurrent workers
 using `Owner[T].Read`'s existing concurrent-read guarantee. `async.Pipeline`

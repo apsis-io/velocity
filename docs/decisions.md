@@ -92,8 +92,43 @@ This records current selections, not superseded planning alternatives.
 - Named `opruntime`, not `runtime`, to avoid shadowing the stdlib `runtime`
   package already imported by `ownership/owner.go`.
 
-## Deferred observe
+## Instrumentation hooks (implemented)
 
+Replaces the originally-sketched Observer design below with something
+simpler: the coalesced dirty-state map and watchdog-timer batch delivery
+were for the *library* to own metrics state, but the actual want is for the
+**caller** to supply their own instrumentation (route to Prometheus/
+OpenTelemetry/logs/whatever themselves). That rules out a generic Observer/
+subscription list; the shape used instead is Go's own
+`net/http/httptrace.ClientTrace` idiom — a plain struct of optional callback
+fields, supplied once at construction, called synchronously and directly
+from the goroutine driving the event, zero cost when a field is nil (one
+check, no allocation, no interface dispatch, no registration list).
+
+- `dedupe.Hooks[K]{OnJoin, OnComplete}`: `OnJoin` fires for every caller
+  that joins a round (leader and followers); `OnComplete` fires once per
+  round with the *actual* `fn` execution duration — not any individual
+  follower's wait time, which is not knowable outside `Group`. Configured
+  via `WithHooks`. `OnComplete` fires after `compareAndDelete`/
+  `close(c.done)`, not before — an earlier version fired it first, which
+  both delayed every waiter's result on a slow hook and could livelock if a
+  hook called back into `Do` for the same key (the entry couldn't be
+  removed until the hook, which was waiting on that same entry, returned).
+- `async.Hooks{OnTaskComplete}`: fires once per task with `waited` (time
+  blocked on a `Limit` permit) and `duration` (`Task.Run`'s own execution
+  time) reported separately — the split is only knowable inside
+  `execute`/`race`, not from the caller's own timing around `Run`. Threaded
+  through `NewPlan` and `Broadcast` as a required parameter (matches
+  `Limit`'s own no-implicit-default shape in this package). `race`'s
+  producer goroutine already sends to its completion channel before firing
+  the hook, so `Race`/`FirstSuccess`'s prompt-return semantics aren't
+  affected by a slow hook the way `dedupe`'s original `OnComplete`
+  placement was.
+- Deliberately not hooked this pass: `ownership`'s hot, heavily-reviewed
+  state machine, and `async.Group`/`Pipeline` — scoped out, not an
+  oversight; same `Hooks`-struct shape would extend cleanly if ever needed.
+
+Original Observer sketch, superseded by the above:
 - Opt-in Observer interface with an allocation/timing-free disabled path.
 - Lifecycle counters and transition bits coalesce in a keyed dirty-state map,
   not an event queue; event-driven batch delivery has a configurable one-second
