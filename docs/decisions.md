@@ -60,11 +60,24 @@ This records current selections, not superseded planning alternatives.
   `[]Instruction` is a thin convenience loop around `Dispatch`. No owned
   registers, operand stack, or execution state.
 - `Table` stores handlers in a fixed `[256]Handler` array indexed directly by
-  `Op` (a `uint8`), not a map: a direct-call baseline benchmarked at ~1.9
-  ns/op, the original map-backed `Dispatch` at ~26.5 ns/op, and the
-  array-backed `Dispatch` at ~4.0 ns/op (~2.1 ns of overhead over a raw call)
-  — roughly a 6-7x reduction versus the map, all three 0 allocs/op
-  (`opruntime/benchmark_test.go`, `BenchmarkTable`).
+  `Op` (a `uint8`), not a map. The `uint8` index into a `[256]Handler` array
+  is always in range, so the compiler elides the bounds check entirely.
+  Benchmarked (`opruntime/benchmark_test.go`, `BenchmarkTable`): a direct-call
+  baseline at ~1.85 ns/op; the original map-backed `Dispatch` at ~26.5 ns/op;
+  the array-backed `Dispatch` at ~4.0 ns/op — a 6-7x reduction versus the map.
+  All 0 allocs/op throughout.
+- `Dispatch` itself never inlines into its caller either way — its two error
+  paths construct a `*DispatchError`, which alone exceeds the compiler's
+  inlining budget. There is no vtable/virtual-dispatch to eliminate here:
+  every `Handler` call was already a plain indirect call through a function
+  pointer, not a devirtualizable interface call, since the concrete handler
+  is only known at Register time. Moving the `*DispatchError` construction
+  into a separate `//go:noinline` helper (`newDispatchError`) keeps that cold
+  code out of `Dispatch`'s hot-path machine code and reproducibly took
+  array-backed `Dispatch` from ~4.0 ns/op to ~3.7 ns/op — the remaining
+  overhead over the direct-call baseline is the one non-inlined call to
+  `Dispatch` plus the one indirect call to the registered `Handler`, both
+  irreducible without giving up the caller-registered-handler design.
 - `opruntime` imports `opcodes` for its types but has zero hardcoded
   semantics. `opcodes` has no dependency on `opruntime` or `ownership`.
   Porting `ownership` to declare its operations as `opcodes.Op` values and

@@ -8,10 +8,20 @@ import "github.com/apsis-io/velocity/opcodes"
 func (t *Table) Dispatch(inst opcodes.Instruction) error {
 	h, ok := t.Handler(inst.Op)
 	if !ok {
-		return &DispatchError{Index: -1, Op: inst.Op, Cause: ErrNoHandler}
+		return newDispatchError(inst.Op, ErrNoHandler)
 	}
 	if err := h(inst); err != nil {
-		return &DispatchError{Index: -1, Op: inst.Op, Cause: err}
+		return newDispatchError(inst.Op, err)
 	}
 	return nil
+}
+
+// newDispatchError is split out of Dispatch, and marked noinline, so Dispatch
+// itself stays under the compiler's inlining budget: the cold error path
+// becomes a real call instead of an inlined struct literal that the inliner
+// would otherwise fold back into Dispatch's own cost.
+//
+//go:noinline
+func newDispatchError(op opcodes.Op, cause error) error {
+	return &DispatchError{Index: -1, Op: op, Cause: cause}
 }
