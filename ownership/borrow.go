@@ -88,6 +88,11 @@ func (l *lease[T]) release(op Operation) (released bool, err error) {
 
 // ReadBorrow is an explicitly released shared read borrow. It must not be
 // copied after first use.
+//
+// Only the advanced borrow vocabulary allocates this wrapper and registers a
+// runtime cleanup, because only an advanced borrow can be leaked. Scoped
+// Read/Write hold the lease directly and release it by defer, so they need
+// neither.
 type ReadBorrow[T any] struct {
 	_ noCopy
 
@@ -141,15 +146,6 @@ func (b *ReadBorrow[T]) Release() error {
 // Close is an exact alias of Release.
 func (b *ReadBorrow[T]) Close() error { return b.Release() }
 
-func (b *ReadBorrow[T]) closeScoped() {
-	if b == nil || b.lease == nil {
-		return
-	}
-	b.cleanup.Stop()
-	b.lease.closeScoped()
-	runtime.KeepAlive(b)
-}
-
 // WriteBorrow is an explicitly released exclusive mutable borrow. It must not
 // be copied after first use.
 type WriteBorrow[T any] struct {
@@ -196,15 +192,6 @@ func (b *WriteBorrow[T]) Release() error {
 
 // Close is an exact alias of Release.
 func (b *WriteBorrow[T]) Close() error { return b.Release() }
-
-func (b *WriteBorrow[T]) closeScoped() {
-	if b == nil || b.lease == nil {
-		return
-	}
-	b.cleanup.Stop()
-	b.lease.closeScoped()
-	runtime.KeepAlive(b)
-}
 
 func cleanupLease[T any](lease *lease[T]) {
 	released, _ := lease.release(OpRelease)

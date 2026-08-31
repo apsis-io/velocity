@@ -78,13 +78,17 @@ func (s *Shared[T]) Read[R any](fn func(ReadAccess[T]) (R, error)) (R, error) {
 		var zero R
 		return zero, &ProjectionError{Operation: OpProject}
 	}
-	borrow, err := s.Borrow()
+	if s == nil || s.c == nil {
+		var zero R
+		return zero, &ReleasedError{Operation: OpBorrow}
+	}
+	lease, err := s.c.acquireRead(&s.h, modeShared)
 	if err != nil {
 		var zero R
 		return zero, err
 	}
-	defer borrow.closeScoped()
-	return fn(ReadAccess[T]{lease: borrow.lease})
+	defer lease.closeScoped()
+	return fn(ReadAccess[T]{lease: lease})
 }
 
 // Write runs fn under a callback-scoped exclusive mutable borrow.
@@ -93,13 +97,17 @@ func (s *Shared[T]) Write[R any](fn func(WriteAccess[T]) (R, error)) (R, error) 
 		var zero R
 		return zero, &ProjectionError{Operation: OpUpdate}
 	}
-	borrow, err := s.BorrowMut()
+	if s == nil || s.c == nil {
+		var zero R
+		return zero, &ReleasedError{Operation: OpBorrowMut}
+	}
+	lease, err := s.c.acquireWrite(&s.h, modeShared)
 	if err != nil {
 		var zero R
 		return zero, err
 	}
-	defer borrow.closeScoped()
-	return fn(WriteAccess[T]{lease: borrow.lease})
+	defer lease.closeScoped()
+	return fn(WriteAccess[T]{lease: lease})
 }
 
 // Snapshot clones the value under a temporary read borrow.
