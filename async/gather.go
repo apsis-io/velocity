@@ -19,9 +19,10 @@ func execute[T any](ctx context.Context, plan Plan[T]) ([]Outcome[T], error) {
 	if err := plan.valid(); err != nil {
 		return nil, err
 	}
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
+	// Unlike race, Gather never cancels early: wg.Wait below guarantees every
+	// task has returned before this does, so a derived cancellable context
+	// would only ever be canceled by its own defer. Passing ctx through keeps
+	// parent cancellation working and avoids allocating one per call.
 	outcomes := make([]Outcome[T], len(plan.tasks))
 	var wg sync.WaitGroup
 	var permits chan struct{}
@@ -29,7 +30,6 @@ func execute[T any](ctx context.Context, plan Plan[T]) ([]Outcome[T], error) {
 		permits = make(chan struct{}, plan.limit.value)
 	}
 	for i, task := range plan.tasks {
-		i, task := i, task
 		wg.Go(func() {
 			var waited time.Duration
 			if permits != nil {
@@ -61,7 +61,16 @@ func execute[T any](ctx context.Context, plan Plan[T]) ([]Outcome[T], error) {
 }
 
 func joinedErrors[T any](outcomes []Outcome[T]) error {
-	errs := make([]error, 0, len(outcomes))
+	failed := 0
+	for _, outcome := range outcomes {
+		if outcome.Err != nil {
+			failed++
+		}
+	}
+	if failed == 0 {
+		return nil
+	}
+	errs := make([]error, 0, failed)
 	for _, outcome := range outcomes {
 		if outcome.Err != nil {
 			errs = append(errs, outcome.Err)
