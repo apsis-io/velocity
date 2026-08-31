@@ -171,7 +171,13 @@ func TestPipelineIsTypedAndFailFast(t *testing.T) {
 	}
 }
 
+// TestHooksReportPermitWaitAndRunDuration checks the hook's run/wait values
+// against independently measured wall-clock brackets, not just a loose lower
+// bound -- a reported value that's measured from the wrong point (or wildly
+// inflated) would still satisfy "at least 15ms" but must not satisfy "close
+// to the actual elapsed time."
 func TestHooksReportPermitWaitAndRunDuration(t *testing.T) {
+	const tolerance = 25 * time.Millisecond
 	var firstIndex atomic.Int32
 	firstIndex.Store(-1)
 	var mu sync.Mutex
@@ -191,18 +197,23 @@ func TestHooksReportPermitWaitAndRunDuration(t *testing.T) {
 	}}
 	started := make(chan struct{})
 	release := make(chan struct{})
+	var blockStart, blockEnd time.Time
 	plan, err := async.NewPlan(async.Limited(1), hooks,
 		async.Task[int]{Run: func(context.Context) (int, error) {
 			if firstIndex.CompareAndSwap(-1, 0) {
+				blockStart = time.Now()
 				close(started)
 				<-release
+				blockEnd = time.Now()
 			}
 			return 1, nil
 		}},
 		async.Task[int]{Run: func(context.Context) (int, error) {
 			if firstIndex.CompareAndSwap(-1, 1) {
+				blockStart = time.Now()
 				close(started)
 				<-release
+				blockEnd = time.Now()
 			}
 			return 2, nil
 		}},
@@ -211,6 +222,7 @@ func TestHooksReportPermitWaitAndRunDuration(t *testing.T) {
 		t.Fatal(err)
 	}
 	done := make(chan struct{})
+	gatherStart := time.Now()
 	go func() {
 		_, _ = async.Gather(context.Background(), plan)
 		close(done)
@@ -230,11 +242,22 @@ func TestHooksReportPermitWaitAndRunDuration(t *testing.T) {
 	}
 	first := int(firstIndex.Load())
 	second := 1 - first
-	if byIndex[first].run < 15*time.Millisecond {
-		t.Fatalf("first run duration = %v", byIndex[first].run)
+
+	wantRun := blockEnd.Sub(blockStart)
+	if delta := byIndex[first].run - wantRun; delta < 0 || delta > tolerance {
+		t.Fatalf("first run = %v, want close to actual block time %v (delta %v, tolerance %v)", byIndex[first].run, wantRun, delta, tolerance)
 	}
-	if byIndex[second].wait < 15*time.Millisecond {
-		t.Fatalf("second wait duration = %v", byIndex[second].wait)
+	// The second task starts queueing for the permit almost immediately
+	// after Gather is called and stops waiting when the first task releases
+	// it around blockEnd, so its wait should track blockEnd-gatherStart.
+	wantWait := blockEnd.Sub(gatherStart)
+	if delta := byIndex[second].wait - wantWait; delta < -tolerance || delta > tolerance {
+		t.Fatalf("second wait = %v, want close to actual queueing time %v (delta %v, tolerance %v)", byIndex[second].wait, wantWait, delta, tolerance)
+	}
+	// The second task's own Run body never blocks (it just returns), so its
+	// run duration should be far smaller than the wait it just measured.
+	if byIndex[second].run > tolerance {
+		t.Fatalf("second run = %v, want well under %v", byIndex[second].run, tolerance)
 	}
 }
 

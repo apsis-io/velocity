@@ -98,8 +98,14 @@ func TestHooksOnCompleteCanReenterSameKey(t *testing.T) {
 	}
 }
 
+// TestHooksObserveCallbackDuration checks OnComplete's duration against an
+// independently measured wall-clock bracket around fn itself, not just a
+// loose lower bound -- a reported duration that was, say, measured from the
+// wrong point (or 10x inflated) would still satisfy "at least as long as we
+// slept" but must not satisfy "close to the actual elapsed time."
 func TestHooksObserveCallbackDuration(t *testing.T) {
 	const leadTime = 40 * time.Millisecond
+	const tolerance = 20 * time.Millisecond
 	completes := make(chan time.Duration, 1)
 	group, err := dedupe.New[string, int](context.Background(), dedupe.WithHooks[string, int](dedupe.Hooks[string]{
 		OnComplete: func(_ string, duration time.Duration, _ error) { completes <- duration },
@@ -109,9 +115,12 @@ func TestHooksObserveCallbackDuration(t *testing.T) {
 	}
 	started := make(chan struct{})
 	release := make(chan struct{})
+	var fnStart, fnEnd time.Time
 	fn := func(context.Context) (int, error) {
+		fnStart = time.Now()
 		close(started)
 		<-release
+		fnEnd = time.Now()
 		return 1, nil
 	}
 	leader := make(chan *ownership.Shared[int], 1)
@@ -121,6 +130,8 @@ func TestHooksObserveCallbackDuration(t *testing.T) {
 	}()
 	<-started
 	time.Sleep(leadTime)
+	// A follower joining mid-flight must not skew the leader's measured
+	// duration toward the follower's much shorter wait.
 	follower := make(chan *ownership.Shared[int], 1)
 	go func() {
 		handle, _ := group.Do(context.Background(), "key", fn)
@@ -128,12 +139,17 @@ func TestHooksObserveCallbackDuration(t *testing.T) {
 	}()
 	time.Sleep(time.Millisecond)
 	close(release)
-	if duration := <-completes; duration < leadTime {
-		t.Fatalf("duration = %v, want at least %v", duration, leadTime)
-	}
+	duration := <-completes
 	for _, handle := range []*ownership.Shared[int]{<-leader, <-follower} {
 		if handle != nil {
 			_ = handle.Release()
 		}
+	}
+	wantDuration := fnEnd.Sub(fnStart)
+	if delta := duration - wantDuration; delta < 0 || delta > tolerance {
+		t.Fatalf("duration = %v, want close to actual fn runtime %v (delta %v, tolerance %v)", duration, wantDuration, delta, tolerance)
+	}
+	if duration < leadTime {
+		t.Fatalf("duration = %v, want at least %v", duration, leadTime)
 	}
 }
