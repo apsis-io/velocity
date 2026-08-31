@@ -49,22 +49,25 @@ first, err := borrow.Project(func(values []int) (int, error) {
 
 Multiple reads may coexist. A write borrow, move, take, or release during a read
 returns `ownership.ErrConflict` immediately; ownership never waits internally.
+Sharing one write capability between goroutines is safe, but overlapping updates
+also return `ErrConflict` rather than receiving the same mutable pointer.
 
 ## Move, take, and sharing
 
 ```go
 moved, err := owner.Move()       // old owner becomes moved
-value, err := moved.Take()       // exits ownership without running Drop
+value, err := moved.IntoValue()       // exits ownership without running Drop
 
 owner, _ = ownership.New(value)
 shared, err := owner.IntoShared()
 peer, err := shared.Clone()      // explicit counted handle
 _ = peer.Release()
-owner, err = shared.TryUnwrap()  // succeeds only when sole and unborrowed
+owner, err = shared.IntoOwner()  // succeeds only when sole and unborrowed
 ```
 
 `Release` and `Close` are exact aliases. Cleanup is idempotent after successful
-release or transfer.
+release or transfer. A successful borrow release has completed its state change;
+it is never silently deferred. Reentrant release from Drop returns immediately.
 
 ## Drop and snapshot
 
@@ -101,6 +104,34 @@ panics.
 With `-tags=velocitydebug`, leaked advanced borrows emit structured diagnostics
 through `slog.Default()`. Applications may configure any handler, including
 `tint`; velocity does not configure global logging.
+
+## Opcodes and opruntime
+
+`opcodes` defines plain data shapes for identifying an operation and its
+operands. It performs no encoding and defines no domain-specific operations;
+a caller declares its own `Op` constants:
+
+```go
+const opPrint opcodes.Op = 1
+```
+
+`opruntime` is glue: a registry mapping an `opcodes.Op` to the Go function
+that implements it, plus dispatch. It is not a virtual machine; it owns no
+registers, stack, or execution state.
+
+```go
+table := opruntime.NewTable()
+err := table.Register(opPrint, func(inst opcodes.Instruction) error {
+    fmt.Println("printed", inst.A)
+    return nil
+})
+
+err = table.Dispatch(opcodes.Instruction{Op: opPrint, A: 42})
+```
+
+`opruntime.Run` dispatches a `[]opcodes.Instruction` in order and stops at
+the first error; it is a thin convenience loop around `Table.Dispatch`, not
+a bytecode program format. Neither package depends on `ownership`.
 
 ## Development
 
