@@ -101,6 +101,23 @@ This records current selections, not superseded planning alternatives.
 - `Drained` closes only once sealed, since an unsealed borrow count of zero
   is transient and closing a channel is not. Sealing is a property of the
   value, not of a handle, and is irreversible.
+- A `Scope.CloseContext(ctx)` was proposed and rejected for the same reason,
+  plus one specific to cleanup. `Scope` holds `func() error` thunks, and the
+  common one is `io.Closer.Close`, which takes no context and cannot be
+  interrupted once entered. A context could therefore only decide whether to
+  *start* the remaining releases, never bound any single one — so the name
+  promises "cleanup with a timeout" and delivers "cleanup that may partly not
+  happen." Abandoning the rest on expiry leaks them permanently, since `Close`
+  has already taken the release list and nothing can retry; running them in a
+  goroutine instead leaves work outstanding in a shutdown path, where the
+  caller is usually about to exit, and discards the errors of anything that
+  finishes late. Taken with the rule that release callbacks stay bounded, it
+  is redundant when the rule holds and ineffective when it does not.
+- The genuine case — a resource whose release really is cancellable with
+  defined semantics — needs no API at all: capture the context in the thunk,
+  `scope.OnRelease(func() error { return conn.Shutdown(ctx) })`. That scopes
+  cancellation to the one resource that defines it, instead of claiming a
+  scope-wide guarantee the scope cannot keep.
 - `Detach` is an exact alias of `IntoValue`, added because the name
   `IntoValue` describes the return value rather than the consequence, and the
   consequence — Drop will never run — is what callers get wrong when they

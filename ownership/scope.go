@@ -81,6 +81,14 @@ func (s *Scope) OwnCloser(closer io.Closer) error {
 // It reports ErrScopeClosed once the scope has been closed or disarmed, so a
 // resource acquired after that point is never silently forgotten. The caller
 // still owns it and must release it directly.
+//
+// There is no context-aware Close, because the usual release is an
+// io.Closer.Close that takes no context and cannot be interrupted; a deadline
+// could only decide whether to start the remaining releases, which would leak
+// them rather than bound them. A resource whose release genuinely is
+// cancellable supplies its own context here:
+//
+//	scope.OnRelease(func() error { return conn.Shutdown(ctx) })
 func (s *Scope) OnRelease(release func() error) error {
 	if release == nil {
 		return &ReleasedError{Operation: OpOwn}
