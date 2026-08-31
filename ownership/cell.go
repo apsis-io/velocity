@@ -28,6 +28,7 @@ const (
 type State struct {
 	Shared    bool
 	Frozen    bool
+	Sealed    bool
 	Released  bool
 	Moved     bool
 	Readers   int
@@ -45,6 +46,13 @@ type cell[T any] struct {
 	readers int
 	writer  bool
 	shares  int
+
+	// sealed rejects new borrows so an in-progress retirement cannot be
+	// extended. drained closes once sealing has taken effect and the last
+	// borrow has gone, which is the point it is safe to release.
+	sealed        bool
+	drained       chan struct{}
+	drainedClosed bool
 
 	drop    traits.Drop[T]
 	clone   traits.Clone[T]
@@ -66,6 +74,7 @@ func (c *cell[T]) stateFor(h *handle) State {
 	state := State{
 		Shared:    c.mode == modeShared,
 		Frozen:    c.mode == modeFrozen,
+		Sealed:    c.sealed,
 		Released:  c.mode == modeReleased,
 		Readers:   c.readers,
 		Writer:    c.writer,
@@ -114,6 +123,9 @@ func (c *cell[T]) acquireRead(h *handle, expected mode) (*lease[T], error) {
 	if c.mode != expected {
 		return nil, &MovedError{Operation: OpBorrow}
 	}
+	if c.sealed {
+		return nil, &SealedError{Operation: OpBorrow}
+	}
 	if c.writer {
 		return nil, c.conflictLocked(OpBorrow)
 	}
@@ -131,6 +143,9 @@ func (c *cell[T]) acquireWrite(h *handle, expected mode) (*lease[T], error) {
 	}
 	if c.mode != expected {
 		return nil, &MovedError{Operation: OpBorrowMut}
+	}
+	if c.sealed {
+		return nil, &SealedError{Operation: OpBorrowMut}
 	}
 	if c.writer || c.readers != 0 {
 		return nil, c.conflictLocked(OpBorrowMut)
@@ -162,5 +177,44 @@ func (c *cell[T]) releaseLeaseLocked(l *lease[T]) bool {
 		c.writer = false
 	}
 	l.issuer.borrows--
+	c.signalDrainedLocked()
 	return true
+}
+
+// drainedChanLocked returns the drain channel, creating it on first use.
+func (c *cell[T]) drainedChanLocked() chan struct{} {
+	if c.drained == nil {
+		c.drained = make(chan struct{})
+	}
+	return c.drained
+}
+
+// signalDrainedLocked closes the drain channel once sealing is in effect and
+// no borrow remains. Sealing is irreversible and rejects new borrows, so that
+// condition is terminal rather than transient, which is what makes closing a
+// channel the right signal for it.
+func (c *cell[T]) signalDrainedLocked() {
+	if c.drainedClosed || !c.sealed || c.readers != 0 || c.writer {
+		return
+	}
+	c.drainedClosed = true
+	close(c.drainedChanLocked())
+}
+
+// seal rejects further borrows and reports whether the cell is already drained.
+func (c *cell[T]) seal(h *handle) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.checkHandle(h, OpSeal); err != nil {
+		return err
+	}
+	c.sealed = true
+	c.signalDrainedLocked()
+	return nil
+}
+
+func (c *cell[T]) drainedChan() <-chan struct{} {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.drainedChanLocked()
 }

@@ -18,7 +18,20 @@ func FuzzOwnershipModel(f *testing.F) {
 		var writes []*ownership.WriteBorrow[int]
 
 		for _, op := range ops {
-			switch op % 15 {
+			switch op % 16 {
+			case 15:
+				// Sealing is irreversible, so afterwards every borrow attempt
+				// must report ErrSealed rather than succeeding.
+				if owner != nil {
+					if err := owner.Seal(); err != nil && !knownLifecycleError(err) {
+						t.Fatalf("Seal: %v", err)
+					}
+					if _, err := owner.Borrow(); err == nil {
+						t.Fatal("Borrow succeeded on a sealed owner")
+					} else if !knownLifecycleError(err) && !errors.Is(err, ownership.ErrSealed) {
+						t.Fatalf("Borrow after Seal: %v", err)
+					}
+				}
 			case 12:
 				if owner != nil {
 					if next, err := owner.Freeze(); err == nil {
@@ -160,5 +173,6 @@ func FuzzOwnershipModel(f *testing.F) {
 func knownLifecycleError(err error) bool {
 	return errors.Is(err, ownership.ErrConflict) ||
 		errors.Is(err, ownership.ErrMoved) ||
-		errors.Is(err, ownership.ErrReleased)
+		errors.Is(err, ownership.ErrReleased) ||
+		errors.Is(err, ownership.ErrSealed)
 }

@@ -15,6 +15,7 @@ var (
 	ErrDuplicateOption = errors.New("duplicate ownership option")
 	ErrNilOption       = errors.New("nil ownership option")
 	ErrScopeClosed     = errors.New("ownership scope closed")
+	ErrSealed          = errors.New("ownership sealed")
 )
 
 type Operation string
@@ -28,6 +29,7 @@ const (
 	OpFreeze     Operation = "freeze"
 	OpMap        Operation = "map"
 	OpOwn        Operation = "scope own"
+	OpSeal       Operation = "seal"
 	OpClone      Operation = "clone shared"
 	OpIntoOwner  Operation = "into owner"
 	OpRelease    Operation = "release"
@@ -78,6 +80,12 @@ func (e *ConfigError) Error() string {
 	return fmt.Sprintf("ownership option %q: %v", e.Option, e.Reason)
 }
 func (e *ConfigError) Unwrap() []error { return []error{ErrInvalidConfig, e.Reason} }
+
+// SealedError identifies a borrow refused because the value is being retired.
+type SealedError struct{ Operation Operation }
+
+func (e *SealedError) Error() string { return fmt.Sprintf("%s: %v", e.Operation, ErrSealed) }
+func (e *SealedError) Unwrap() error { return ErrSealed }
 
 // ScopeError identifies an operation rejected by a Scope.
 type ScopeError struct {
