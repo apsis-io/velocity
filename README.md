@@ -165,8 +165,13 @@ shared, err := group.DoBorrowed(ctx, "report-42", input,
 `Forget` stops tracking a key without interrupting work already in flight;
 `Cancel` actively cancels it. `DoBatch` runs one function over several keys
 and aligns the result map to the request, reporting `ErrMissingResult` for
-any key the function didn't return. Backends are constructor-selectable
-(`WithMutexBackend`, `WithXsyncBackend`, `WithSharded`).
+any key the function didn't return.
+
+The registry backend is constructor-selectable. `WithXsyncBackend` is the
+default and scales best when many goroutines register distinct keys;
+`WithMutexBackend` is faster uncontended and allocates one less per call;
+`WithSharded(n)` sits between them. See
+[`benchmarks/README.md`](benchmarks/README.md) for the numbers behind that.
 
 `WithHooks` lets a caller supply their own instrumentation — `dedupe`
 doesn't collect metrics itself, it just calls back synchronously at points

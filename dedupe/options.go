@@ -8,9 +8,10 @@ import (
 
 type backendKind uint8
 
+// backendXsync is first so it is the zero value, and therefore the default.
 const (
-	backendMutex backendKind = iota
-	backendXsync
+	backendXsync backendKind = iota
+	backendMutex
 	backendSharded
 )
 
@@ -73,12 +74,17 @@ func WithHooks[K comparable, V any](hooks Hooks[K]) Option[K, V] {
 	})
 }
 
-// WithMutexBackend selects the default mutex-protected map backend.
+// WithMutexBackend selects a mutex-protected map backend. It is measurably
+// faster than the default when calls are uncontended, and is the only backend
+// that adds no allocation per call, but it serializes every registry
+// operation on one lock and so degrades under many concurrent distinct keys.
 func WithMutexBackend[K comparable, V any]() Option[K, V] {
 	return backendOption[K, V](backendMutex, 0)
 }
 
-// WithXsyncBackend selects the xsync map backend.
+// WithXsyncBackend selects the default xsync map backend. It scales best when
+// many goroutines register distinct keys concurrently, at the cost of one
+// extra allocation per call and slightly slower uncontended calls.
 func WithXsyncBackend[K comparable, V any]() Option[K, V] {
 	return backendOption[K, V](backendXsync, 0)
 }

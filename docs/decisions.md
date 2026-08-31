@@ -184,10 +184,21 @@ treated as an afterthought:
   a single key's abandonment can't prematurely cancel work other keys in the
   same batch still need, and can't silently fail to cancel work nobody wants
   anymore either.
-- Constructor-selectable backends: mutex-map (default), `xsync.Map`, and a
+- Constructor-selectable backends: `xsync.Map` (default), mutex-map, and a
   sharded mutex-map hashing `K` via Go's generic, seed-based
   `hash/maphash.Comparable[K]` — no caller-supplied hasher needed, unlike
   samber's `Hasher[K]`.
+- The default is `xsync.Map` on an asymmetric-payoff argument, not a clean
+  win: benchmarked across three workloads it is ~1.9x mutex when goroutines
+  register distinct keys concurrently and ~10% faster on one contended key,
+  but ~8% *slower* uncontended and one allocation heavier everywhere. The
+  large win outweighs the small loss for code that reaches for a dedup
+  library at all. `WithMutexBackend` is explicitly **not** deprecated — it
+  is the measured best choice for low-concurrency and allocation-sensitive
+  callers. An earlier backend benchmark measured only the key-per-goroutine
+  case, the one workload mutex loses badly; deprecating mutex on that
+  evidence would have been a conclusion drawn from the single scenario that
+  supported it, so `benchmarks/` now covers all three.
 - `dedupe.Singleflight[K, V]`/`NewSingleflight` are exact aliases of
   `Group`/`New`, for readers who know this pattern by its more common name
   (same idiom as `ownership.Release`/`Close`).

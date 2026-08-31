@@ -75,13 +75,16 @@ median of -count=5
 | velocity `Limited(4)` | 8028 | 2216 | 25 |
 | hunch | 8690 | 1960 | 34 |
 
-**dedupe backends** (`RunParallel`, one key per goroutine)
+**dedupe backends**, all three workloads (ns/op, median of 5)
 
-| | ns/op | B/op | allocs/op |
+| | uncontended | one shared key | key per goroutine |
 |---|---|---|---|
-| `WithXsyncBackend` | 571 | 584 | 10 |
-| `WithSharded(8)` | 645 | 560 | 9 |
-| `WithMutexBackend` (default) | 1266 | 560 | 9 |
+| `WithXsyncBackend` (default) | 1548 | **1047** | **596** |
+| `WithMutexBackend` | **1428** | 1158 | 1134 |
+| `WithSharded(8)` | 1559 | 1176 | 613 |
+
+Allocations are flat per backend across all three: mutex and sharded 9 (560 B)
+uncontended, xsync 10 (584 B).
 
 ## What the numbers mean
 
@@ -116,12 +119,24 @@ of those, it is the right tool.
 channel is not free. With real task bodies that overhead is amortized away, but
 bounding concurrency is not a no-op and should be a deliberate choice.
 
-**`WithXsyncBackend` is ~2.2x the default mutex backend under high-cardinality
-contention.** This is the workload the default is worst at: every goroutine on
-its own key, so all the contention is on the registry and none of it is
-deduplicated. `WithMutexBackend` remains a reasonable default for single-key or
-low-concurrency use, where its lower fixed overhead wins. If you are deduping
-many distinct keys from many goroutines, switch.
+**The backend default is xsync, and the choice is workload-dependent.** xsync is
+~1.9x mutex when many goroutines register distinct keys, and ~10% faster on a
+single contended key — but it *loses* ~8% uncontended and costs one extra
+allocation in every workload. xsync is the default because the payoff is
+asymmetric: the win where it wins is much larger than the loss where it loses,
+and code reaching for a dedup library usually has concurrency.
+
+`WithMutexBackend` is not deprecated and remains the right choice for
+low-concurrency or allocation-sensitive callers. `WithSharded(n)` sits between
+the two and only pays off at high cardinality; it has no workload here where it
+is the outright best, so prefer one of the other two unless you have measured
+your own.
+
+An earlier version of this benchmark measured **only** the key-per-goroutine
+case, which is the single workload mutex is worst at. That would have justified
+deprecating mutex on evidence that never looked at the case mutex wins. The
+three-workload table above exists so that mistake is visible rather than
+repeatable.
 
 ## Scope
 
