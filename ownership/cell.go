@@ -11,6 +11,7 @@ type mode uint8
 const (
 	modeUnique mode = iota
 	modeShared
+	modeFrozen
 	modeReleased
 )
 
@@ -26,6 +27,7 @@ const (
 // or formats the owned value.
 type State struct {
 	Shared    bool
+	Frozen    bool
 	Released  bool
 	Moved     bool
 	Readers   int
@@ -63,6 +65,7 @@ func (c *cell[T]) stateFor(h *handle) State {
 	defer c.mu.Unlock()
 	state := State{
 		Shared:    c.mode == modeShared,
+		Frozen:    c.mode == modeFrozen,
 		Released:  c.mode == modeReleased,
 		Readers:   c.readers,
 		Writer:    c.writer,

@@ -13,11 +13,41 @@ func FuzzOwnershipModel(f *testing.F) {
 	f.Fuzz(func(t *testing.T, ops []byte) {
 		owner := mustOwner(t, 0)
 		var shared []*ownership.Shared[int]
+		var frozen []*ownership.Frozen[int]
 		var reads []*ownership.ReadBorrow[int]
 		var writes []*ownership.WriteBorrow[int]
 
 		for _, op := range ops {
-			switch op % 12 {
+			switch op % 15 {
+			case 12:
+				if owner != nil {
+					if next, err := owner.Freeze(); err == nil {
+						frozen = append(frozen, next)
+						owner = nil
+					} else if !knownLifecycleError(err) {
+						t.Fatalf("Freeze: %v", err)
+					}
+				}
+			case 13:
+				if len(frozen) > 0 {
+					if next, err := frozen[0].Clone(); err == nil {
+						frozen = append(frozen, next)
+					} else if !knownLifecycleError(err) {
+						t.Fatalf("Frozen.Clone: %v", err)
+					}
+				}
+			case 14:
+				if len(frozen) == 1 {
+					if next, err := frozen[0].IntoOwner(); err == nil {
+						owner = next
+						frozen = nil
+					} else if !knownLifecycleError(err) {
+						t.Fatalf("Frozen.IntoOwner: %v", err)
+					}
+				} else if len(frozen) > 1 {
+					_ = frozen[len(frozen)-1].Release()
+					frozen = frozen[:len(frozen)-1]
+				}
 			case 10:
 				if owner != nil {
 					if borrow, err := owner.BorrowUntracked(); err == nil {
@@ -116,6 +146,9 @@ func FuzzOwnershipModel(f *testing.F) {
 			_ = borrow.Release()
 		}
 		for _, handle := range shared {
+			_ = handle.Release()
+		}
+		for _, handle := range frozen {
 			_ = handle.Release()
 		}
 		if owner != nil {

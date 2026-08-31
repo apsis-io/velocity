@@ -186,7 +186,7 @@ func (s *Shared[T]) Release() error {
 		return nil
 	}
 	c := s.c
-	value, drop, first, err := c.beginSharedRelease(&s.h)
+	value, drop, first, err := c.beginCountedRelease(&s.h, modeShared)
 	if err != nil {
 		return err
 	}
@@ -205,7 +205,9 @@ func (s *Shared[T]) Release() error {
 // Close is an exact alias of Release.
 func (s *Shared[T]) Close() error { return s.Release() }
 
-func (c *cell[T]) beginSharedRelease(h *handle) (value T, drop func(T) error, first bool, err error) {
+// beginCountedRelease drives release for the reference-counted modes, Shared
+// and Frozen, which differ only in the mode they expect.
+func (c *cell[T]) beginCountedRelease(h *handle, expected mode) (value T, drop func(T) error, first bool, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if h.state == handleMoved || h.state == handleReleased || c.mode == modeReleased {
@@ -214,7 +216,7 @@ func (c *cell[T]) beginSharedRelease(h *handle) (value T, drop func(T) error, fi
 	if h.borrows != 0 {
 		return value, nil, false, c.conflictLocked(OpRelease)
 	}
-	if c.mode != modeShared {
+	if c.mode != expected {
 		return value, nil, false, &MovedError{Operation: OpRelease}
 	}
 	if c.shares > 1 {
