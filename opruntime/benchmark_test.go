@@ -8,6 +8,15 @@ import (
 )
 
 func BenchmarkTable(b *testing.B) {
+	b.Run("direct", func(b *testing.B) {
+		handler := func(opcodes.Instruction) error { return nil }
+		inst := opcodes.Instruction{Op: opDemo}
+		b.ReportAllocs()
+		for b.Loop() {
+			_ = handler(inst)
+		}
+	})
+
 	b.Run("dispatch", func(b *testing.B) {
 		table := opruntime.NewTable()
 		_ = table.Register(opDemo, func(opcodes.Instruction) error { return nil })

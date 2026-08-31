@@ -59,6 +59,12 @@ This records current selections, not superseded planning alternatives.
   single `Instruction` is the primary operation, and `Run` over a
   `[]Instruction` is a thin convenience loop around `Dispatch`. No owned
   registers, operand stack, or execution state.
+- `Table` stores handlers in a fixed `[256]Handler` array indexed directly by
+  `Op` (a `uint8`), not a map: a direct-call baseline benchmarked at ~1.9
+  ns/op, the original map-backed `Dispatch` at ~26.5 ns/op, and the
+  array-backed `Dispatch` at ~4.0 ns/op (~2.1 ns of overhead over a raw call)
+  — roughly a 6-7x reduction versus the map, all three 0 allocs/op
+  (`opruntime/benchmark_test.go`, `BenchmarkTable`).
 - `opruntime` imports `opcodes` for its types but has zero hardcoded
   semantics. `opcodes` has no dependency on `opruntime` or `ownership`.
   Porting `ownership` to declare its operations as `opcodes.Op` values and
