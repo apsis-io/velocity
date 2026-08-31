@@ -80,8 +80,15 @@ This records current selections, not superseded planning alternatives.
   irreducible without giving up the caller-registered-handler design.
 - `opruntime` imports `opcodes` for its types but has zero hardcoded
   semantics. `opcodes` has no dependency on `opruntime` or `ownership`.
-  Porting `ownership` to declare its operations as `opcodes.Op` values and
-  wire them through `opruntime` is deferred future work, not done here.
+  Porting `ownership`'s operations onto `opcodes.Op`/`opruntime` dispatch —
+  or any other fixed, known-at-the-call-site op set, such as
+  `ownership/model_test.go`'s fuzz-driven op switch — was considered and
+  rejected, not merely deferred: a hand-written switch benchmarked ~28%
+  faster than `Table.Dispatch` for the same 10-op shape
+  (`opruntime/benchmark_test.go`, `BenchmarkSwitchVsTable`), so
+  `opcodes`/`opruntime` earn their keep only where the op set is genuinely
+  pluggable at runtime (a caller registers handlers, as `dedupe`/`async` do
+  not, but a future scripting/replay layer might).
 - Named `opruntime`, not `runtime`, to avoid shadowing the stdlib `runtime`
   package already imported by `ownership/owner.go`.
 
