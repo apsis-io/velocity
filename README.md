@@ -233,6 +233,7 @@ go test -race ./...
 go test -tags=velocitydebug ./...
 go test ./ownership -run '^$' -fuzz '^FuzzOwnershipModel$' -fuzztime 30s
 go test ./... -run '^$' -bench . -benchmem
+go -C benchmarks test ./... -run '^$' -bench . -benchmem -count=5
 ```
 
 The nested `benchmarks` module holds head-to-head comparisons against the
