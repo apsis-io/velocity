@@ -87,6 +87,20 @@ This records current selections, not superseded planning alternatives.
   offers no aliasing protection; `Owner` stays the answer when that matters.
   Release callbacks take no context by design: they should be bounded, and
   cancellation would be added only for a resource whose semantics define it.
+- `Seal`/`Drained` cover graceful retirement — refuse new borrows, then wait
+  for the in-flight ones — without a blocking operation. A `Retire(ctx)` was
+  proposed and rejected: this package has no channels, selects, or context
+  waits anywhere, and that absence is why it cannot deadlock. A waiting
+  retire would hang a goroutine that holds a borrow and then retires the same
+  value, where `Release` returns `ErrConflict` immediately today, and would
+  also make Drop timing non-deterministic (a retire could time out and then
+  succeed later, with the Drop error going nowhere but `State`). Splitting it
+  gives the caller the one primitive it cannot build — only the cell can
+  refuse a `Borrow` — while the waiting stays in the caller's own `select`,
+  composed with whatever shutdown context it already has.
+- `Drained` closes only once sealed, since an unsealed borrow count of zero
+  is transient and closing a channel is not. Sealing is a property of the
+  value, not of a handle, and is irreversible.
 - `Detach` is an exact alias of `IntoValue`, added because the name
   `IntoValue` describes the return value rather than the consequence, and the
   consequence — Drop will never run — is what callers get wrong when they

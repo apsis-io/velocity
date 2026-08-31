@@ -83,6 +83,40 @@ wrong anywhere release is merely intended, because a handle that is never
 released then blocks its cell permanently. Scoped `Read`/`Write` remain the
 default: they cannot leak and allocate once.
 
+## Retirement
+
+`Release` refuses an active borrow and returns immediately. That is correct for
+the ordinary case but leaves no way to retire a value other goroutines are
+still reading: stop admitting new readers, let the in-flight ones finish, then
+close.
+
+`Seal` supplies the half a caller cannot build, since only the cell knows the
+borrow count and only it can turn a new `Borrow` away. `Drained` reports when
+that has taken effect. The waiting belongs to the caller:
+
+```go
+owner.Seal()
+select {
+case <-owner.Drained():
+case <-ctx.Done():
+    return ctx.Err()
+}
+return owner.Release()
+```
+
+There is deliberately no blocking `Retire(ctx)`. Nothing in this package waits
+internally, which is what makes deadlock impossible within it; an operation
+that waited for borrows would hang a goroutine that holds one and then retires
+the same value, where today that returns `ErrConflict` at once. Splitting the
+operation keeps the invariant and moves that mistake into the caller's own
+`select`, where it is visible.
+
+Sealing applies to the value rather than to one handle, is irreversible and
+idempotent, and releases nothing by itself; outstanding borrows and handles
+must still be released. `Drained` closes only after sealing, because an
+unsealed borrow count of zero is transient and a closed channel is not.
+Abandoning the wait leaves the value sealed, so a later attempt can finish.
+
 ## When not to use this
 
 Ownership costs ceremony. It earns that cost only where a lifetime mistake

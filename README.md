@@ -139,6 +139,20 @@ defer lease.Release()
 addr, err := lease.Value()   // ErrReleased once handed back
 ```
 
+To retire a value other goroutines are still reading, `Seal` stops new borrows
+and `Drained` reports when the in-flight ones have finished. The waiting is
+yours, so nothing in the package ever blocks:
+
+```go
+conn.Seal()
+select {
+case <-conn.Drained():
+case <-ctx.Done():
+    return ctx.Err()
+}
+return conn.Release()
+```
+
 ## Freeze and transform
 
 `Freeze` gives up mutation for a counted read-only handle. `Frozen[T]` has no
