@@ -15,6 +15,15 @@ type Group[K comparable, V any] struct {
 	clone   func(V) (V, error)
 }
 
+// Singleflight is an exact alias of Group for readers who know this pattern
+// by its more common name.
+type Singleflight[K comparable, V any] = Group[K, V]
+
+// NewSingleflight is an exact alias of New.
+func NewSingleflight[K comparable, V any](baseCtx context.Context, opts ...Option[K, V]) (*Group[K, V], error) {
+	return New(baseCtx, opts...)
+}
+
 type execution struct {
 	ctx    context.Context
 	cancel context.CancelFunc

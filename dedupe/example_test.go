@@ -18,3 +18,15 @@ func ExampleGroup_Do() {
 	fmt.Println(result)
 	// Output: 42
 }
+
+func ExampleNewSingleflight() {
+	group, _ := dedupe.NewSingleflight[string, int](context.Background())
+	handle, _ := group.Do(context.Background(), "answer", func(context.Context) (int, error) {
+		return 42, nil
+	})
+	value, _ := handle.Borrow()
+	result, _ := value.Project(func(number int) (int, error) { return number, nil })
+	_ = value.Release()
+	fmt.Println(result)
+	// Output: 42
+}

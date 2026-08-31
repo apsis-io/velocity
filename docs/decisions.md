@@ -135,6 +135,9 @@ treated as an afterthought:
   sharded mutex-map hashing `K` via Go's generic, seed-based
   `hash/maphash.Comparable[K]` — no caller-supplied hasher needed, unlike
   samber's `Hasher[K]`.
+- `dedupe.Singleflight[K, V]`/`NewSingleflight` are exact aliases of
+  `Group`/`New`, for readers who know this pattern by its more common name
+  (same idiom as `ownership.Release`/`Close`).
 - Panic handling follows conc's `panics.Catcher` pattern (recover, capture
   stack, first-panic-wins, re-panic in the waiter's own `Do`/`DoBatch` call)
   through one shared internal helper, rather than samber's duplicated
@@ -168,6 +171,10 @@ Rewrites the best of `AaronJan/Hunch` and `sourcegraph/conc` as `async` +
 - `Pipeline[T]`'s `Then[R any]` is a Go 1.27 generic method (declaring its
   own type parameter beyond the receiver's `T`), giving a fluent,
   heterogeneously-typed chain; stages fail fast under one run context.
+  `Pipeline` is this package's Waterfall — no literal `Waterfall` alias
+  exists because Hunch's variadic `Waterfall(ctx, stages...)` requires every
+  stage to share one type, which is incompatible with `Then` changing type
+  per stage; documented at the `Pipeline` declaration instead.
 - `async.Group` wraps stdlib `sync.WaitGroup.Go` (native since Go 1.25,
   confirmed present in Go 1.27) with conc-style panic recovery — the stdlib
   version is a bare `Add`/`Done` wrapper with no `recover()` at all.

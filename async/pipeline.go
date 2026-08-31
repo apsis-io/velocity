@@ -3,6 +3,11 @@ package async
 import "context"
 
 // Pipeline composes heterogeneous stages while retaining static result types.
+// It is this package's equivalent of Hunch's Waterfall, expressed as a
+// fluent chain (Start(fn).Then(...).Then(...).Run(ctx)) rather than a flat
+// variadic call, since Go can't express Waterfall's original
+// same-type-throughout variadic signature and still let each stage change
+// type the way Then does.
 type Pipeline[T any] struct {
 	run func(context.Context) (T, error)
 }
