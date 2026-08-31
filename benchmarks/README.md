@@ -52,28 +52,28 @@ median of -count=5
 
 | | ns/op | B/op | allocs/op |
 |---|---|---|---|
-| x/sync | 169 | 80 | 1 |
-| samber | 171 | 80 | 1 |
-| janos | 1058 | 336 | 6 |
-| velocity | 1494 | 560 | 9 |
+| x/sync | 167 | 80 | 1 |
+| samber | 173 | 80 | 1 |
+| janos | 1044 | 336 | 6 |
+| velocity | 1551 | 584 | 10 |
 
 **Dedupe, contended** (`RunParallel`, one shared key)
 
 | | ns/op | B/op | allocs/op |
 |---|---|---|---|
-| x/sync | 291 | 75 | 0 |
-| samber | 289 | 76 | 0 |
-| janos | 361 | 11 | 0 |
-| velocity | 1250 | 396 | 6 |
+| x/sync | 277 | 75 | 0 |
+| samber | 283 | 75 | 0 |
+| janos | 348 | 12 | 0 |
+| velocity | 1080 | 429 | 7 |
 
 **Async gather** (8 trivial tasks)
 
 | | ns/op | B/op | allocs/op |
 |---|---|---|---|
-| errgroup | 3565 | 856 | 35 |
-| velocity `Unlimited` | 5330 | 1992 | 23 |
-| velocity `Limited(4)` | 8028 | 2216 | 25 |
-| hunch | 8690 | 1960 | 34 |
+| errgroup | 3482 | 856 | 35 |
+| velocity `Unlimited` | 4579 | 1752 | 19 |
+| velocity `Limited(4)` | 6559 | 1864 | 20 |
+| hunch | 8122 | 1960 | 34 |
 
 **dedupe backends**, all three workloads (ns/op, median of 5)
 
@@ -97,16 +97,18 @@ a separate goroutine so a caller can abandon it, which means a goroutine spawn
 and a `context.WithCancel` per call. They are not faster because they are better
 written — they are faster because they cannot do this.
 
-velocity's remaining ~440 ns / 3 allocs over janos is the ownership handle:
-janos returns a value and forgets it, velocity hands every caller an
-independently released handle with Drop support. Whether that is worth it is a
-design question, and the answer is workload-dependent — but the cost is real and
-it is measured here rather than argued about.
+velocity's remaining ~500 ns over janos is the ownership handle: janos returns a
+value and forgets it, velocity hands every caller an independently released
+handle with Drop support. Whether that is worth it is a design question, and the
+answer is workload-dependent — but the cost is real and it is measured here
+rather than argued about.
 
-Profiling this path is what motivated the `New` zero-option fast path and
-`NewShared`, which together took `Do` from 11 to 9 allocations. The wall-clock
-gain (~30-100 ns) overlaps run-to-run noise; the goroutine and context setup
-dominate, and no amount of handle tuning changes that.
+Profiling this path drove several optimizations: a zero-option fast path in
+`ownership.New`, `NewShared` to skip a throwaway `Owner`, and dropping the
+borrow wrapper from scoped `Read`/`Write`. The remaining `Do` allocations are
+load-bearing — the per-round `context.WithCancel` backs `Cancel` and
+all-callers-left cancellation, and is invoked from four places — so this is the
+floor for the current design, not an easy win left on the table.
 
 **velocity beats hunch on async and loses to errgroup**, both for structural
 reasons. hunch boxes every result through `interface{}` and restores source
@@ -114,6 +116,11 @@ order by sorting afterwards; velocity is generic and assigns into a pre-sized
 slice by reserved index. errgroup wins because it does less — no `Outcome`
 structs, no labels, no limit machinery, no error joining — and if you need none
 of those, it is the right tool.
+
+`Gather` used to derive a cancellable context it never cancelled (unlike
+`Race`/`FirstSuccess`, which do use it to stop siblings) and allocated an error
+slice even when nothing failed. Removing both took it from 23 to 19 allocations
+and narrowed the gap to errgroup from 1.5x to 1.3x.
 
 **`Limited(4)` costs ~50% over `Unlimited`** for 8 trivial tasks. The permit
 channel is not free. With real task bodies that overhead is amortized away, but
