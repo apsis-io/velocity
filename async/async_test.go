@@ -3,6 +3,7 @@ package async_test
 import (
 	"context"
 	"errors"
+	"runtime"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -373,4 +374,104 @@ func TestGroupCloseAndPanicPropagation(t *testing.T) {
 		}()
 		panicGroup.Wait()
 	}()
+}
+
+// A Limit must bound goroutines, not merely running work. Acquiring the permit
+// inside each task goroutine would spawn one per task and park all but limit of
+// them, holding a stack each and applying no backpressure to the caller.
+func TestGatherLimitBoundsGoroutinesNotJustConcurrency(t *testing.T) {
+	const tasks = 500
+	const limit = 8
+
+	var running, peak atomic.Int64
+	release := make(chan struct{})
+	list := make([]async.Task[int], tasks)
+	for i := range list {
+		list[i] = async.Task[int]{Run: func(context.Context) (int, error) {
+			n := running.Add(1)
+			for {
+				old := peak.Load()
+				if n <= old || peak.CompareAndSwap(old, n) {
+					break
+				}
+			}
+			<-release
+			running.Add(-1)
+			return 1, nil
+		}}
+	}
+	plan := plan(t, async.Limited(limit), list...)
+
+	before := runtime.NumGoroutine()
+	done := make(chan struct{})
+	go func() { _, _ = async.Gather(context.Background(), plan); close(done) }()
+
+	// Let the first batch reach the barrier and any stragglers settle.
+	time.Sleep(100 * time.Millisecond)
+	growth := runtime.NumGoroutine() - before
+	close(release)
+	<-done
+
+	if peak.Load() > limit {
+		t.Fatalf("peak concurrent tasks = %d, want <= %d", peak.Load(), limit)
+	}
+	// Generous headroom over limit+submitter; the point is that growth tracks
+	// the limit rather than the task count.
+	if growth > limit*3 {
+		t.Fatalf("goroutine growth = %d for %d tasks at limit %d, want on the order of the limit", growth, tasks, limit)
+	}
+}
+
+func TestGatherCancellationDuringSubmissionMarksRemaining(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var once sync.Once
+
+	list := make([]async.Task[int], 20)
+	for i := range list {
+		list[i] = async.Task[int]{Run: func(context.Context) (int, error) {
+			once.Do(func() { close(started) })
+			<-release
+			return 1, nil
+		}}
+	}
+	plan := plan(t, async.Limited(2), list...)
+
+	type result struct {
+		outcomes []async.Outcome[int]
+		err      error
+	}
+	got := make(chan result, 1)
+	go func() {
+		outcomes, err := async.Gather(ctx, plan)
+		got <- result{outcomes, err}
+	}()
+
+	<-started
+	cancel()
+	close(release)
+	res := <-got
+
+	if !errors.Is(res.err, context.Canceled) {
+		t.Fatalf("Gather = %v, want cancellation", res.err)
+	}
+	if len(res.outcomes) != len(list) {
+		t.Fatalf("outcomes = %d, want %d", len(res.outcomes), len(list))
+	}
+	// Every task must be accounted for, in source order, started or not.
+	for i, outcome := range res.outcomes {
+		if outcome.Index != i {
+			t.Fatalf("outcome %d has index %d", i, outcome.Index)
+		}
+	}
+	canceled := 0
+	for _, outcome := range res.outcomes {
+		if errors.Is(outcome.Err, context.Canceled) {
+			canceled++
+		}
+	}
+	if canceled == 0 {
+		t.Fatal("no task reported cancellation")
+	}
 }

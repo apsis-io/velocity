@@ -29,23 +29,29 @@ func execute[T any](ctx context.Context, plan Plan[T]) ([]Outcome[T], error) {
 	if !plan.limit.unlimited {
 		permits = make(chan struct{}, plan.limit.value)
 	}
+	// The permit is taken here rather than inside the task goroutine so that a
+	// Limit bounds goroutines, not just running work. Acquiring inside would
+	// spawn one goroutine per task up front and park all but limit of them,
+	// which costs a stack each and applies no backpressure to the caller; a
+	// plan over a large collection would then hold thousands of parked
+	// goroutines. Blocking the submitting goroutine is the backpressure.
 	for i, task := range plan.tasks {
+		var waited time.Duration
+		if permits != nil {
+			waitStart := time.Now()
+			select {
+			case permits <- struct{}{}:
+				waited = time.Since(waitStart)
+			case <-ctx.Done():
+				// Neither this task nor any after it will start.
+				cancelRemaining(plan, outcomes, i, time.Since(waitStart), context.Cause(ctx))
+				wg.Wait()
+				return outcomes, joinedErrors(outcomes)
+			}
+		}
 		wg.Go(func() {
-			var waited time.Duration
 			if permits != nil {
-				waitStart := time.Now()
-				select {
-				case permits <- struct{}{}:
-					waited = time.Since(waitStart)
-					defer func() { <-permits }()
-				case <-ctx.Done():
-					err := context.Cause(ctx)
-					outcomes[i] = Outcome[T]{Index: i, Label: task.Label, Err: err}
-					if hook := plan.hooks.OnTaskComplete; hook != nil {
-						hook(i, task.Label, time.Since(waitStart), 0, err)
-					}
-					return
-				}
+				defer func() { <-permits }()
 			}
 			runStart := time.Now()
 			value, err := task.Run(ctx)
@@ -58,6 +64,21 @@ func execute[T any](ctx context.Context, plan Plan[T]) ([]Outcome[T], error) {
 	}
 	wg.Wait()
 	return outcomes, joinedErrors(outcomes)
+}
+
+// cancelRemaining records tasks from first onward as never started. Only the
+// task at first actually queued for a permit, so the rest report no wait.
+func cancelRemaining[T any](plan Plan[T], outcomes []Outcome[T], first int, waited time.Duration, err error) {
+	for i := first; i < len(plan.tasks); i++ {
+		label := plan.tasks[i].Label
+		outcomes[i] = Outcome[T]{Index: i, Label: label, Err: err}
+		if hook := plan.hooks.OnTaskComplete; hook != nil {
+			if i > first {
+				waited = 0
+			}
+			hook(i, label, waited, 0, err)
+		}
+	}
 }
 
 func joinedErrors[T any](outcomes []Outcome[T]) error {
@@ -148,6 +169,12 @@ func race[T any](ctx context.Context, plan Plan[T], successOnly bool) (Outcome[T
 // Race returns the first completed outcome, whether it succeeded or failed,
 // and cancels sibling task contexts. Non-cooperative siblings may continue
 // running in the background after Race returns.
+//
+// Unlike Gather, a Limit here bounds running work but not goroutines: every
+// task is spawned up front and parks on the permit. Returning on the first
+// completion requires reaching the collector, which blocking the submitting
+// goroutine on a permit would prevent. Prefer Gather when racing a large
+// enough collection for one parked goroutine per task to matter.
 func Race[T any](ctx context.Context, plan Plan[T]) (Outcome[T], error) {
 	return race(ctx, plan, false)
 }
