@@ -4,6 +4,7 @@ import (
 	"context"
 	"runtime/debug"
 	"sync"
+	"time"
 
 	"github.com/apsis-io/velocity/ownership"
 )
@@ -13,6 +14,7 @@ type Group[K comparable, V any] struct {
 	backend backend[K, V]
 	drop    func(V) error
 	clone   func(V) (V, error)
+	hooks   Hooks[K]
 }
 
 // Singleflight is an exact alias of Group for readers who know this pattern
@@ -91,7 +93,7 @@ func New[K comparable, V any](baseCtx context.Context, opts ...Option[K, V]) (*G
 	default:
 		return nil, &ConfigError{Option: "backend", Cause: ErrUnsupportedBackend}
 	}
-	return &Group[K, V]{baseCtx: baseCtx, backend: b, drop: cfg.drop, clone: cfg.clone}, nil
+	return &Group[K, V]{baseCtx: baseCtx, backend: b, drop: cfg.drop, clone: cfg.clone, hooks: cfg.hooks}, nil
 }
 
 func formatIndex(i int) string {
@@ -138,6 +140,9 @@ func (g *Group[K, V]) joinWithExecution(key K, shared *execution) (*call[V], boo
 			if actual.accepting {
 				actual.waiting++
 				actual.mu.Unlock()
+				if g.hooks.OnJoin != nil {
+					g.hooks.OnJoin(key, false)
+				}
 				return actual, false
 			}
 			actual.mu.Unlock()
@@ -151,12 +156,18 @@ func (g *Group[K, V]) joinWithExecution(key K, shared *execution) (*call[V], boo
 		actual, loaded = g.backend.loadOrStore(key, candidate)
 		if !loaded {
 			exec.add()
+			if g.hooks.OnJoin != nil {
+				g.hooks.OnJoin(key, true)
+			}
 			return candidate, true
 		}
 		actual.mu.Lock()
 		if actual.accepting {
 			actual.waiting++
 			actual.mu.Unlock()
+			if g.hooks.OnJoin != nil {
+				g.hooks.OnJoin(key, false)
+			}
 			return actual, false
 		}
 		actual.mu.Unlock()
@@ -165,6 +176,7 @@ func (g *Group[K, V]) joinWithExecution(key K, shared *execution) (*call[V], boo
 
 func (g *Group[K, V]) runBatch(keys []K, calls map[K]*call[V], fn func(context.Context, []K) (map[K]V, error)) {
 	ctx := calls[keys[0]].exec.ctx
+	start := time.Now()
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			for _, key := range keys {
@@ -172,7 +184,7 @@ func (g *Group[K, V]) runBatch(keys []K, calls map[K]*call[V], fn func(context.C
 			}
 		}
 		for _, key := range keys {
-			g.complete(key, calls[key])
+			g.complete(key, calls[key], start)
 		}
 	}()
 	values, err := fn(ctx, keys)
@@ -193,6 +205,7 @@ func (g *Group[K, V]) runBatch(keys []K, calls map[K]*call[V], fn func(context.C
 }
 
 func (g *Group[K, V]) run(key K, c *call[V], fn func(context.Context) (V, error)) {
+	start := time.Now()
 	normal := false
 	var panicErr *PanicError
 	defer func() {
@@ -200,7 +213,7 @@ func (g *Group[K, V]) run(key K, c *call[V], fn func(context.Context) (V, error)
 			c.err = ErrCallbackExit
 		}
 		c.panicErr = panicErr
-		g.complete(key, c)
+		g.complete(key, c, start)
 	}()
 	defer capturePanic(&panicErr)
 
@@ -244,7 +257,7 @@ func (g *Group[K, V]) resultOptions() []ownership.Option[V] {
 	return opts
 }
 
-func (g *Group[K, V]) complete(key K, c *call[V]) {
+func (g *Group[K, V]) complete(key K, c *call[V], start time.Time) {
 	c.mu.Lock()
 	c.accepting = false
 	c.finished = true
@@ -252,10 +265,17 @@ func (g *Group[K, V]) complete(key K, c *call[V]) {
 	if c.left == c.waiting && c.result != nil {
 		release, c.result = c.result, nil
 	}
+	hookErr := c.err
+	if hookErr == nil && c.panicErr != nil {
+		hookErr = c.panicErr
+	}
 	c.mu.Unlock()
 	g.backend.compareAndDelete(key, c)
 	close(c.done)
 	c.exec.cancel()
+	if g.hooks.OnComplete != nil {
+		g.hooks.OnComplete(key, time.Since(start), hookErr)
+	}
 	if release != nil {
 		_ = release.Release()
 	}

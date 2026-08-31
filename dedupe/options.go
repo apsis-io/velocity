@@ -20,6 +20,8 @@ type config[K comparable, V any] struct {
 	backendKind backendKind
 	shards      int
 	backendSet  bool
+	hooks       Hooks[K]
+	hooksSet    bool
 }
 
 // Option configures a Group and is sealed to this package.
@@ -55,6 +57,18 @@ func WithResultClone[K comparable, V any](clone traits.Clone[V]) Option[K, V] {
 			return &ConfigError{Option: "result clone", Cause: ErrDuplicateOption}
 		}
 		cfg.clone = clone
+		return nil
+	})
+}
+
+// WithHooks configures caller-supplied lifecycle instrumentation.
+func WithHooks[K comparable, V any](hooks Hooks[K]) Option[K, V] {
+	return optionFunc[K, V](func(cfg *config[K, V]) error {
+		if cfg.hooksSet {
+			return &ConfigError{Option: "hooks", Cause: ErrDuplicateOption}
+		}
+		cfg.hooks = hooks
+		cfg.hooksSet = true
 		return nil
 	})
 }
