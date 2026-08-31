@@ -1,6 +1,25 @@
 package ownership
 
-import "runtime"
+import (
+	"io"
+	"runtime"
+)
+
+// NewCloser owns an io.Closer, releasing it by calling Close. It is the common
+// resource case, which otherwise requires writing the Drop by hand:
+//
+//	conn := ownership.NewCloser(rawConn)
+//	defer conn.Close()
+//
+// It cannot fail, so it returns no error. Use New with WithDrop when cleanup is
+// not exactly Close, or WithClone alongside it.
+func NewCloser[T io.Closer](value T) *Owner[T] {
+	return &Owner[T]{c: &cell[T]{
+		value: value,
+		mode:  modeUnique,
+		drop:  func(closer T) error { return closer.Close() },
+	}}
+}
 
 // Owner holds the unique ownership handle for a value. It must not be copied
 // after first use.
@@ -122,6 +141,50 @@ func (o *Owner[T]) Write[R any](fn func(WriteAccess[T]) (R, error)) (R, error) {
 	return fn(WriteAccess[T]{lease: lease})
 }
 
+// View runs fn against the value under a callback-scoped read borrow. It is
+// Read without the intermediate ReadAccess, for the common case of projecting
+// a value out.
+//
+// The same lifetime rule applies: fn receives a shallow copy that must not
+// outlive the call. Retaining a slice, map, pointer, or interface reached
+// through it escapes the borrow.
+func (o *Owner[T]) View[R any](fn func(T) (R, error)) (R, error) {
+	if fn == nil {
+		var zero R
+		return zero, &ProjectionError{Operation: OpProject}
+	}
+	return o.Read(func(access ReadAccess[T]) (R, error) { return access.Project(fn) })
+}
+
+// Mutate runs fn against the value under a callback-scoped exclusive borrow.
+// It is Write without the intermediate WriteAccess. Mutations are not rolled
+// back when fn returns an error.
+func (o *Owner[T]) Mutate[R any](fn func(*T) (R, error)) (R, error) {
+	if fn == nil {
+		var zero R
+		return zero, &ProjectionError{Operation: OpUpdate}
+	}
+	return o.Write(func(access WriteAccess[T]) (R, error) { return access.Update(fn) })
+}
+
+// WithRead is View for callbacks that report only an error.
+func (o *Owner[T]) WithRead(fn func(T) error) error {
+	if fn == nil {
+		return &ProjectionError{Operation: OpProject}
+	}
+	_, err := o.View(func(value T) (struct{}, error) { return struct{}{}, fn(value) })
+	return err
+}
+
+// WithWrite is Mutate for callbacks that report only an error.
+func (o *Owner[T]) WithWrite(fn func(*T) error) error {
+	if fn == nil {
+		return &ProjectionError{Operation: OpUpdate}
+	}
+	_, err := o.Mutate(func(value *T) (struct{}, error) { return struct{}{}, fn(value) })
+	return err
+}
+
 // Snapshot clones the value under a temporary read borrow.
 func (o *Owner[T]) Snapshot() (T, error) {
 	if o == nil || o.c == nil {
@@ -166,7 +229,20 @@ func (o *Owner[T]) Move() (*Owner[T], error) {
 	return &Owner[T]{c: c}, nil
 }
 
+// Detach consumes this Owner and returns the bare value, transferring cleanup
+// responsibility to the caller: Drop does not run, now or ever.
+//
+// Use it when the caller genuinely takes over the resource. Do not use it
+// merely to pass a value through an API that wants a bare T, because nothing
+// will close what the Owner was going to close. Release is the operation that
+// keeps cleanup with the Owner.
+//
+// Detach is an exact alias of IntoValue, named for what it does to ownership
+// rather than for the value it returns.
+func (o *Owner[T]) Detach() (T, error) { return o.IntoValue() }
+
 // IntoValue consumes this Owner and returns the bare value without running Drop.
+// See Detach, which is the same operation named after its effect on cleanup.
 func (o *Owner[T]) IntoValue() (T, error) {
 	if o == nil || o.c == nil {
 		var zero T

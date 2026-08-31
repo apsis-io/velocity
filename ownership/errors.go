@@ -14,6 +14,7 @@ var (
 	ErrProjection      = errors.New("invalid ownership projection")
 	ErrDuplicateOption = errors.New("duplicate ownership option")
 	ErrNilOption       = errors.New("nil ownership option")
+	ErrScopeClosed     = errors.New("ownership scope closed")
 )
 
 type Operation string
@@ -26,6 +27,7 @@ const (
 	OpIntoShared Operation = "into shared"
 	OpFreeze     Operation = "freeze"
 	OpMap        Operation = "map"
+	OpOwn        Operation = "scope own"
 	OpClone      Operation = "clone shared"
 	OpIntoOwner  Operation = "into owner"
 	OpRelease    Operation = "release"
@@ -76,6 +78,17 @@ func (e *ConfigError) Error() string {
 	return fmt.Sprintf("ownership option %q: %v", e.Option, e.Reason)
 }
 func (e *ConfigError) Unwrap() []error { return []error{ErrInvalidConfig, e.Reason} }
+
+// ScopeError identifies an operation rejected by a Scope.
+type ScopeError struct {
+	Operation Operation
+	Cause     error
+}
+
+func (e *ScopeError) Error() string {
+	return fmt.Sprintf("%s: %v", e.Operation, e.Cause)
+}
+func (e *ScopeError) Unwrap() error { return e.Cause }
 
 // ProjectionError identifies an invalid projection or update callback.
 type ProjectionError struct{ Operation Operation }

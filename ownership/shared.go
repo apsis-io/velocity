@@ -135,6 +135,43 @@ func (s *Shared[T]) Write[R any](fn func(WriteAccess[T]) (R, error)) (R, error) 
 	return fn(WriteAccess[T]{lease: lease})
 }
 
+// View runs fn against the value under a callback-scoped read borrow. See
+// Owner.View, including the rule that the value must not outlive the call.
+func (s *Shared[T]) View[R any](fn func(T) (R, error)) (R, error) {
+	if fn == nil {
+		var zero R
+		return zero, &ProjectionError{Operation: OpProject}
+	}
+	return s.Read(func(access ReadAccess[T]) (R, error) { return access.Project(fn) })
+}
+
+// Mutate runs fn against the value under a callback-scoped exclusive borrow.
+func (s *Shared[T]) Mutate[R any](fn func(*T) (R, error)) (R, error) {
+	if fn == nil {
+		var zero R
+		return zero, &ProjectionError{Operation: OpUpdate}
+	}
+	return s.Write(func(access WriteAccess[T]) (R, error) { return access.Update(fn) })
+}
+
+// WithRead is View for callbacks that report only an error.
+func (s *Shared[T]) WithRead(fn func(T) error) error {
+	if fn == nil {
+		return &ProjectionError{Operation: OpProject}
+	}
+	_, err := s.View(func(value T) (struct{}, error) { return struct{}{}, fn(value) })
+	return err
+}
+
+// WithWrite is Mutate for callbacks that report only an error.
+func (s *Shared[T]) WithWrite(fn func(*T) error) error {
+	if fn == nil {
+		return &ProjectionError{Operation: OpUpdate}
+	}
+	_, err := s.Mutate(func(value *T) (struct{}, error) { return struct{}{}, fn(value) })
+	return err
+}
+
 // Snapshot clones the value under a temporary read borrow.
 func (s *Shared[T]) Snapshot() (T, error) {
 	if s == nil || s.c == nil {

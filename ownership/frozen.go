@@ -2,6 +2,25 @@ package ownership
 
 import "runtime"
 
+// NewFrozen creates a read-only handle directly, for values that are published
+// rather than mutated: configuration, manifests, policy snapshots. It saves
+// constructing an Owner only to Freeze it immediately.
+//
+// Frozen is shallow. A frozen []byte, map, pointer, or interface still exposes
+// whatever interior storage it points at; freezing the handle does not deep-copy
+// or seal what the value refers to. Supply a real Clone and hand out Snapshot
+// results, or use an opaque value type, when interior mutation matters.
+func NewFrozen[T any](value T, opts ...Option[T]) (*Frozen[T], error) {
+	if len(opts) == 0 {
+		return &Frozen[T]{c: &cell[T]{value: value, mode: modeFrozen, shares: 1}}, nil
+	}
+	cfg, err := buildConfig(opts)
+	if err != nil {
+		return nil, err
+	}
+	return &Frozen[T]{c: &cell[T]{value: value, mode: modeFrozen, shares: 1, drop: cfg.drop, clone: cfg.clone}}, nil
+}
+
 // Frozen is one explicitly counted handle to a value that can no longer be
 // mutated. Unlike Shared, which rejects a conflicting write at runtime, Frozen
 // exposes no write operation at all: there is no Write, BorrowMut, or Update to
@@ -105,6 +124,25 @@ func (f *Frozen[T]) Read[R any](fn func(ReadAccess[T]) (R, error)) (R, error) {
 	}
 	defer lease.closeScoped()
 	return fn(ReadAccess[T]{lease: lease})
+}
+
+// View runs fn against the value under a callback-scoped read borrow. See
+// Owner.View, including the rule that the value must not outlive the call.
+func (f *Frozen[T]) View[R any](fn func(T) (R, error)) (R, error) {
+	if fn == nil {
+		var zero R
+		return zero, &ProjectionError{Operation: OpProject}
+	}
+	return f.Read(func(access ReadAccess[T]) (R, error) { return access.Project(fn) })
+}
+
+// WithRead is View for callbacks that report only an error.
+func (f *Frozen[T]) WithRead(fn func(T) error) error {
+	if fn == nil {
+		return &ProjectionError{Operation: OpProject}
+	}
+	_, err := f.View(func(value T) (struct{}, error) { return struct{}{}, fn(value) })
+	return err
 }
 
 // Snapshot clones the value under a temporary read borrow.
