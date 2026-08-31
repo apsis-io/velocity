@@ -65,6 +65,38 @@ This records current selections, not superseded planning alternatives.
   critical section that releases it, so no borrow can interleave after `fn`
   has already produced the derived value; a failed `fn` leaves the source
   `Owner` untouched.
+- The package's weak point was friction rather than enforcement: callers
+  already have `defer`, `Close`, and scoped cleanup, so wrapping a value in
+  `Owner[T]` could cost more than the problem it solved. `View`/`Mutate` and
+  their error-only `WithRead`/`WithWrite` forms drop the intermediate
+  accessor; `NewCloser` and `NewFrozen` give the two common shapes a direct
+  entry point. All of them adapt the existing paths, so callback-scoped
+  lifetimes are unchanged.
+- `Scope` models transactional acquisition — reverse-order release, continue
+  past failures, joined errors, idempotent `Close`, explicit `Disarm` for the
+  success path. Enrolment after `Close` or `Disarm` is rejected rather than
+  silently dropped, so a late resource stays the caller's responsibility.
+  There is no GC-driven cleanup: an unclosed `Scope` is indistinguishable
+  from one whose resources were deliberately transferred.
+- `Lease[T]` is deliberately *not* borrow-checked, which is why it is a
+  separate type rather than a rename of `Owner`. Its resources are copyable
+  identifiers — permits, IP allocations, UID bases, unit references — where
+  excluding concurrent readers protects nothing, so `Value` returns a checked
+  copy directly instead of routing through a callback. It enforces
+  release-exactly-once and rejects use-after-release, and documents that it
+  offers no aliasing protection; `Owner` stays the answer when that matters.
+  Release callbacks take no context by design: they should be bounded, and
+  cancellation would be added only for a resource whose semantics define it.
+- `Detach` is an exact alias of `IntoValue`, added because the name
+  `IntoValue` describes the return value rather than the consequence, and the
+  consequence — Drop will never run — is what callers get wrong when they
+  reach for it merely to pass a value through an API.
+- `docs/ownership.md` now states where ownership does *not* belong (values
+  already covered by an obvious `defer`, mutex-guarded collections, worker
+  lifecycle joins, APIs demanding raw aliases). The intended test is whether
+  a violation would cause a leak, premature close, use-after-close, or
+  ambiguous cross-goroutine handoff; if not, this package adds ceremony
+  rather than safety.
 - `Borrow{,Mut}Untracked` skip the `runtime.AddCleanup` leak net, which is
   four of the five allocations a tracked advanced borrow makes (379 ns ->
   161 ns, 5 -> 2 allocs). They are for callers whose release is guaranteed

@@ -83,6 +83,48 @@ wrong anywhere release is merely intended, because a handle that is never
 released then blocks its cell permanently. Scoped `Read`/`Write` remain the
 default: they cannot leak and allocate once.
 
+## When not to use this
+
+Ownership costs ceremony. It earns that cost only where a lifetime mistake
+would actually hurt. The test:
+
+> Would an ownership violation here cause a leak, a premature close, a
+> use-after-close, or an ambiguous handoff across goroutines?
+
+If not, a plain `defer` is the better tool. Specifically, do not wrap:
+
+- local files or sockets already covered by an obvious `defer Close()`;
+- maps and queues that a mutex already guards;
+- long-lived worker lifecycle joins, which are a `WaitGroup` problem;
+- durable reconciliation state machines;
+- values whose APIs demand unrestricted raw aliases, since the borrow rules
+  cannot hold and will only produce conflicts;
+- every semaphore and `WaitGroup`.
+
+The shapes that do pay off are handoff across a goroutine boundary,
+multi-step construction that must unwind on partial failure (`Scope`),
+resources held and returned (`Lease`), and values published for concurrent
+readers (`Frozen`).
+
+## Choosing an entry point
+
+| shape | use |
+|---|---|
+| an `io.Closer` to own | `NewCloser` |
+| a read-only value to publish | `NewFrozen` |
+| a permit, allocation, or reference to hand back | `NewLease` |
+| several resources acquired in sequence | `NewScope` |
+| anything else needing borrow enforcement | `New` |
+
+`View`/`Mutate` read and write without the intermediate accessor;
+`WithRead`/`WithWrite` are their error-only forms. All four keep the
+callback-scoped lifetime: the value must not outlive the call.
+
+`Detach` and `IntoValue` are the same operation. `Detach` is the name to
+reach for, because it says what changes — the caller now owns cleanup, and
+Drop will never run. Reaching for either merely to pass a value through an
+API that wants a bare `T` is how resources leak.
+
 ## Alias boundary
 
 Go assignment is shallow for slices, maps, pointers, channels, functions, and

@@ -89,6 +89,56 @@ Drop runs at most once on explicit final release. Its first error is returned
 once and retained by `State`. Runtime cleanup never runs Drop. A Clone is only
 as independent as its implementation; velocity cannot validate clone quality.
 
+## Resource patterns
+
+`NewCloser` owns an `io.Closer`, and `View`/`Mutate` read and write without
+the intermediate accessor:
+
+```go
+conn := ownership.NewCloser(rawConn)
+defer conn.Close()
+
+name, err := cfg.View(func(c Config) (string, error) { return c.Name, nil })
+err = cfg.WithWrite(func(c *Config) error { c.Retries++; return nil })
+```
+
+`Scope` unwinds a multi-step construction that fails partway, so each
+acquisition no longer has to close everything opened before it:
+
+```go
+scope := ownership.NewScope()
+defer scope.Close()
+
+conn, err := dial()          // scope.Close closes conn if a later step fails
+if err != nil {
+    return nil, err
+}
+_ = scope.OwnCloser(conn)
+
+raw, err := dial()
+if err != nil {
+    return nil, err
+}
+_ = scope.OwnCloser(raw)
+
+scope.Disarm()               // the bundle below owns them now
+return &Bundle{conn: conn, raw: raw}, nil
+```
+
+Release runs in reverse order, continues past failures, and joins the errors.
+
+`Lease` covers resources identified by a value rather than represented by
+one — permits, IP allocations, unit references. It enforces
+release-exactly-once and catches use-after-release, but is deliberately not
+borrow-checked:
+
+```go
+lease, err := ownership.NewLease(ip, pool.Release)
+defer lease.Release()
+
+addr, err := lease.Value()   // ErrReleased once handed back
+```
+
 ## Freeze and transform
 
 `Freeze` gives up mutation for a counted read-only handle. `Frozen[T]` has no
