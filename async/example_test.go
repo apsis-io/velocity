@@ -8,7 +8,7 @@ import (
 )
 
 func ExampleGather() {
-	plan, _ := async.NewPlan(async.Limited(2),
+	plan, _ := async.NewPlan(async.Limited(2), async.Hooks{},
 		async.Task[int]{Label: "one", Run: func(context.Context) (int, error) { return 1, nil }},
 		async.Task[int]{Label: "two", Run: func(context.Context) (int, error) { return 2, nil }},
 	)
@@ -21,7 +21,7 @@ func ExampleGather() {
 }
 
 func ExampleGather_takeRecipe() {
-	plan, _ := async.NewPlan(async.Unlimited,
+	plan, _ := async.NewPlan(async.Unlimited, async.Hooks{},
 		async.Task[int]{Run: func(context.Context) (int, error) { return 1, nil }},
 		async.Task[int]{Run: func(context.Context) (int, error) { return 2, nil }},
 		async.Task[int]{Run: func(context.Context) (int, error) { return 3, nil }},

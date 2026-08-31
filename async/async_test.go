@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -14,7 +15,7 @@ import (
 
 func plan[T any](t *testing.T, limit async.Limit, tasks ...async.Task[T]) async.Plan[T] {
 	t.Helper()
-	p, err := async.NewPlan(limit, tasks...)
+	p, err := async.NewPlan(limit, async.Hooks{}, tasks...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -35,7 +36,7 @@ func TestNewPlanValidation(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := async.NewPlan(tt.limit, tt.tasks...)
+			_, err := async.NewPlan(tt.limit, async.Hooks{}, tt.tasks...)
 			if !errors.Is(err, tt.want) {
 				t.Fatalf("error = %v, want %v", err, tt.want)
 			}
@@ -170,13 +171,153 @@ func TestPipelineIsTypedAndFailFast(t *testing.T) {
 	}
 }
 
+func TestHooksReportPermitWaitAndRunDuration(t *testing.T) {
+	var firstIndex atomic.Int32
+	firstIndex.Store(-1)
+	var mu sync.Mutex
+	var events []struct {
+		index int
+		wait  time.Duration
+		run   time.Duration
+	}
+	hooks := async.Hooks{OnTaskComplete: func(index int, _ string, wait, run time.Duration, _ error) {
+		mu.Lock()
+		events = append(events, struct {
+			index int
+			wait  time.Duration
+			run   time.Duration
+		}{index, wait, run})
+		mu.Unlock()
+	}}
+	started := make(chan struct{})
+	release := make(chan struct{})
+	plan, err := async.NewPlan(async.Limited(1), hooks,
+		async.Task[int]{Run: func(context.Context) (int, error) {
+			if firstIndex.CompareAndSwap(-1, 0) {
+				close(started)
+				<-release
+			}
+			return 1, nil
+		}},
+		async.Task[int]{Run: func(context.Context) (int, error) {
+			if firstIndex.CompareAndSwap(-1, 1) {
+				close(started)
+				<-release
+			}
+			return 2, nil
+		}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		_, _ = async.Gather(context.Background(), plan)
+		close(done)
+	}()
+	<-started
+	time.Sleep(20 * time.Millisecond)
+	close(release)
+	<-done
+	mu.Lock()
+	defer mu.Unlock()
+	if len(events) != 2 {
+		t.Fatalf("events = %+v", events)
+	}
+	byIndex := map[int]struct{ wait, run time.Duration }{}
+	for _, event := range events {
+		byIndex[event.index] = struct{ wait, run time.Duration }{event.wait, event.run}
+	}
+	first := int(firstIndex.Load())
+	second := 1 - first
+	if byIndex[first].run < 15*time.Millisecond {
+		t.Fatalf("first run duration = %v", byIndex[first].run)
+	}
+	if byIndex[second].wait < 15*time.Millisecond {
+		t.Fatalf("second wait duration = %v", byIndex[second].wait)
+	}
+}
+
+func TestHooksReportCancellationWhileWaitingForPermit(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var firstIndex atomic.Int32
+	firstIndex.Store(-1)
+	var mu sync.Mutex
+	events := make(map[int]struct {
+		wait time.Duration
+		run  time.Duration
+		err  error
+	})
+	hooks := async.Hooks{OnTaskComplete: func(index int, _ string, wait, run time.Duration, err error) {
+		mu.Lock()
+		events[index] = struct {
+			wait time.Duration
+			run  time.Duration
+			err  error
+		}{wait, run, err}
+		mu.Unlock()
+	}}
+	plan, err := async.NewPlan(async.Limited(1), hooks,
+		async.Task[int]{Run: func(context.Context) (int, error) {
+			if firstIndex.CompareAndSwap(-1, 0) {
+				close(started)
+				<-release
+			}
+			return 1, nil
+		}},
+		async.Task[int]{Run: func(context.Context) (int, error) {
+			if firstIndex.CompareAndSwap(-1, 1) {
+				close(started)
+				<-release
+			}
+			return 2, nil
+		}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		_, _ = async.Gather(ctx, plan)
+		close(done)
+	}()
+	<-started
+	time.Sleep(10 * time.Millisecond)
+	cancel()
+	close(release)
+	<-done
+	mu.Lock()
+	defer mu.Unlock()
+	skipped := events[1-int(firstIndex.Load())]
+	if skipped.wait == 0 || skipped.run != 0 || !errors.Is(skipped.err, context.Canceled) {
+		t.Fatalf("skipped hook = %+v", skipped)
+	}
+}
+
+func TestHooksAreZeroForUnlimitedPermitWait(t *testing.T) {
+	var wait time.Duration
+	plan, err := async.NewPlan(async.Unlimited, async.Hooks{OnTaskComplete: func(_ int, _ string, waited, _ time.Duration, _ error) { wait = waited }},
+		async.Task[int]{Run: func(context.Context) (int, error) { return 1, nil }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := async.Gather(context.Background(), plan); err != nil {
+		t.Fatal(err)
+	}
+	if wait != 0 {
+		t.Fatalf("waited = %v, want zero", wait)
+	}
+}
+
 func TestBroadcastUsesConcurrentReadAccess(t *testing.T) {
 	owner, err := ownership.New(7)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer owner.Release()
-	got, err := async.Broadcast(context.Background(), owner, async.Limited(2),
+	got, err := async.Broadcast(context.Background(), owner, async.Limited(2), async.Hooks{},
 		func(context.Context, int) (int, error) { return 2, nil },
 		func(context.Context, int) (int, error) { return 3, nil },
 	)

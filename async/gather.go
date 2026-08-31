@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 )
 
 // Outcome identifies one source task and its terminal result.
@@ -30,17 +31,29 @@ func execute[T any](ctx context.Context, plan Plan[T]) ([]Outcome[T], error) {
 	for i, task := range plan.tasks {
 		i, task := i, task
 		wg.Go(func() {
+			var waited time.Duration
 			if permits != nil {
+				waitStart := time.Now()
 				select {
 				case permits <- struct{}{}:
+					waited = time.Since(waitStart)
 					defer func() { <-permits }()
 				case <-ctx.Done():
-					outcomes[i] = Outcome[T]{Index: i, Label: task.Label, Err: context.Cause(ctx)}
+					err := context.Cause(ctx)
+					outcomes[i] = Outcome[T]{Index: i, Label: task.Label, Err: err}
+					if hook := plan.hooks.OnTaskComplete; hook != nil {
+						hook(i, task.Label, time.Since(waitStart), 0, err)
+					}
 					return
 				}
 			}
+			runStart := time.Now()
 			value, err := task.Run(ctx)
+			duration := time.Since(runStart)
 			outcomes[i] = Outcome[T]{Index: i, Label: task.Label, Value: value, Err: err}
+			if hook := plan.hooks.OnTaskComplete; hook != nil {
+				hook(i, task.Label, waited, duration, err)
+			}
 		})
 	}
 	wg.Wait()
@@ -79,16 +92,30 @@ func race[T any](ctx context.Context, plan Plan[T], successOnly bool) (Outcome[T
 	for i, task := range plan.tasks {
 		i, task := i, task
 		wg.Go(func() {
+			var waited time.Duration
 			if permits != nil {
+				waitStart := time.Now()
 				select {
 				case permits <- struct{}{}:
+					waited = time.Since(waitStart)
 					defer func() { <-permits }()
 				case <-ctx.Done():
+					err := context.Cause(ctx)
+					outcome := Outcome[T]{Index: i, Label: task.Label, Err: err}
+					completions <- outcome
+					if hook := plan.hooks.OnTaskComplete; hook != nil {
+						hook(i, task.Label, time.Since(waitStart), 0, err)
+					}
 					return
 				}
 			}
+			runStart := time.Now()
 			value, err := task.Run(ctx)
-			completions <- Outcome[T]{Index: i, Label: task.Label, Value: value, Err: err}
+			outcome := Outcome[T]{Index: i, Label: task.Label, Value: value, Err: err}
+			completions <- outcome
+			if hook := plan.hooks.OnTaskComplete; hook != nil {
+				hook(i, task.Label, waited, time.Since(runStart), err)
+			}
 		})
 	}
 

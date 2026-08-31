@@ -26,12 +26,13 @@ type Task[T any] struct {
 type Plan[T any] struct {
 	tasks []Task[T]
 	limit Limit
+	hooks Hooks
 }
 
 // NewPlan validates and copies tasks so later caller mutations cannot change
 // execution.
-func NewPlan[T any](limit Limit, tasks ...Task[T]) (Plan[T], error) {
-	plan := Plan[T]{tasks: append([]Task[T](nil), tasks...), limit: limit}
+func NewPlan[T any](limit Limit, hooks Hooks, tasks ...Task[T]) (Plan[T], error) {
+	plan := Plan[T]{tasks: append([]Task[T](nil), tasks...), limit: limit, hooks: hooks}
 	if err := plan.valid(); err != nil {
 		return Plan[T]{}, err
 	}
