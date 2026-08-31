@@ -70,10 +70,10 @@ func TestComposeClonesStopsAtFirstError(t *testing.T) {
 	}
 }
 
-func TestComposeClonesWithDropOwnsOnlyIntermediates(t *testing.T) {
+func TestDropCloneOwnsOnlyIntermediates(t *testing.T) {
 	var dropped []int
-	clone, err := traits.ComposeClonesWithDrop(
-		func(value int) error { dropped = append(dropped, value); return nil },
+	drop := traits.Drop[int](func(value int) error { dropped = append(dropped, value); return nil })
+	clone, err := drop.Clone(
 		func(value int) (int, error) { return value + 1, nil },
 		func(value int) (int, error) { return value + 1, nil },
 		func(value int) (int, error) { return value + 1, nil },
@@ -94,12 +94,12 @@ func TestComposeClonesWithDropOwnsOnlyIntermediates(t *testing.T) {
 	}
 }
 
-func TestComposeClonesWithDropCleansAfterCloneFailure(t *testing.T) {
+func TestDropCloneCleansAfterCloneFailure(t *testing.T) {
 	cloneErr := errors.New("clone")
 	dropErr := errors.New("drop")
 	var dropped []int
-	clone, err := traits.ComposeClonesWithDrop(
-		func(value int) error { dropped = append(dropped, value); return dropErr },
+	drop := traits.Drop[int](func(value int) error { dropped = append(dropped, value); return dropErr })
+	clone, err := drop.Clone(
 		func(value int) (int, error) { return value + 1, nil },
 		func(int) (int, error) { return 0, cloneErr },
 	)
@@ -116,17 +116,17 @@ func TestComposeClonesWithDropCleansAfterCloneFailure(t *testing.T) {
 	}
 }
 
-func TestComposeClonesWithDropStopsAfterDropFailureAndCleansNext(t *testing.T) {
+func TestDropCloneStopsAfterDropFailureAndCleansNext(t *testing.T) {
 	dropErr := errors.New("drop")
 	var dropped []int
-	clone, err := traits.ComposeClonesWithDrop(
-		func(value int) error {
-			dropped = append(dropped, value)
-			if value == 11 {
-				return dropErr
-			}
-			return nil
-		},
+	drop := traits.Drop[int](func(value int) error {
+		dropped = append(dropped, value)
+		if value == 11 {
+			return dropErr
+		}
+		return nil
+	})
+	clone, err := drop.Clone(
 		func(value int) (int, error) { return value + 1, nil },
 		func(value int) (int, error) { return value + 1, nil },
 		func(value int) (int, error) { return value + 1, nil },
@@ -155,7 +155,8 @@ func TestCompositionValidation(t *testing.T) {
 		{"empty clones", func() error { _, err := traits.ComposeClones[int](); return err }, -1},
 		{"nil clone", func() error { _, err := traits.ComposeClones(append([]traits.Clone[int]{}, nil)...); return err }, 0},
 		{"nil cleanup drop", func() error {
-			_, err := traits.ComposeClonesWithDrop[int](nil, func(v int) (int, error) { return v, nil })
+			var drop traits.Drop[int]
+			_, err := drop.Clone(func(v int) (int, error) { return v, nil })
 			return err
 		}, 0},
 	}

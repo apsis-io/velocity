@@ -30,7 +30,7 @@ func ComposeDrops[T any](drops ...Drop[T]) (Drop[T], error) {
 
 // ComposeClones returns a Clone that applies every input sequentially and
 // stops at the first error. It does not release discarded intermediate values;
-// use ComposeClonesWithDrop when T owns resources that need explicit cleanup.
+// use Drop.Clone when T owns resources that need explicit cleanup.
 func ComposeClones[T any](clones ...Clone[T]) (Clone[T], error) {
 	if err := validate("clones", clones, func(clone Clone[T]) bool { return clone == nil }); err != nil {
 		return nil, err
@@ -50,15 +50,15 @@ func ComposeClones[T any](clones ...Clone[T]) (Clone[T], error) {
 	}, nil
 }
 
-// ComposeClonesWithDrop returns a sequential Clone that releases every owned
-// intermediate as soon as it is superseded. The caller's input and the final
+// Clone returns a sequential Clone that releases every owned intermediate as
+// soon as it is superseded, using d. The caller's input and the final
 // successful result are never dropped.
 //
 // If cloning fails, the current owned intermediate is dropped and both errors
 // are joined. If dropping a superseded intermediate fails, the newly created
 // value is also dropped and the operation stops.
-func ComposeClonesWithDrop[T any](drop Drop[T], clones ...Clone[T]) (Clone[T], error) {
-	if drop == nil {
+func (d Drop[T]) Clone(clones ...Clone[T]) (Clone[T], error) {
+	if d == nil {
 		return nil, &ConfigError{Trait: "clones with drop", Index: 0, Cause: ErrNilTrait}
 	}
 	if err := validate("clones", clones, func(clone Clone[T]) bool { return clone == nil }); err != nil {
@@ -73,15 +73,15 @@ func ComposeClonesWithDrop[T any](drop Drop[T], clones ...Clone[T]) (Clone[T], e
 			next, cloneErr := clone(current)
 			if cloneErr != nil {
 				if owned {
-					cloneErr = errors.Join(cloneErr, drop(current))
+					cloneErr = errors.Join(cloneErr, d(current))
 				}
 				var zero T
 				return zero, cloneErr
 			}
 
 			if owned {
-				if dropErr := drop(current); dropErr != nil {
-					cleanupErr := drop(next)
+				if dropErr := d(current); dropErr != nil {
+					cleanupErr := d(next)
 					var zero T
 					return zero, errors.Join(dropErr, cleanupErr)
 				}

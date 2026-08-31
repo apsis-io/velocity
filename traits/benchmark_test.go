@@ -35,7 +35,8 @@ func BenchmarkClone(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
-	withDrop, err := traits.ComposeClonesWithDrop(func(int) error { return nil }, direct, direct, direct)
+	drop := traits.Drop[int](func(int) error { return nil })
+	withDrop, err := drop.Clone(direct, direct, direct)
 	if err != nil {
 		b.Fatal(err)
 	}
