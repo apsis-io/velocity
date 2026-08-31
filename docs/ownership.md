@@ -82,10 +82,16 @@ borrows still use deferred release so a panic does not strand the borrow state,
 but panic behavior is otherwise normal Go behavior and not part of the result
 contract.
 
-## Future dedupe integration
+## Dedupe integration
 
-A future borrowed-dedupe API may take a read or write lease from a leader-owned
-Owner before registering work, hold the loan for the generation while any
-caller remains interested, release it before publishing the computed result,
-and leave duplicate callers' unused inputs untouched. Ordinary result-only
-dedupe remains independent of ownership.
+`dedupe.Group.DoBorrowed` and `DoBorrowedMut` take a read or write lease from an
+Owner before registering work, hold the leader's loan for the generation, and
+release it before publishing the computed result. A duplicate input is briefly
+borrowed only while determining whether its call is the leader, then released
+without projection or mutation. Two concurrent mutable calls using the same
+Owner may therefore conflict before role determination, as required by the
+exclusive-borrow rule. If a caller's context is canceled while non-cooperative
+work continues, the method may return before its leader loan is released; the
+input is reusable after the callback completes, and `dedupe.Hooks.OnComplete`
+signals after that release. Ordinary result-only `Do` remains independent of
+an input Owner while returning its result as `Shared[V]`.

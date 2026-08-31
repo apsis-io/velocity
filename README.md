@@ -148,6 +148,20 @@ shared, err := group.Do(ctx, "report-42", func(ctx context.Context) (Report, err
 defer shared.Release()
 ```
 
+Loan an owned input to the round with `DoBorrowed` or `DoBorrowedMut`; the
+leader holds the borrow until its callback returns, and the loan is released
+before the result becomes visible. If the caller context is canceled while
+non-cooperative work continues, the input loan may remain held until the
+callback returns; `WithHooks`/`OnComplete` can signal when it is reusable again:
+
+```go
+input, err := ownership.New(request)
+shared, err := group.DoBorrowed(ctx, "report-42", input,
+    func(ctx context.Context, request Request) (Report, error) {
+        return buildReport(ctx, request)
+    })
+```
+
 `Forget` stops tracking a key without interrupting work already in flight;
 `Cancel` actively cancels it. `DoBatch` runs one function over several keys
 and aligns the result map to the request, reporting `ErrMissingResult` for

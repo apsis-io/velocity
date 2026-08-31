@@ -162,6 +162,17 @@ treated as an afterthought:
   `ownership.Shared[V]` already is the reusable/releasable handle a
   Future/Promise would have provided — a caller wanting non-blocking dedup
   just calls `Do` from its own goroutine.
+- `DoBorrowed` and `DoBorrowedMut` loan an `ownership.Owner[I]` into the
+  leader's work. They acquire before key registration so ownership conflicts
+  cannot publish a doomed call, hold the leader's loan for the generation, and
+  release it before constructing or publishing `Shared[V]`. A follower briefly
+  acquires while determining its role, then releases immediately without
+  projecting or mutating its input value. A context cancellation may return
+  before a non-cooperative leader releases its loan; `Hooks.OnComplete` fires
+  after release when callers need an explicit reuse signal. Consequently,
+  concurrent mutable calls using the same Owner may conflict before either
+  knows whether it would be the follower; this preserves ownership's
+  exclusive-borrow rule.
 - `Forget` (stop tracking, in-flight work keeps running) versus `Cancel`
   (actively cancel the in-flight work now) are separate, matching the brief.
 - `DoBatch` aligns its output map to the requested keys with real
