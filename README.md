@@ -245,18 +245,22 @@ a bytecode program format. Neither package depends on `ownership`.
 
 ## Dedupe
 
-`dedupe.Group[K, V]` suppresses duplicate concurrent work per key and shares
-the result as an `*ownership.Shared[V]` handle — every caller of a dedup
-round gets its own independently released clone:
+`dedupe.Group[K, V]` suppresses duplicate concurrent work per key and hands
+every caller of a round the result:
 
 ```go
 group, err := dedupe.New[string, Report](ctx)
 
-shared, err := group.Do(ctx, "report-42", func(ctx context.Context) (Report, error) {
+report, err := group.Do(ctx, "report-42", func(ctx context.Context) (Report, error) {
     return fetchReport(ctx, 42)
 })
-defer shared.Release()
 ```
+
+When the result is a resource, configure the group with `WithResultDrop` and
+use `DoShared`: every caller gets a counted `*ownership.Shared[V]` handle
+over one cell per round, and Drop runs once, after the last of them
+releases. Such a group refuses the plain forms with `ErrOwnedResult`, since a
+bare copy would escape Drop.
 
 Loan an owned input to the round with `DoBorrowed` or `DoBorrowedMut`; the
 leader holds the borrow until its callback returns, and the loan is released
@@ -315,13 +319,14 @@ outcomes, err := async.Gather(ctx, plan) // source-index order, errors.Join'd
 task's own run time — the split isn't visible from outside `Gather`/`Race`.
 
 `async.Map`/`ForEach` run one function over a collection from a fixed pool
-of `Limit` goroutines, rather than one goroutine per item, and return an
-`Outcome` per item in input order. Run it inside a read to fan out over an
+of `Limit` goroutines, rather than one goroutine per item, and return the
+results in input order. Failures travel out of band as one `*ItemError` per
+failed item in the joined error. Run it inside a read to fan out over an
 owned slice; every worker finishes before `Map` returns, so the borrow covers
 them all:
 
 ```go
-results, err := owner.View(func(items []Item) ([]async.Outcome[Result], error) {
+results, err := owner.View(func(items []Item) ([]Result, error) {
     return async.Map(ctx, async.Limited(8), async.Hooks{}, items, process)
 })
 ```

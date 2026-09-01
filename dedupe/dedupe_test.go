@@ -21,7 +21,7 @@ func newGroup(t *testing.T, opts ...dedupe.Option[string, int]) *dedupe.Group[st
 	return group
 }
 
-func TestDoDeduplicatesAndClonesHandles(t *testing.T) {
+func TestDoDeduplicatesAndSharesTheValue(t *testing.T) {
 	group := newGroup(t)
 	started := make(chan struct{})
 	release := make(chan struct{})
@@ -36,22 +36,22 @@ func TestDoDeduplicatesAndClonesHandles(t *testing.T) {
 		<-release
 		return 7, nil
 	}
-	first := make(chan *ownership.Shared[int], 1)
+	first := make(chan int, 1)
 	go func() {
-		handle, err := group.Do(context.Background(), "key", fn)
+		value, err := group.Do(context.Background(), "key", fn)
 		if err != nil {
 			t.Errorf("leader Do = %v", err)
 		}
-		first <- handle
+		first <- value
 	}()
 	<-started
-	secondCh := make(chan *ownership.Shared[int], 1)
+	secondCh := make(chan int, 1)
 	secondErr := make(chan error, 1)
 	joined := make(chan struct{})
 	go func() {
 		close(joined)
-		handle, err := group.Do(context.Background(), "key", fn)
-		secondCh <- handle
+		value, err := group.Do(context.Background(), "key", fn)
+		secondCh <- value
 		secondErr <- err
 	}()
 	<-joined
@@ -62,17 +62,87 @@ func TestDoDeduplicatesAndClonesHandles(t *testing.T) {
 	if err := <-secondErr; err != nil {
 		t.Fatal(err)
 	}
-	if calls.Load() != 1 {
-		t.Fatalf("calls = %d", calls.Load())
+	if calls.Load() != 1 || one != 7 || second != 7 {
+		t.Fatalf("calls = %d, values = %d, %d", calls.Load(), one, second)
 	}
-	for _, handle := range []*ownership.Shared[int]{one, second} {
-		value, err := handle.Snapshot()
-		if !errors.Is(err, ownership.ErrNoClone) {
-			t.Fatalf("Snapshot = (%d, %v)", value, err)
+}
+
+// An owned group builds one cell per round: every caller's handle counts
+// toward it, and Drop runs exactly once, when the last of them releases.
+func TestDoSharedOwnedGroupDropsAfterLastRelease(t *testing.T) {
+	var drops atomic.Int32
+	group := newGroup(t,
+		dedupe.WithResultDrop[string](func(int) error { drops.Add(1); return nil }),
+		dedupe.WithResultClone[string](func(v int) (int, error) { return v, nil }),
+	)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	fn := func(context.Context) (int, error) {
+		select {
+		case <-started:
+		default:
+			close(started)
 		}
-		if err := handle.Release(); err != nil {
-			t.Fatal(err)
-		}
+		<-release
+		return 7, nil
+	}
+	handles := make(chan *ownership.Shared[int], 2)
+	for range 2 {
+		go func() {
+			handle, err := group.DoShared(context.Background(), "key", fn)
+			if err != nil {
+				t.Error(err)
+			}
+			handles <- handle
+		}()
+	}
+	<-started
+	time.Sleep(time.Millisecond)
+	close(release)
+	one, two := <-handles, <-handles
+	if state := one.State(); state.Shares != 2 {
+		t.Fatalf("shares = %d, want the two callers' handles", state.Shares)
+	}
+	if v, err := one.Snapshot(); err != nil || v != 7 {
+		t.Fatalf("Snapshot = (%d, %v)", v, err)
+	}
+	if err := one.Release(); err != nil || drops.Load() != 0 {
+		t.Fatalf("first release: err=%v drops=%d", err, drops.Load())
+	}
+	if err := two.Release(); err != nil || drops.Load() != 1 {
+		t.Fatalf("last release: err=%v drops=%d", err, drops.Load())
+	}
+
+	// The plain forms are refused rather than letting a copy escape Drop.
+	if _, err := group.Do(context.Background(), "key", fn); !errors.Is(err, dedupe.ErrOwnedResult) {
+		t.Fatalf("Do on owned group = %v", err)
+	}
+	results := group.DoBatch(context.Background(), []string{"a"}, func(context.Context, []string) (map[string]int, error) { return nil, nil })
+	if !errors.Is(results["a"].Err, dedupe.ErrOwnedResult) {
+		t.Fatalf("DoBatch on owned group = %v", results["a"].Err)
+	}
+	input, _ := ownership.New(1)
+	if _, err := group.DoBorrowed(context.Background(), "key", input, func(context.Context, int) (int, error) { return 0, nil }); !errors.Is(err, dedupe.ErrOwnedResult) {
+		t.Fatalf("DoBorrowed on owned group = %v", err)
+	}
+}
+
+// On a plain group DoShared still works: each caller gets its own cell over
+// a copy, with nothing to drop, so the handle API is uniform.
+func TestDoSharedPlainGroupGivesIndependentHandles(t *testing.T) {
+	group := newGroup(t)
+	handle, err := group.DoShared(context.Background(), "key", func(context.Context) (int, error) { return 3, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state := handle.State(); state.Shares != 1 {
+		t.Fatalf("shares = %d", state.Shares)
+	}
+	if v, err := handle.View(func(v int) (int, error) { return v, nil }); err != nil || v != 3 {
+		t.Fatalf("View = (%d, %v)", v, err)
+	}
+	if err := handle.Release(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -149,12 +219,12 @@ func TestDoBatchCancellationWaitsForAllLeaderKeys(t *testing.T) {
 
 	followerDone := make(chan error, 1)
 	go func() {
-		handle, err := group.Do(context.Background(), "b", func(context.Context) (int, error) {
+		value, err := group.Do(context.Background(), "b", func(context.Context) (int, error) {
 			t.Error("follower unexpectedly became leader")
 			return 0, nil
 		})
-		if handle != nil {
-			_ = handle.Release()
+		if err == nil && value != 2 {
+			t.Errorf("follower value = %d, want 2", value)
 		}
 		followerDone <- err
 	}()
@@ -166,12 +236,7 @@ func TestDoBatchCancellationWaitsForAllLeaderKeys(t *testing.T) {
 	case <-time.After(10 * time.Millisecond):
 	}
 	close(release)
-	results := <-batchDone
-	for _, result := range results {
-		if result.Handle != nil {
-			_ = result.Handle.Release()
-		}
-	}
+	<-batchDone
 	if err := <-followerDone; err != nil {
 		t.Fatal(err)
 	}
@@ -185,13 +250,12 @@ func TestDoBatchAlignedMissingErrors(t *testing.T) {
 	if !slices.Equal([]string{"a", "b"}, sortedKeys(results)) {
 		t.Fatalf("keys = %v", sortedKeys(results))
 	}
-	if results["a"].Err != nil || results["a"].Handle == nil {
+	if results["a"].Err != nil || results["a"].Value != 1 {
 		t.Fatalf("a = %+v", results["a"])
 	}
-	if !errors.Is(results["b"].Err, dedupe.ErrMissingResult) || results["b"].Handle != nil {
+	if !errors.Is(results["b"].Err, dedupe.ErrMissingResult) || results["b"].Value != 0 {
 		t.Fatalf("b = %+v", results["b"])
 	}
-	_ = results["a"].Handle.Release()
 }
 
 func sortedKeys[V any](values map[string]V) []string {

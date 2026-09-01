@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/apsis-io/velocity/dedupe"
-	"github.com/apsis-io/velocity/ownership"
 )
 
 func TestHooksObserveLeaderAndFollowerJoins(t *testing.T) {
@@ -38,24 +37,20 @@ func TestHooksObserveLeaderAndFollowerJoins(t *testing.T) {
 		<-release
 		return 1, nil
 	}
-	handles := make(chan *ownership.Shared[int], 2)
+	done := make(chan struct{}, 2)
 	for range 2 {
 		go func() {
-			handle, err := group.Do(context.Background(), "key", fn)
-			if err != nil {
+			if _, err := group.Do(context.Background(), "key", fn); err != nil {
 				t.Errorf("Do = %v", err)
 			}
-			handles <- handle
+			done <- struct{}{}
 		}()
 		<-started
 	}
 	time.Sleep(time.Millisecond)
 	close(release)
-	for range 2 {
-		if handle := <-handles; handle != nil {
-			_ = handle.Release()
-		}
-	}
+	<-done
+	<-done
 	mu.Lock()
 	defer mu.Unlock()
 	if len(joins) != 2 || joins[0] != (join{key: "key", leader: true}) || joins[1] != (join{key: "key", leader: false}) {
@@ -70,10 +65,7 @@ func TestHooksOnCompleteCanReenterSameKey(t *testing.T) {
 	hooks := dedupe.Hooks[string]{
 		OnComplete: func(key string, _ time.Duration, _ error) {
 			once.Do(func() {
-				handle, err := group.Do(context.Background(), key, func(context.Context) (int, error) { return 2, nil })
-				if handle != nil {
-					_ = handle.Release()
-				}
+				_, err := group.Do(context.Background(), key, func(context.Context) (int, error) { return 2, nil })
 				reentered <- err
 			})
 		},
@@ -83,11 +75,9 @@ func TestHooksOnCompleteCanReenterSameKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handle, err := group.Do(context.Background(), "key", func(context.Context) (int, error) { return 1, nil })
-	if err != nil {
+	if _, err := group.Do(context.Background(), "key", func(context.Context) (int, error) { return 1, nil }); err != nil {
 		t.Fatal(err)
 	}
-	_ = handle.Release()
 	select {
 	case err := <-reentered:
 		if err != nil {
@@ -123,28 +113,25 @@ func TestHooksObserveCallbackDuration(t *testing.T) {
 		fnEnd = time.Now()
 		return 1, nil
 	}
-	leader := make(chan *ownership.Shared[int], 1)
+	leader := make(chan struct{}, 1)
 	go func() {
-		handle, _ := group.Do(context.Background(), "key", fn)
-		leader <- handle
+		_, _ = group.Do(context.Background(), "key", fn)
+		leader <- struct{}{}
 	}()
 	<-started
 	time.Sleep(leadTime)
 	// A follower joining mid-flight must not skew the leader's measured
 	// duration toward the follower's much shorter wait.
-	follower := make(chan *ownership.Shared[int], 1)
+	follower := make(chan struct{}, 1)
 	go func() {
-		handle, _ := group.Do(context.Background(), "key", fn)
-		follower <- handle
+		_, _ = group.Do(context.Background(), "key", fn)
+		follower <- struct{}{}
 	}()
 	time.Sleep(time.Millisecond)
 	close(release)
 	duration := <-completes
-	for _, handle := range []*ownership.Shared[int]{<-leader, <-follower} {
-		if handle != nil {
-			_ = handle.Release()
-		}
-	}
+	<-leader
+	<-follower
 	wantDuration := fnEnd.Sub(fnStart)
 	if delta := duration - wantDuration; delta < 0 || delta > tolerance {
 		t.Fatalf("duration = %v, want close to actual fn runtime %v (delta %v, tolerance %v)", duration, wantDuration, delta, tolerance)

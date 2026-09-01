@@ -13,6 +13,9 @@ var (
 	ErrDuplicateOption    = errors.New("dedupe: duplicate option")
 	ErrUnsupportedBackend = errors.New("dedupe: unsupported backend")
 	ErrCallbackExit       = errors.New("dedupe: callback exited without returning")
+	// ErrOwnedResult rejects a plain-value call on a group whose results carry
+	// a Drop or Clone; such a group serves results only through DoShared.
+	ErrOwnedResult = errors.New("dedupe: owned results are served only through DoShared")
 )
 
 type ConfigError struct {

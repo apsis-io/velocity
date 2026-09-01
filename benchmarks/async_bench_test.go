@@ -97,7 +97,7 @@ func BenchmarkAsyncMap(b *testing.B) {
 		b.Run(fmt.Sprintf("velocity/map/%d", size), func(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
-				asyncVelocitySink, _ = async.Map(ctx, async.Limited(workers), async.Hooks{}, items, benchmarkTask)
+				asyncErrgroupSink, _ = async.Map(ctx, async.Limited(workers), async.Hooks{}, items, benchmarkTask)
 			}
 		})
 		b.Run(fmt.Sprintf("conc/iter.MapErr/%d", size), func(b *testing.B) {

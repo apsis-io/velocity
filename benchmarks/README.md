@@ -19,7 +19,8 @@ one actually does:
 
 | | generic | context / cancellable | result |
 |---|---|---|---|
-| **velocity** `dedupe.Do` | yes | yes | `*ownership.Shared[V]` handle, released per caller |
+| **velocity** `dedupe.Do` | yes | yes | bare value |
+| **velocity** `dedupe.DoShared` | yes | yes | `*ownership.Shared[V]` handle, released per caller |
 | **janos** `resenje.org/singleflight` | yes | yes | bare value |
 | **samber** `go-singleflightx` | yes | **no** | bare value |
 | **x/sync** `singleflight` | **no** — boxes through `any` | **no** | bare value |
@@ -32,15 +33,15 @@ one actually does:
 
 | | per-item result | pool | cancellable |
 |---|---|---|---|
-| **velocity** `async.Map` | `Outcome` (index, value, error) | `Limited(n)` workers | yes, via `ctx` |
+| **velocity** `async.Map` | bare `R`; `*ItemError` per failure, joined | `Limited(n)` workers | yes, via `ctx` |
 | **conc** `iter.Mapper.MapErr` | bare `R`, errors joined | `MaxGoroutines` workers | **no** |
 | **errgroup** hand-rolled pool | bare `R`, first error | atomic-counter workers | no |
 
 Fairness rules the benchmarks follow, so the deltas mean something:
 
 - Every arm's callback does **identical** trivial work.
-- velocity's `Release()` is **inside** the measured loop. It is required work;
-  omitting it would flatter velocity.
+- `DoShared`'s `Release()` is **inside** the measured loop. It is required
+  work; omitting it would flatter velocity.
 - `b.ReportAllocs()` everywhere — x/sync's `any` boxing and velocity's handle
   allocation both belong in the comparison, not in a footnote.
 
@@ -61,7 +62,8 @@ median of -count=5
 | x/sync | 170 | 80 | 1 |
 | samber | 176 | 80 | 1 |
 | janos | 1081 | 336 | 6 |
-| velocity | 1603 | 600 | 10 |
+| velocity `Do` | 1303 | 440 | 6 |
+| velocity `DoShared` | 1460 | 576 | 8 |
 
 **Dedupe, contended** (`RunParallel`, one shared key)
 
@@ -70,7 +72,7 @@ median of -count=5
 | x/sync | 282 | 76 | 0 |
 | samber | 284 | 76 | 0 |
 | janos | 345 | 12 | 0 |
-| velocity | 1109 | 434 | 7 |
+| velocity `Do` | 1002 | 340 | 4 |
 
 **Async gather** (8 trivial tasks)
 
@@ -87,18 +89,18 @@ median of -count=5
 |---|---|---|---|---|
 | errgroup pool | 3304 | 28863 | 8992 | 20 |
 | conc `MapErr` | 3257 | 33614 | 8592 | 16 |
-| velocity `Map` | 4166 | 53358 | 50520 | 19 |
+| velocity `Map` | 4026 | 35502 | 9592 | 20 |
 
 **dedupe backends**, all three workloads (ns/op, median of 5)
 
 | | uncontended | one shared key | key per goroutine |
 |---|---|---|---|
-| `WithXsyncBackend` (default) | 1587 | **1118** | **572** |
-| `WithMutexBackend` | **1457** | 1206 | 1224 |
-| `WithSharded(8)` | 1607 | 1208 | 623 |
+| `WithXsyncBackend` (default) | 1287 | **988** | **482** |
+| `WithMutexBackend` | **1222** | 1091 | 1117 |
+| `WithSharded(8)` | 1320 | 1124 | 593 |
 
-Allocations are flat per backend across all three: mutex and sharded 9 (576 B)
-uncontended, xsync 10 (600 B).
+Allocations are flat per backend across all three: mutex and sharded 5 (416 B)
+uncontended, xsync 6 (440 B).
 
 ## What the numbers mean
 
@@ -111,18 +113,15 @@ a separate goroutine so a caller can abandon it, which means a goroutine spawn
 and a `context.WithCancel` per call. They are not faster because they are better
 written — they are faster because they cannot do this.
 
-velocity's remaining ~500 ns over janos is the ownership handle: janos returns a
-value and forgets it, velocity hands every caller an independently released
-handle with Drop support. Whether that is worth it is a design question, and the
-answer is workload-dependent — but the cost is real and it is measured here
-rather than argued about.
-
-Profiling this path drove several optimizations: a zero-option fast path in
-`ownership.New`, `NewShared` to skip a throwaway `Owner`, and dropping the
-borrow wrapper from scoped `Read`/`Write`. The remaining `Do` allocations are
-load-bearing — the per-round `context.WithCancel` backs `Cancel` and
-all-callers-left cancellation, and is invoked from four places — so this is the
-floor for the current design, not an easy win left on the table.
+`Do` is now ~220 ns over janos at the same six allocations: the round's `call`,
+its `done` channel, the `context.WithCancel` that backs `Cancel` and
+all-callers-left cancellation, the leader goroutine's closure, and the registry
+entry. The ownership handle that used to be built into every round is now
+opt-in: `DoShared` costs ~160 ns and two allocations more, and a group
+configured with a result `Drop` pays a further ~150 ns for the per-round cell
+that runs it once, after the last caller releases. An earlier design built that
+cell on every `Do` whether or not anything would ever drop it; the comparison
+made the price visible, and no consumer depended on the old shape.
 
 **velocity beats hunch on async and loses to errgroup**, both for structural
 reasons. hunch boxes every result through `interface{}` and restores source
@@ -136,17 +135,17 @@ of those, it is the right tool.
 slice even when nothing failed. Removing both took it from 23 to 19 allocations
 and narrowed the gap to errgroup from 1.5x to 1.3x.
 
-**`Map` trails conc by ~1.6x at 1024 items, and the gap is the result shape.**
-All three arms dispatch the same way — a fixed pool pulling indices from an
-atomic counter — but velocity writes a 48-byte `Outcome` per item where the
-others write an 8-byte `int`: six times the allocation to zero and fill, ~50 ns
-per item against ~30. That is the price of knowing *which* items failed rather
-than only that some did; a caller who only needs the joined error has
-`ForEach`, which pays the same because it is `Map` underneath. Per-item clock
-reads for `Hooks` are skipped when no hook is set, which was worth ~40% on its
-own. Against `Gather` over the same collection the comparison is not close:
-`Map` is 12x faster at 1024 items with constant allocations, because `Gather`
-spawns one goroutine per task and `Map` does not.
+**`Map` is within ~8% of conc at 1024 items, and cancellable where conc is
+not.** All three arms dispatch the same way — a fixed pool pulling indices from
+an atomic counter — and all three now write a bare `R` per item. An earlier
+`Map` wrote a 48-byte `Outcome` per item so a caller could learn which items
+failed, and trailed conc by 1.6x for it; failures are the rare case, so they
+now travel out of band as one `*ItemError` per failure in the joined error,
+and the success path touches only the result slot. Per-item clock reads for
+`Hooks` are skipped when no hook is set. Against `Gather` over the same
+collection the comparison is not close: `Map` is ~25x faster at 1024 items with
+constant allocations, because `Gather` spawns one goroutine per task and `Map`
+does not.
 
 **`Limited(4)` costs ~50% over `Unlimited`** for 8 trivial tasks. The permit
 channel is not free. With real task bodies that overhead is amortized away, but

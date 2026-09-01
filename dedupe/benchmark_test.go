@@ -25,11 +25,7 @@ func BenchmarkDoBorrowed(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		handle, err := group.DoBorrowed(context.Background(), 1, input, func(_ context.Context, value int) (int, error) { return value, nil })
-		if err != nil {
-			b.Fatal(err)
-		}
-		if err := handle.Release(); err != nil {
+		if _, err := group.DoBorrowed(context.Background(), 1, input, func(_ context.Context, value int) (int, error) { return value, nil }); err != nil {
 			b.Fatal(err)
 		}
 		if err := input.Release(); err != nil {
@@ -69,7 +65,34 @@ func benchmarkDo(b *testing.B, configure bool, hooks dedupe.Hooks[int]) {
 	}
 	b.ReportAllocs()
 	for b.Loop() {
-		handle, err := group.Do(context.Background(), 1, func(context.Context) (int, error) { return 1, nil })
+		if _, err := group.Do(context.Background(), 1, func(context.Context) (int, error) { return 1, nil }); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkDoShared(b *testing.B) {
+	b.Run("plain-group", func(b *testing.B) {
+		group, err := dedupe.New[int, int](context.Background())
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchmarkDoShared(b, group)
+	})
+	b.Run("owned-group", func(b *testing.B) {
+		group, err := dedupe.New[int, int](context.Background(), dedupe.WithResultDrop[int](func(int) error { return nil }))
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchmarkDoShared(b, group)
+	})
+}
+
+func benchmarkDoShared(b *testing.B, group *dedupe.Group[int, int]) {
+	b.Helper()
+	b.ReportAllocs()
+	for b.Loop() {
+		handle, err := group.DoShared(context.Background(), 1, func(context.Context) (int, error) { return 1, nil })
 		if err != nil {
 			b.Fatal(err)
 		}

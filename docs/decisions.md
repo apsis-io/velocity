@@ -199,6 +199,32 @@ Three follow-ups from the same review:
   through every access and transfer operation with a deadline, so the
   no-wait claim is exercised rather than asserted.
 
+Two result-shape changes followed the comparison benchmarks, both breaking
+and both made because velocity had no consumers yet:
+
+- **`dedupe.Do` returns a bare `V`.** Every round used to build an ownership
+  cell and hand each caller a counted handle, whether or not anything would
+  ever drop it; that was ~500 ns and four allocations of pure ceremony for
+  the common case, and the "weave ownership throughout" instinct applied
+  where the ownership guidance itself says not to wrap. Ownership of results
+  is now a group-level property: a group configured with `WithResultDrop` or
+  `WithResultClone` is *owned*, serves results only through `DoShared`
+  (one cell per round, counted handles, Drop once after the last release),
+  and refuses `Do`/`DoBatch`/`DoBorrowed*` with `ErrOwnedResult` rather than
+  letting a copy escape Drop. `DoShared` on a plain group still works, giving
+  each caller its own cell over a copy, so the handle API is uniform. The
+  round's `execution` is embedded in its `call`, and a candidate that loses
+  the registration race now cancels the context it derived, which used to
+  stay registered with the base context. `Do` went from 1603 ns / 10 allocs
+  to ~1300 / 6 — janos's allocation count, ~220 ns behind it.
+- **`async.Map` returns `[]R`.** The 48-byte `Outcome` per item was chosen
+  for symmetry with `Gather` and was the entire 1.6x gap to conc. `Gather`
+  has labels and heterogeneous tasks; a collection map has neither, and
+  failures are the exception, so they are reported out of band as one
+  `*ItemError{Index, Err}` per failure in the joined error, sorted by index,
+  while the success path touches only the result slot. Within ~8% of conc
+  now, and cancellable where conc is not.
+
 ## Opcodes and opruntime (implemented)
 
 - `opcodes` defines plain `Op`/`Instruction` data shapes only. No binary

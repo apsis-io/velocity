@@ -38,3 +38,14 @@ type PipelineError struct {
 
 func (e *PipelineError) Error() string { return fmt.Sprintf("async pipeline: %v", e.Cause) }
 func (e *PipelineError) Unwrap() error { return e.Cause }
+
+// ItemError is one failed item of a Map or ForEach, joined with its siblings
+// into the returned error. errors.Is and errors.As see through both the join
+// and the item to the underlying cause.
+type ItemError struct {
+	Index int
+	Err   error
+}
+
+func (e *ItemError) Error() string { return fmt.Sprintf("item %d: %v", e.Index, e.Err) }
+func (e *ItemError) Unwrap() error { return e.Err }

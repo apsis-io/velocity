@@ -2,17 +2,25 @@ package async
 
 import (
 	"context"
+	"errors"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
 )
 
-// Map applies fn to every item concurrently and returns one Outcome per item
-// in input order, with every error joined. It is the homogeneous counterpart
-// of Gather: where a Plan holds distinct labeled tasks, Map runs one function
-// over a collection, so it dispatches from a fixed pool of Limit goroutines
-// rather than spawning one per item. Outcome.Label is empty; Outcome.Index is
-// the item's position.
+// Map applies fn to every item concurrently and returns the results in input
+// order. It is the homogeneous counterpart of Gather: where a Plan holds
+// distinct labeled tasks, Map runs one function over a collection, so it
+// dispatches from a fixed pool of Limit goroutines rather than spawning one
+// per item, and returns a bare slice rather than an Outcome per item.
+//
+// Failures are the exception, so they are reported out of band: the returned
+// error joins one *ItemError per failed item, carrying its index, and the
+// result slot for a failed item holds fn's returned R (the zero value unless
+// fn chose otherwise). A caller who needs to know which items failed walks
+// the joined error with errors.As; one who does not can treat it as a single
+// error.
 //
 // An empty collection returns an empty slice and no error, unlike an empty
 // Plan, since a collection is a value rather than a configuration.
@@ -30,25 +38,26 @@ import (
 // before Map returns, so the borrow covers them all and its value never
 // escapes the callback.
 //
-//	results, err := owner.View(func(items []Item) ([]async.Outcome[Result], error) {
+//	results, err := owner.View(func(items []Item) ([]Result, error) {
 //	    return async.Map(ctx, async.Limited(8), async.Hooks{}, items, process)
 //	})
-func Map[T, R any](ctx context.Context, limit Limit, hooks Hooks, items []T, fn func(context.Context, T) (R, error)) ([]Outcome[R], error) {
+func Map[T, R any](ctx context.Context, limit Limit, hooks Hooks, items []T, fn func(context.Context, T) (R, error)) ([]R, error) {
 	if err := limit.valid(); err != nil {
 		return nil, err
 	}
 	if fn == nil {
 		return nil, &PlanError{Index: -1, Cause: ErrNilTask}
 	}
-	outcomes := make([]Outcome[R], len(items))
+	results := make([]R, len(items))
 	if len(items) == 0 {
-		return outcomes, nil
+		return results, nil
 	}
 
 	start := time.Now()
 	done := ctx.Done()
 	hook := hooks.OnTaskComplete
 	var next atomic.Int64
+	var failures itemErrors
 	var wg sync.WaitGroup
 	for range limit.workers(len(items)) {
 		wg.Go(func() {
@@ -64,19 +73,20 @@ func Map[T, R any](ctx context.Context, limit Limit, hooks Hooks, items []T, fn 
 				if i >= len(items) {
 					return
 				}
+				var err error
 				if hook == nil {
 					// Per-item clock reads are most of the dispatch cost, so
 					// they are paid only when someone is listening.
-					value, err := fn(ctx, items[i])
-					outcomes[i] = Outcome[R]{Index: i, Value: value, Err: err}
-					continue
+					results[i], err = fn(ctx, items[i])
+				} else {
+					waited := time.Since(start)
+					runStart := time.Now()
+					results[i], err = fn(ctx, items[i])
+					hook(i, "", waited, time.Since(runStart), err)
 				}
-				waited := time.Since(start)
-				runStart := time.Now()
-				value, err := fn(ctx, items[i])
-				duration := time.Since(runStart)
-				outcomes[i] = Outcome[R]{Index: i, Value: value, Err: err}
-				hook(i, "", waited, duration, err)
+				if err != nil {
+					failures.add(i, err)
+				}
 			}
 		})
 	}
@@ -88,18 +98,17 @@ func Map[T, R any](ctx context.Context, limit Limit, hooks Hooks, items []T, fn 
 		cause := context.Cause(ctx)
 		waited := time.Since(start)
 		for i := claimed; i < len(items); i++ {
-			outcomes[i] = Outcome[R]{Index: i, Err: cause}
+			failures.add(i, cause)
 			if hook != nil {
 				hook(i, "", waited, 0, cause)
 			}
 		}
 	}
-	return outcomes, joinedErrors(outcomes)
+	return results, failures.join()
 }
 
-// ForEach is Map for a function that produces only an error. It returns every
-// item error joined; which items failed is recoverable through Map when it
-// matters.
+// ForEach is Map for a function that produces only an error. The returned
+// error is the same join of *ItemError values.
 func ForEach[T any](ctx context.Context, limit Limit, hooks Hooks, items []T, fn func(context.Context, T) error) error {
 	if fn == nil {
 		return &PlanError{Index: -1, Cause: ErrNilTask}
@@ -108,4 +117,29 @@ func ForEach[T any](ctx context.Context, limit Limit, hooks Hooks, items []T, fn
 		return struct{}{}, fn(ctx, item)
 	})
 	return err
+}
+
+// itemErrors collects failures from workers. Failures are rare, so the
+// success path touches only the atomic counter and the result slot.
+type itemErrors struct {
+	mu   sync.Mutex
+	errs []error
+}
+
+func (e *itemErrors) add(index int, err error) {
+	e.mu.Lock()
+	e.errs = append(e.errs, &ItemError{Index: index, Err: err})
+	e.mu.Unlock()
+}
+
+// join returns the failures in index order, so the error reads the same
+// regardless of which worker finished first.
+func (e *itemErrors) join() error {
+	if len(e.errs) == 0 {
+		return nil
+	}
+	slices.SortFunc(e.errs, func(a, b error) int {
+		return a.(*ItemError).Index - b.(*ItemError).Index
+	})
+	return errors.Join(e.errs...)
 }

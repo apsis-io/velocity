@@ -10,6 +10,7 @@ import (
 )
 
 var asyncSink []async.Outcome[int]
+var asyncMapSink []int
 var asyncHookSink time.Duration
 
 func BenchmarkGather(b *testing.B) {
@@ -50,7 +51,7 @@ func BenchmarkMapVersusGather(b *testing.B) {
 		b.Run(fmt.Sprintf("map/%d", size), func(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
-				asyncSink, _ = async.Map(context.Background(), async.Limited(8), async.Hooks{}, items, square)
+				asyncMapSink, _ = async.Map(context.Background(), async.Limited(8), async.Hooks{}, items, square)
 			}
 		})
 		b.Run(fmt.Sprintf("gather/%d", size), func(b *testing.B) {

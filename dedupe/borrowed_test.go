@@ -17,9 +17,9 @@ func TestDoBorrowedSharesLeaderResultAndLeavesFollowerInputUntouched(t *testing.
 	followerInput, _ := ownership.New(99)
 	started := make(chan struct{})
 	release := make(chan struct{})
-	leaderResult := make(chan *ownership.Shared[int], 1)
+	leaderResult := make(chan int, 1)
 	go func() {
-		handle, err := group.DoBorrowed(context.Background(), "key", leaderInput, func(_ context.Context, value int) (int, error) {
+		value, err := group.DoBorrowed(context.Background(), "key", leaderInput, func(_ context.Context, value int) (int, error) {
 			close(started)
 			<-release
 			return value * 2, nil
@@ -27,32 +27,25 @@ func TestDoBorrowedSharesLeaderResultAndLeavesFollowerInputUntouched(t *testing.
 		if err != nil {
 			t.Errorf("leader = %v", err)
 		}
-		leaderResult <- handle
+		leaderResult <- value
 	}()
 	<-started
-	followerResult := make(chan *ownership.Shared[int], 1)
+	followerResult := make(chan int, 1)
 	go func() {
-		handle, err := group.DoBorrowed(context.Background(), "key", followerInput, func(context.Context, int) (int, error) {
+		value, err := group.DoBorrowed(context.Background(), "key", followerInput, func(context.Context, int) (int, error) {
 			t.Error("follower callback ran")
 			return 0, nil
 		})
 		if err != nil {
 			t.Errorf("follower = %v", err)
 		}
-		followerResult <- handle
+		followerResult <- value
 	}()
 	time.Sleep(time.Millisecond)
 	close(release)
-	for _, handle := range []*ownership.Shared[int]{<-leaderResult, <-followerResult} {
-		borrow, err := handle.Borrow()
-		if err != nil {
-			t.Fatal(err)
-		}
-		value, err := borrow.Project(func(value int) (int, error) { return value, nil })
-		_ = borrow.Release()
-		_ = handle.Release()
-		if err != nil || value != 14 {
-			t.Fatalf("result = (%d, %v)", value, err)
+	for _, value := range []int{<-leaderResult, <-followerResult} {
+		if value != 14 {
+			t.Fatalf("result = %d, want the leader's 14", value)
 		}
 	}
 	if state := followerInput.State(); state.Readers != 0 || state.Writer || state.Released || state.Moved {
@@ -123,12 +116,12 @@ func TestDoBorrowedCancellationMayOutliveCaller(t *testing.T) {
 func TestDoBorrowedMutPublishesAfterLoanRelease(t *testing.T) {
 	group := newGroup(t)
 	input, _ := ownership.New(3)
-	handle, err := group.DoBorrowedMut(context.Background(), "key", input, func(_ context.Context, value *int) (int, error) {
+	result, err := group.DoBorrowedMut(context.Background(), "key", input, func(_ context.Context, value *int) (int, error) {
 		*value += 4
 		return *value, nil
 	})
-	if err != nil {
-		t.Fatal(err)
+	if err != nil || result != 7 {
+		t.Fatalf("DoBorrowedMut = (%d, %v)", result, err)
 	}
 	if state := input.State(); state.Readers != 0 || state.Writer {
 		t.Fatalf("input at publication = %+v", state)
@@ -137,7 +130,6 @@ func TestDoBorrowedMutPublishesAfterLoanRelease(t *testing.T) {
 	if err != nil || value != 7 {
 		t.Fatalf("input = (%d, %v)", value, err)
 	}
-	_ = handle.Release()
 }
 
 func TestDoBorrowedConflictPrecedesRegistration(t *testing.T) {
@@ -154,11 +146,9 @@ func TestDoBorrowedConflictPrecedesRegistration(t *testing.T) {
 		t.Fatal("conflicting borrow registered key")
 	}
 	_ = write.Release()
-	handle, err := group.DoBorrowed(context.Background(), "key", input, func(context.Context, int) (int, error) { return 1, nil })
-	if err != nil {
+	if _, err := group.DoBorrowed(context.Background(), "key", input, func(context.Context, int) (int, error) { return 1, nil }); err != nil {
 		t.Fatal(err)
 	}
-	_ = handle.Release()
 }
 
 func TestDoBorrowedFiresHooks(t *testing.T) {
@@ -189,27 +179,24 @@ func TestDoBorrowedFiresHooks(t *testing.T) {
 	followerInput, _ := ownership.New(2)
 	started := make(chan struct{})
 	release := make(chan struct{})
-	done := make(chan *ownership.Shared[int], 2)
+	done := make(chan struct{}, 2)
 	go func() {
-		handle, _ := group.DoBorrowed(context.Background(), "key", leaderInput, func(context.Context, int) (int, error) {
+		_, _ = group.DoBorrowed(context.Background(), "key", leaderInput, func(context.Context, int) (int, error) {
 			close(started)
 			<-release
 			return 1, nil
 		})
-		done <- handle
+		done <- struct{}{}
 	}()
 	<-started
 	go func() {
-		handle, _ := group.DoBorrowed(context.Background(), "key", followerInput, func(context.Context, int) (int, error) { return 2, nil })
-		done <- handle
+		_, _ = group.DoBorrowed(context.Background(), "key", followerInput, func(context.Context, int) (int, error) { return 2, nil })
+		done <- struct{}{}
 	}()
 	time.Sleep(time.Millisecond)
 	close(release)
-	for range 2 {
-		if handle := <-done; handle != nil {
-			_ = handle.Release()
-		}
-	}
+	<-done
+	<-done
 	select {
 	case <-completeSignal:
 	case <-time.After(time.Second):

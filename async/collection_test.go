@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"runtime"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -13,34 +14,44 @@ import (
 	"github.com/apsis-io/velocity/ownership"
 )
 
-func TestMapPreservesInputOrderAndJoinsErrors(t *testing.T) {
+func TestMapPreservesInputOrderAndReportsFailuresByIndex(t *testing.T) {
 	odd := errors.New("odd")
 	got, err := async.Map(context.Background(), async.Limited(3), async.Hooks{}, []int{1, 2, 3, 4, 5},
 		func(_ context.Context, n int) (int, error) {
 			time.Sleep(time.Duration(5-n) * time.Millisecond) // finish in reverse
 			if n%2 == 1 {
-				return 0, odd
+				return -n, odd
 			}
 			return n * 10, nil
 		})
 	if !errors.Is(err, odd) {
 		t.Fatalf("error = %v", err)
 	}
-	if len(got) != 5 {
-		t.Fatalf("outcomes = %d", len(got))
+	// Results are in input order; a failed item's slot holds what fn returned.
+	if !slices.Equal(got, []int{-1, 20, -3, 40, -5}) {
+		t.Fatalf("results = %v", got)
 	}
-	for i, outcome := range got {
-		if outcome.Index != i {
-			t.Fatalf("outcome %d has index %d", i, outcome.Index)
+	// The joined error carries one ItemError per failure, in index order
+	// regardless of completion order.
+	var failed []int
+	for _, e := range joined(err) {
+		var item *async.ItemError
+		if !errors.As(e, &item) || !errors.Is(item, odd) {
+			t.Fatalf("joined element %v is not an odd ItemError", e)
 		}
-		n := i + 1
-		if n%2 == 1 && !errors.Is(outcome.Err, odd) {
-			t.Fatalf("outcome %d = %+v, want odd", i, outcome)
-		}
-		if n%2 == 0 && (outcome.Err != nil || outcome.Value != n*10) {
-			t.Fatalf("outcome %d = %+v, want %d", i, outcome, n*10)
-		}
+		failed = append(failed, item.Index)
 	}
+	if !slices.Equal(failed, []int{0, 2, 4}) {
+		t.Fatalf("failed indices = %v", failed)
+	}
+}
+
+// joined splits an errors.Join result into its elements.
+func joined(err error) []error {
+	if u, ok := err.(interface{ Unwrap() []error }); ok {
+		return u.Unwrap()
+	}
+	return []error{err}
 }
 
 func TestMapValidation(t *testing.T) {
@@ -139,18 +150,18 @@ func TestMapCancellationMarksUnstartedItems(t *testing.T) {
 
 	list := make([]int, 20)
 	type result struct {
-		outcomes []async.Outcome[int]
-		err      error
+		results []int
+		err     error
 	}
 	got := make(chan result, 1)
 	go func() {
-		outcomes, err := async.Map(ctx, async.Limited(2), hooks, list, func(context.Context, int) (int, error) {
+		results, err := async.Map(ctx, async.Limited(2), hooks, list, func(context.Context, int) (int, error) {
 			once.Do(func() { close(started) })
 			<-release
 			ran.Add(1)
 			return 1, nil
 		})
-		got <- result{outcomes, err}
+		got <- result{results, err}
 	}()
 
 	<-started
@@ -161,8 +172,8 @@ func TestMapCancellationMarksUnstartedItems(t *testing.T) {
 	if !errors.Is(res.err, context.Canceled) {
 		t.Fatalf("Map = %v, want cancellation", res.err)
 	}
-	if len(res.outcomes) != len(list) {
-		t.Fatalf("outcomes = %d, want %d", len(res.outcomes), len(list))
+	if len(res.results) != len(list) {
+		t.Fatalf("results = %d, want %d", len(res.results), len(list))
 	}
 	// Claimed items ran to completion; unclaimed ones report the cause. Both
 	// sets are contiguous, since claiming is a monotonic counter.
@@ -170,20 +181,26 @@ func TestMapCancellationMarksUnstartedItems(t *testing.T) {
 	if completed == 0 || completed == len(list) {
 		t.Fatalf("ran = %d of %d, expected a partial run", completed, len(list))
 	}
+	failed := map[int]error{}
+	for _, e := range joined(res.err) {
+		var item *async.ItemError
+		if !errors.As(e, &item) {
+			t.Fatalf("joined element %v is not an ItemError", e)
+		}
+		failed[item.Index] = item.Err
+	}
 	mu.Lock()
 	defer mu.Unlock()
-	for i, outcome := range res.outcomes {
-		if outcome.Index != i {
-			t.Fatalf("outcome %d has index %d", i, outcome.Index)
+	for i := range list {
+		if i < completed {
+			if res.results[i] != 1 || failed[i] != nil {
+				t.Fatalf("claimed item %d: result %d, err %v; want success", i, res.results[i], failed[i])
+			}
+		} else if !errors.Is(failed[i], context.Canceled) {
+			t.Fatalf("unclaimed item %d = %v, want cancellation", i, failed[i])
 		}
-		if i < completed && outcome.Err != nil {
-			t.Fatalf("claimed outcome %d = %+v, want success", i, outcome)
-		}
-		if i >= completed && !errors.Is(outcome.Err, context.Canceled) {
-			t.Fatalf("unclaimed outcome %d = %+v, want cancellation", i, outcome)
-		}
-		if !errors.Is(hooked[i], outcome.Err) {
-			t.Fatalf("hook for %d reported %v, outcome has %v", i, hooked[i], outcome.Err)
+		if !errors.Is(hooked[i], failed[i]) {
+			t.Fatalf("hook for %d reported %v, error has %v", i, hooked[i], failed[i])
 		}
 	}
 	if len(hooked) != len(list) {
@@ -243,7 +260,8 @@ func TestForEachJoinsErrors(t *testing.T) {
 		}
 		return nil
 	})
-	if !errors.Is(err, bad) || seen.Load() != 6 {
+	var item *async.ItemError
+	if !errors.Is(err, bad) || !errors.As(err, &item) || item.Index != 1 || seen.Load() != 6 {
 		t.Fatalf("ForEach = %v, seen = %d", err, seen.Load())
 	}
 }
@@ -267,14 +285,14 @@ func TestMapInsideViewHoldsTheBorrowAcrossWorkers(t *testing.T) {
 	got := make(chan result, 1)
 	go func() {
 		sum, err := owner.View(func(items []int) (int, error) {
-			outcomes, err := async.Map(context.Background(), async.Limited(2), async.Hooks{}, items, func(_ context.Context, n int) (int, error) {
+			squares, err := async.Map(context.Background(), async.Limited(2), async.Hooks{}, items, func(_ context.Context, n int) (int, error) {
 				once.Do(func() { close(inFlight) })
 				<-release
 				return n * n, nil
 			})
 			total := 0
-			for _, outcome := range outcomes {
-				total += outcome.Value
+			for _, square := range squares {
+				total += square
 			}
 			return total, err
 		})

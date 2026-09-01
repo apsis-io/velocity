@@ -214,5 +214,6 @@ Owner may therefore conflict before role determination, as required by the
 exclusive-borrow rule. If a caller's context is canceled while non-cooperative
 work continues, the method may return before its leader loan is released; the
 input is reusable after the callback completes, and `dedupe.Hooks.OnComplete`
-signals after that release. Ordinary result-only `Do` remains independent of
-an input Owner while returning its result as `Shared[V]`.
+signals after that release. Results are plain values; `DoShared` on a group
+configured with a result Drop returns a counted `Shared[V]` per caller over
+one cell per round, so Drop runs once, after the last caller releases.

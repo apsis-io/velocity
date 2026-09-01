@@ -14,7 +14,11 @@ type Group[K comparable, V any] struct {
 	backend backend[K, V]
 	drop    func(V) error
 	clone   func(V) (V, error)
-	hooks   Hooks[K]
+	// owned means every round builds one ownership cell over its result and
+	// hands out counted handles, so Drop runs when the last caller releases.
+	// Such a group serves results only through DoShared.
+	owned bool
+	hooks Hooks[K]
 }
 
 // Singleflight is an exact alias of Group for readers who know this pattern
@@ -34,8 +38,13 @@ type execution struct {
 }
 
 func newExecution(ctx context.Context) *execution {
-	ctx, cancel := context.WithCancel(ctx)
-	return &execution{ctx: ctx, cancel: cancel}
+	e := &execution{}
+	e.init(ctx)
+	return e
+}
+
+func (e *execution) init(parent context.Context) {
+	e.ctx, e.cancel = context.WithCancel(parent)
 }
 
 func (e *execution) add() {
@@ -55,7 +64,10 @@ func (e *execution) abandon() {
 
 type call[V any] struct {
 	done chan struct{}
+	// exec points at own for a single-key round, or at the execution a batch
+	// shares between its keys. Embedding own saves an allocation per round.
 	exec *execution
+	own  execution
 
 	mu        sync.Mutex
 	accepting bool
@@ -63,7 +75,8 @@ type call[V any] struct {
 	left      int
 	abandoned bool
 	finished  bool
-	result    *ownership.Shared[V]
+	value     V
+	cell      *ownership.Shared[V] // owned groups only
 	err       error
 	panicErr  *PanicError
 }
@@ -93,7 +106,14 @@ func New[K comparable, V any](baseCtx context.Context, opts ...Option[K, V]) (*G
 	default:
 		return nil, &ConfigError{Option: "backend", Cause: ErrUnsupportedBackend}
 	}
-	return &Group[K, V]{baseCtx: baseCtx, backend: b, drop: cfg.drop, clone: cfg.clone, hooks: cfg.hooks}, nil
+	return &Group[K, V]{
+		baseCtx: baseCtx,
+		backend: b,
+		drop:    cfg.drop,
+		clone:   cfg.clone,
+		owned:   cfg.drop != nil || cfg.clone != nil,
+		hooks:   cfg.hooks,
+	}, nil
 }
 
 func formatIndex(i int) string {
@@ -110,22 +130,52 @@ func formatIndex(i int) string {
 	return string(buf[pos:])
 }
 
-// Do executes fn once for each key while sharing successful results.
-func (g *Group[K, V]) Do(ctx context.Context, key K, fn func(context.Context) (V, error)) (*ownership.Shared[V], error) {
-	if ctx == nil {
-		return nil, ErrNilContext
-	}
-	if fn == nil {
-		return nil, ErrNilFunction
-	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
+// Do runs fn once per key for every concurrent caller and hands each of them
+// the value. It is the plain form: the result is copied out, nothing is
+// tracked, and a group configured with WithResultDrop or WithResultClone
+// refuses it with ErrOwnedResult, because a bare copy would escape Drop.
+func (g *Group[K, V]) Do(ctx context.Context, key K, fn func(context.Context) (V, error)) (V, error) {
+	var zero V
+	if err := g.checkPlain(ctx, fn); err != nil {
+		return zero, err
 	}
 	c, leader := g.join(key)
 	if leader {
 		go g.run(key, c, fn)
 	}
 	return g.wait(ctx, key, c)
+}
+
+// DoShared is Do returning an independently released ownership handle per
+// caller. On an owned group every caller's handle counts toward one cell,
+// and the group's Drop runs when the last of them releases; on a plain group
+// each handle is its own cell over a copy, with nothing to drop.
+func (g *Group[K, V]) DoShared(ctx context.Context, key K, fn func(context.Context) (V, error)) (*ownership.Shared[V], error) {
+	if err := g.check(ctx, fn); err != nil {
+		return nil, err
+	}
+	c, leader := g.join(key)
+	if leader {
+		go g.run(key, c, fn)
+	}
+	return g.waitShared(ctx, key, c)
+}
+
+func (g *Group[K, V]) check(ctx context.Context, fn func(context.Context) (V, error)) error {
+	if ctx == nil {
+		return ErrNilContext
+	}
+	if fn == nil {
+		return ErrNilFunction
+	}
+	return ctx.Err()
+}
+
+func (g *Group[K, V]) checkPlain(ctx context.Context, fn func(context.Context) (V, error)) error {
+	if g.owned {
+		return ErrOwnedResult
+	}
+	return g.check(ctx, fn)
 }
 
 func (g *Group[K, V]) join(key K) (*call[V], bool) {
@@ -148,18 +198,23 @@ func (g *Group[K, V]) joinWithExecution(key K, shared *execution) (*call[V], boo
 			actual.mu.Unlock()
 			continue
 		}
-		exec := shared
-		if exec == nil {
-			exec = newExecution(g.baseCtx)
+		candidate := &call[V]{done: make(chan struct{}), exec: shared, accepting: true, waiting: 1}
+		if shared == nil {
+			candidate.own.init(g.baseCtx)
+			candidate.exec = &candidate.own
 		}
-		candidate := &call[V]{done: make(chan struct{}), exec: exec, accepting: true, waiting: 1}
 		actual, loaded = g.backend.loadOrStore(key, candidate)
 		if !loaded {
-			exec.add()
+			candidate.exec.add()
 			if g.hooks.OnJoin != nil {
 				g.hooks.OnJoin(key, true)
 			}
 			return candidate, true
+		}
+		if shared == nil {
+			// Lost the race to register: the context derived for this
+			// candidate would otherwise stay registered with baseCtx.
+			candidate.own.cancel()
 		}
 		actual.mu.Lock()
 		if actual.accepting {
@@ -200,7 +255,7 @@ func (g *Group[K, V]) runBatch(keys []K, calls map[K]*call[V], fn func(context.C
 			calls[key].err = ErrMissingResult
 			continue
 		}
-		calls[key].result, calls[key].err = g.share(value)
+		calls[key].value = value
 	}
 }
 
@@ -223,7 +278,10 @@ func (g *Group[K, V]) run(key K, c *call[V], fn func(context.Context) (V, error)
 		normal = true
 		return
 	}
-	c.result, c.err = g.share(value)
+	c.value = value
+	if g.owned {
+		c.cell, c.err = g.share(value)
+	}
 	normal = true
 }
 
@@ -253,8 +311,8 @@ func (g *Group[K, V]) complete(key K, c *call[V], start time.Time) {
 	c.accepting = false
 	c.finished = true
 	var release *ownership.Shared[V]
-	if c.left == c.waiting && c.result != nil {
-		release, c.result = c.result, nil
+	if c.left == c.waiting && c.cell != nil {
+		release, c.cell = c.cell, nil
 	}
 	hookErr := c.err
 	if hookErr == nil && c.panicErr != nil {
@@ -272,24 +330,62 @@ func (g *Group[K, V]) complete(key K, c *call[V], start time.Time) {
 	}
 }
 
-func (g *Group[K, V]) wait(ctx context.Context, key K, c *call[V]) (*ownership.Shared[V], error) {
+// await blocks until the round completes or ctx is done. It reports whether
+// the round completed; on false the caller has already left.
+func (g *Group[K, V]) await(ctx context.Context, key K, c *call[V]) bool {
 	select {
 	case <-c.done:
+		return true
 	case <-ctx.Done():
 		select {
 		case <-c.done:
+			return true
 		default:
 			g.leave(key, c)
-			return nil, ctx.Err()
+			return false
 		}
 	}
-	c.mu.Lock()
+}
+
+func (g *Group[K, V]) wait(ctx context.Context, key K, c *call[V]) (V, error) {
+	var zero V
+	if !g.await(ctx, key, c) {
+		return zero, ctx.Err()
+	}
+	// The round is complete, so its fields are immutable now; the value is
+	// copied before leaving, since leaving may release the round.
+	panicErr, err, value := c.panicErr, c.err, c.value
+	g.leave(key, c)
+	if panicErr != nil {
+		panic(panicErr)
+	}
+	if err != nil {
+		return zero, err
+	}
+	return value, nil
+}
+
+func (g *Group[K, V]) waitShared(ctx context.Context, key K, c *call[V]) (*ownership.Shared[V], error) {
+	if !g.await(ctx, key, c) {
+		return nil, ctx.Err()
+	}
 	panicErr, err := c.panicErr, c.err
 	var result *ownership.Shared[V]
-	if err == nil && panicErr == nil && c.result != nil {
-		result, err = c.result.Clone()
+	if err == nil && panicErr == nil {
+		if c.cell != nil {
+			// Clone under the lock: leave may release the cell concurrently
+			// once every other caller has gone.
+			c.mu.Lock()
+			if c.cell != nil {
+				result, err = c.cell.Clone()
+			} else {
+				err = ownership.ErrReleased
+			}
+			c.mu.Unlock()
+		} else {
+			result, err = ownership.NewShared(c.value)
+		}
 	}
-	c.mu.Unlock()
 	g.leave(key, c)
 	if panicErr != nil {
 		panic(panicErr)
@@ -307,8 +403,8 @@ func (g *Group[K, V]) leave(key K, c *call[V]) {
 		abandon = true
 	}
 	var release *ownership.Shared[V]
-	if c.finished && c.left == c.waiting && c.result != nil {
-		release, c.result = c.result, nil
+	if c.finished && c.left == c.waiting && c.cell != nil {
+		release, c.cell = c.cell, nil
 	}
 	c.mu.Unlock()
 	if abandon {

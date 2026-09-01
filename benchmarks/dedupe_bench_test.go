@@ -14,6 +14,7 @@ import (
 
 func BenchmarkDedupe(b *testing.B) {
 	b.Run("velocity/uncontended", benchmarkVelocityUncontended)
+	b.Run("velocity/uncontended/shared", benchmarkVelocitySharedUncontended)
 	b.Run("janos/uncontended", benchmarkJanosUncontended)
 	b.Run("samber/uncontended", benchmarkSamberUncontended)
 	b.Run("x-sync/uncontended", benchmarkXSyncUncontended)
@@ -23,6 +24,10 @@ func BenchmarkDedupe(b *testing.B) {
 	b.Run("x-sync/contended", benchmarkXSyncContended)
 }
 
+var velocityDedupeSink int
+
+// benchmarkVelocityUncontended measures Do, the plain-value form. DoShared,
+// which hands out an ownership handle per caller, is a separate arm below.
 func benchmarkVelocityUncontended(b *testing.B) {
 	group, err := dedupe.New[string, int](context.Background())
 	if err != nil {
@@ -30,11 +35,11 @@ func benchmarkVelocityUncontended(b *testing.B) {
 	}
 	b.ReportAllocs()
 	for b.Loop() {
-		handle, err := group.Do(context.Background(), "key", func(context.Context) (int, error) { return 1, nil })
+		value, err := group.Do(context.Background(), "key", func(context.Context) (int, error) { return 1, nil })
 		if err != nil {
 			b.Fatal(err)
 		}
-		_ = handle.Release()
+		velocityDedupeSink = value
 	}
 }
 
@@ -71,6 +76,21 @@ func benchmarkXSyncUncontended(b *testing.B) {
 	}
 }
 
+func benchmarkVelocitySharedUncontended(b *testing.B) {
+	group, err := dedupe.New[string, int](context.Background())
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		handle, err := group.DoShared(context.Background(), "key", func(context.Context) (int, error) { return 1, nil })
+		if err != nil {
+			b.Fatal(err)
+		}
+		_ = handle.Release()
+	}
+}
+
 func benchmarkVelocityContended(b *testing.B) {
 	group, err := dedupe.New[string, int](context.Background())
 	if err != nil {
@@ -79,12 +99,12 @@ func benchmarkVelocityContended(b *testing.B) {
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
-			handle, err := group.Do(context.Background(), "key", func(context.Context) (int, error) { return 1, nil })
+			value, err := group.Do(context.Background(), "key", func(context.Context) (int, error) { return 1, nil })
 			if err != nil {
 				b.Error(err)
 				continue
 			}
-			_ = handle.Release()
+			velocityDedupeSink = value
 		}
 	})
 }
@@ -164,11 +184,11 @@ func benchmarkBackends(b *testing.B, run func(*testing.B, *dedupe.Group[string, 
 func BenchmarkVelocityBackendsUncontended(b *testing.B) {
 	benchmarkBackends(b, func(b *testing.B, group *dedupe.Group[string, int]) {
 		for b.Loop() {
-			handle, err := group.Do(context.Background(), "key", func(context.Context) (int, error) { return 1, nil })
+			value, err := group.Do(context.Background(), "key", func(context.Context) (int, error) { return 1, nil })
 			if err != nil {
 				b.Fatal(err)
 			}
-			_ = handle.Release()
+			velocityDedupeSink = value
 		}
 	})
 }
@@ -177,12 +197,12 @@ func BenchmarkVelocityBackendsSharedKey(b *testing.B) {
 	benchmarkBackends(b, func(b *testing.B, group *dedupe.Group[string, int]) {
 		b.RunParallel(func(pb *testing.PB) {
 			for pb.Next() {
-				handle, err := group.Do(context.Background(), "key", func(context.Context) (int, error) { return 1, nil })
+				value, err := group.Do(context.Background(), "key", func(context.Context) (int, error) { return 1, nil })
 				if err != nil {
 					b.Error(err)
 					continue
 				}
-				_ = handle.Release()
+				velocityDedupeSink = value
 			}
 		})
 	})
@@ -194,12 +214,12 @@ func BenchmarkVelocityBackendsContended(b *testing.B) {
 		b.RunParallel(func(pb *testing.PB) {
 			key := strconv.FormatInt(nextKey.Add(1), 10)
 			for pb.Next() {
-				handle, err := group.Do(context.Background(), key, func(context.Context) (int, error) { return 1, nil })
+				value, err := group.Do(context.Background(), key, func(context.Context) (int, error) { return 1, nil })
 				if err != nil {
 					b.Error(err)
 					continue
 				}
-				_ = handle.Release()
+				velocityDedupeSink = value
 			}
 		})
 	})

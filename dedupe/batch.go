@@ -1,30 +1,30 @@
 package dedupe
 
-import (
-	"context"
+import "context"
 
-	"github.com/apsis-io/velocity/ownership"
-)
-
-// Result holds the independent result handle for one requested key.
+// Result holds the value or error for one requested key.
 type Result[V any] struct {
-	Handle *ownership.Shared[V]
-	Err    error
+	Value V
+	Err   error
 }
 
 // DoBatch executes one function for all requested keys and aligns the result map
-// with the requested keys.
+// with the requested keys. It is a plain-value form like Do, and an owned group
+// reports ErrOwnedResult for every key.
 func (g *Group[K, V]) DoBatch(ctx context.Context, keys []K, fn func(context.Context, []K) (map[K]V, error)) map[K]Result[V] {
 	results := make(map[K]Result[V], len(keys))
-	if ctx == nil {
-		for _, key := range keys {
-			results[key] = Result[V]{Err: ErrNilContext}
-		}
-		return results
+	var err error
+	switch {
+	case g.owned:
+		err = ErrOwnedResult
+	case ctx == nil:
+		err = ErrNilContext
+	case fn == nil:
+		err = ErrNilFunction
 	}
-	if fn == nil {
+	if err != nil {
 		for _, key := range keys {
-			results[key] = Result[V]{Err: ErrNilFunction}
+			results[key] = Result[V]{Err: err}
 		}
 		return results
 	}
@@ -53,8 +53,8 @@ func (g *Group[K, V]) DoBatch(ctx context.Context, keys []K, fn func(context.Con
 		go g.runBatch(leaders, calls, fn)
 	}
 	for _, key := range unique {
-		handle, err := g.wait(ctx, key, calls[key])
-		results[key] = Result[V]{Handle: handle, Err: err}
+		value, err := g.wait(ctx, key, calls[key])
+		results[key] = Result[V]{Value: value, Err: err}
 	}
 	return results
 }
