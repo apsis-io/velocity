@@ -325,6 +325,23 @@ value, err := resilience.Retry(ctx, resilience.Policy{
 }, fetch)
 ```
 
+`resilience.Breaker` stops calling a resource that keeps failing and probes
+it again after `OpenFor`. Rejection is immediate — nothing in a breaker
+waits, and transitions happen lazily on the next call rather than on a timer.
+`Do` is a generic method; `Allow` serves calls that cannot be wrapped:
+
+```go
+breaker, err := resilience.NewBreaker(resilience.BreakerPolicy{
+    Trip:    resilience.FailureRatio(0.5, 20),
+    OpenFor: 30 * time.Second,
+    Failure: func(err error) bool { return !errors.Is(err, context.Canceled) },
+})
+value, err := breaker.Do(ctx, fetch)           // errors.Is(err, resilience.ErrOpen) when tripped
+```
+
+Compose it with `Retry` by nesting and classifying `ErrOpen` as not
+retryable, so a tripped breaker ends the loop instead of burning attempts.
+
 ## Development
 
 `just` is optional; every recipe maps to these commands:

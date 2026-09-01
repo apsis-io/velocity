@@ -339,7 +339,32 @@ Rewrites the best of `AaronJan/Hunch` and `sourcegraph/conc` as `async` +
   (house style: fail fast at construction, not first use) and — after a
   review round caught a real bug — computes into a fresh local per call
   instead of mutating its captured `base` parameter, which had been silently
-  corrupting every subsequent call's delay. Circuit breakers/limiters remain
-  deferred, as the original brief specified.
+  corrupting every subsequent call's delay.
+- `async.Map`/`ForEach` are conc's `iter.Map`/`ForEach`, and deliberately not
+  `Gather` over a generated `Plan`: a plan is distinct labeled tasks and gets
+  a goroutine each, a collection is one function over many items and gets a
+  fixed pool of `Limit` workers pulling indices off an atomic counter. The
+  difference is 12x at 1024 items with constant allocations. `Map` returns
+  the same `Outcome` as `Gather` so a caller learns *which* items failed;
+  that 48-byte record is why it trails conc's bare result slice by ~1.6x, a
+  price paid knowingly and recorded in `benchmarks/README.md`. Clock reads
+  for `Hooks` are skipped when no hook is set. There is no `MapIndexed`; the
+  index is on the `Outcome`, and in-place mutation of the input is the
+  ownership-shaped case of `Map` inside `View` producing values written back
+  under `WithWrite`, not a `*T` callback.
+- `resilience.Breaker` follows the package's rule that nothing waits: a
+  rejected call returns `ErrOpen` at once, and transitions are applied
+  lazily by the next call or `State` read rather than by a timer goroutine,
+  so a breaker is inert when idle and its `Clock` is the only time source.
+  Reports carry the generation they were admitted under and are discarded if
+  the state changed meanwhile, so a slow probe from a window already judged
+  cannot reopen a breaker that has since closed. `Do` is a generic method;
+  `Allow` exists for calls that cannot be wrapped, and costs the exactly-once
+  closure `Do` avoids (`Do` closed path: 0 allocs). A panicking callback is
+  reported as a failure before propagating, because the alternative is a
+  half-open probe slot occupied until the next transition. `Failure` is nil
+  by default and counts every error, including the caller's own
+  cancellation — explicit over guessing, with the exclusion recipe on the
+  field. Rate limiters remain deferred.
 - Root `Task`/`Outcome`/`ID` registry defaults remain future benchmark
   decisions, not committed API, per the original brief.
