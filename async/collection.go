@@ -32,6 +32,11 @@ import (
 // Cancellation stops workers from taking further items; the one each is
 // running finishes. Items never picked up report context.Cause(ctx) with
 // waited set to the delay at which they were abandoned and duration zero.
+// An item that is never picked up never runs fn, so per-item cleanup
+// registered before the call and undone inside fn is left undone for it.
+// Hooks.OnTaskComplete fires for every item including those, with the
+// cancellation cause, and is the place for such cleanup; or sweep every
+// item afterwards, if the cleanup is idempotent.
 //
 // To fan out over an owned slice, run Map inside the read: workers finish
 // before Map returns, so the borrow covers them all and its value never

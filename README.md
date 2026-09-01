@@ -166,6 +166,36 @@ err := eg.Wait()                          // first error; siblings were cancelle
 | typed results | index bookkeeping by hand | `Gather` / `Map` |
 | cost, 8 functions | 3.2 µs / 20 allocs | 3.4 µs / 12 allocs; at a limit of 4, 4.8 vs 4.8 |
 
+Two things `errgroup` gave implicitly that the replacements do not:
+
+- **One error at a boundary.** `Map` joins an `*ItemError` per failure, which
+  is more information than a 1 KB status field wants when every item failed
+  for the same reason. `ErrGroup.Wait` is first-error-only; for `Map`,
+  `async.Failures(err)[0]` is the lowest failed item.
+- **Every submission runs.** `errgroup` ran every function it started, so
+  cleanup inside a function for state set up outside it was unconditional.
+  `Map` does not run an item never claimed after cancellation, and
+  `ErrGroup` does not run a function that gets its permit after the first
+  failure. Cleanup for state registered *before* the fan-out therefore
+  belongs in `Hooks.OnTaskComplete` (which `Map` fires for unclaimed items
+  with the cause) or in a sweep after the call, not inside the function.
+
+### Cancellable locking
+
+`sync.Mutex` cannot be locked under a context, which is what
+`x/sync/semaphore.NewWeighted(1)` usually stands in for. `async.Mutex` and
+`async.Semaphore` wait under the caller's context and hand back a `Permit`
+that is released exactly once; a permit that is not released is reported by
+`lostrelease`, including the `Try` forms' `ok` branch.
+
+```go
+held, err := mu.Lock(ctx)
+if err != nil {
+    return err
+}
+defer held.Release()
+```
+
 ## dedupe
 
 `Group[K, V]` coalesces concurrent calls per key: one runs, every caller

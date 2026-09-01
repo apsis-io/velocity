@@ -51,3 +51,26 @@ type ItemError struct {
 
 func (e *ItemError) Error() string { return fmt.Sprintf("item %d: %v", e.Index, e.Err) }
 func (e *ItemError) Unwrap() error { return e.Err }
+
+// Failures extracts every *ItemError from a Map or ForEach error, in index
+// order, or nil if err carries none. At a boundary that wants one message —
+// a status field, an event — Failures(err)[0] is the lowest failed item.
+func Failures(err error) []*ItemError {
+	var items []*ItemError
+	var walk func(error)
+	walk = func(err error) {
+		switch e := err.(type) {
+		case nil:
+		case *ItemError:
+			items = append(items, e)
+		case interface{ Unwrap() []error }:
+			for _, inner := range e.Unwrap() {
+				walk(inner)
+			}
+		case interface{ Unwrap() error }:
+			walk(e.Unwrap())
+		}
+	}
+	walk(err)
+	return items
+}

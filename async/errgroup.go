@@ -78,6 +78,11 @@ func (r *Runner) ErrGroup(ctx context.Context) (*ErrGroup, context.Context) {
 // cancelled is not run: the group is failing and its result could not
 // change that. Go blocks for the permit regardless, as x/sync does; only
 // WaitContext bounds a wait on functions that ignore their cancellation.
+//
+// Because a function may not run, cleanup it was meant to perform for
+// state set up before Go is not performed either. Register such cleanup in
+// the Runner's Hooks.OnTaskComplete, which does not fire for a function
+// that never ran, or perform it after Wait for every submission.
 func (g *ErrGroup) Go(fn func(context.Context) error) {
 	if g.run == nil {
 		g.record(-1, &PlanError{Index: -1, Cause: ErrNilRunner})

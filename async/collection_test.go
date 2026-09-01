@@ -3,6 +3,7 @@ package async_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"runtime"
 	"slices"
 	"sync"
@@ -300,5 +301,27 @@ func TestMapInsideViewHoldsTheBorrowAcrossWorkers(t *testing.T) {
 	}
 	if err := owner.WithWrite(func(items *[]int) error { *items = nil; return nil }); err != nil {
 		t.Fatalf("write after Map = %v", err)
+	}
+}
+
+func TestFailuresExtractsItemErrorsInOrder(t *testing.T) {
+	run := runner(t, async.Unlimited)
+	_, err := run.Map(context.Background(), []int{3, 1, 2}, func(_ context.Context, n int) (int, error) {
+		time.Sleep(time.Duration(n) * time.Millisecond)
+		return 0, fmt.Errorf("item %d", n)
+	})
+	failures := async.Failures(err)
+	if len(failures) != 3 || failures[0].Index != 0 || failures[2].Index != 2 {
+		t.Fatalf("Failures = %v", failures)
+	}
+	if failures[0].Err.Error() != "item 3" {
+		t.Fatalf("lowest index carries the wrong error: %v", failures[0].Err)
+	}
+	if async.Failures(nil) != nil || async.Failures(errors.New("plain")) != nil {
+		t.Fatal("Failures found items where there are none")
+	}
+	// Wrapped once more, it still finds them.
+	if got := async.Failures(fmt.Errorf("fan-out: %w", err)); len(got) != 3 {
+		t.Fatalf("wrapped Failures = %v", got)
 	}
 }

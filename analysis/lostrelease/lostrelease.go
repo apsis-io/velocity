@@ -6,10 +6,14 @@
 // lostrelease: check that acquired velocity handles are released
 //
 // An advanced borrow (ownership.Owner.Borrow, BorrowMut, and the same on
-// Shared and Frozen), a lease (ownership.NewLease), or a pool checkout
-// (pool.Pool.Get) must be released exactly once. A leaked borrow blocks its
+// Shared and Frozen), a lease (ownership.NewLease), a pool checkout
+// (pool.Pool.Get), or a permit (async.Semaphore.Acquire/TryAcquire,
+// async.Mutex.Lock/TryLock) must be released exactly once. A leaked borrow blocks its
 // cell until it is released, and production builds have no runtime net for
 // it, so the check belongs here, before the code runs.
+//
+// The second result decides which branch is the failure: an error tested
+// against nil, or a bool tested directly, as the Try forms return.
 //
 // The analyzer reports a handle assigned to the blank identifier, and a
 // handle for which some control-flow path from the acquisition to a return
@@ -53,6 +57,7 @@ var Analyzer = &analysis.Analyzer{
 const (
 	ownershipPath = "github.com/apsis-io/velocity/ownership"
 	poolPath      = "github.com/apsis-io/velocity/pool"
+	asyncPath     = "github.com/apsis-io/velocity/async"
 )
 
 // acquirers maps package path to the receiver type (empty for a function)
@@ -67,10 +72,14 @@ var acquirers = map[string]map[string][]string{
 	poolPath: {
 		"Pool": {"Get"},
 	},
+	asyncPath: {
+		"Semaphore": {"Acquire", "TryAcquire"},
+		"Mutex":     {"Lock", "TryLock"},
+	},
 }
 
 func run(pass *analysis.Pass) (any, error) {
-	if !imports(pass.Pkg, ownershipPath) && !imports(pass.Pkg, poolPath) {
+	if !imports(pass.Pkg, ownershipPath) && !imports(pass.Pkg, poolPath) && !imports(pass.Pkg, asyncPath) {
 		return nil, nil
 	}
 	insp := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
@@ -208,6 +217,11 @@ func probesError(info *types.Info, stack []ast.Node, names []*ast.Ident) bool {
 	errVar := varOf(info, names[1])
 	ifStmt, ok := stack[len(stack)-2].(*ast.IfStmt)
 	if !ok || errVar == nil || ifStmt.Init != stack[len(stack)-1] {
+		return false
+	}
+	if isBool(errVar) {
+		// `if _, ok := mu.TryLock(); ok` holds the lock on its true branch
+		// with no way to release it: a leak, not a probe.
 		return false
 	}
 	mentioned := false
@@ -475,6 +489,11 @@ func firstIterationHolds(info *types.Info, init ast.Stmt, cond ast.Expr) bool {
 	return constant.Compare(start, bin.Op, bound)
 }
 
+func isBool(v *types.Var) bool {
+	basic, ok := types.Unalias(v.Type()).Underlying().(*types.Basic)
+	return ok && basic.Kind() == types.Bool
+}
+
 func constInt(info *types.Info, e ast.Expr) constant.Value {
 	tv, ok := info.Types[ast.Unparen(e)]
 	if !ok || tv.Value == nil || tv.Value.Kind() != constant.Int {
@@ -483,10 +502,23 @@ func constInt(info *types.Info, e ast.Expr) constant.Value {
 	return tv.Value
 }
 
-// failsWhen reports the comparison operator if cond is `errVar != nil` or
-// `errVar == nil`, and token.ILLEGAL otherwise.
+// failsWhen reports token.NEQ if the true branch of cond is the failure
+// (`err != nil`, `!ok`), token.EQL if the false branch is (`err == nil`,
+// `ok`), and token.ILLEGAL if cond does not test the second result.
 func failsWhen(info *types.Info, cond ast.Expr, errVar *types.Var) token.Token {
-	bin, ok := ast.Unparen(cond).(*ast.BinaryExpr)
+	cond = ast.Unparen(cond)
+	if isBool(errVar) {
+		if id, ok := cond.(*ast.Ident); ok && info.Uses[id] == errVar {
+			return token.EQL // `if ok`: false branch fails
+		}
+		if not, ok := cond.(*ast.UnaryExpr); ok && not.Op == token.NOT {
+			if id, ok := ast.Unparen(not.X).(*ast.Ident); ok && info.Uses[id] == errVar {
+				return token.NEQ // `if !ok`: true branch fails
+			}
+		}
+		return token.ILLEGAL
+	}
+	bin, ok := cond.(*ast.BinaryExpr)
 	if !ok || (bin.Op != token.NEQ && bin.Op != token.EQL) {
 		return token.ILLEGAL
 	}

@@ -231,6 +231,33 @@ and both made because velocity had no consumers yet:
   while the success path touches only the result slot. Within ~8% of conc
   now, and cancellable where conc is not.
 
+## Cancellable locking and what errgroup gave for free (implemented)
+
+The port's last `x/sync` import was `semaphore.NewWeighted(1)`: weight one
+at construction and every call, a cancellable mutex, which `sync.Mutex`
+cannot be. `pool` with `Max: 1` over `struct{}` would have served, and a
+consumer searching for a lock would never have found it there, so
+`async.Mutex` and `async.Semaphore` are first-class: `Lock`/`Acquire` wait
+under the caller's context, a done context fails even when a permit is
+free, and the `Permit` is released exactly once. `lostrelease` knows the
+acquirers, including the `Try` forms, whose second result is a bool rather
+than an error; there the `ok` branch is where the permit is held, so a
+blank permit in `if _, ok := mu.TryLock(); ok` is a leak rather than a
+probe and is reported. The analyzer found four such leaks in the type's own
+tests on its first run. Weighted acquisition was not added; the only site
+that used the weight used one.
+
+Two properties `errgroup` had implicitly were lost in the port and are now
+documented at the migration table rather than restored: a joined
+`*ItemError` per failure is unusable in a 1 KB status field when every item
+failed the same way, so `async.Failures(err)` extracts them in index order
+and `[0]` is the one to show; and a `Map` item never claimed, or an
+`ErrGroup` function that gets its permit after failure, never runs, so
+cleanup for state set up before the fan-out must live in
+`Hooks.OnTaskComplete` (fired for unclaimed items with the cause) or a
+sweep, not inside the function. That one cost the consumer a silent
+permanent leak of an advertised in-flight layer.
+
 ## ErrGroup (implemented)
 
 `async.ErrGroup` exists so `x/sync/errgroup` has no remaining reason to be

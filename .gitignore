@@ -4,3 +4,5 @@
 *.prof
 coverage.*
 .code-review-graph/
+
+/premise

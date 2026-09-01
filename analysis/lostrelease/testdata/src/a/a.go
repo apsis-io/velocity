@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/apsis-io/velocity/async"
 	"github.com/apsis-io/velocity/ownership"
 	"github.com/apsis-io/velocity/pool"
 )
@@ -189,3 +190,59 @@ func releasedInEmptyLiteralRange(owner *ownership.Owner[int]) {
 		_ = borrow.Release()
 	}
 } // want "this return statement may be reached without releasing borrow acquired on line [0-9]+"
+
+func lockedAndReleased(ctx context.Context, mu *async.Mutex) error {
+	held, err := mu.Lock(ctx)
+	if err != nil {
+		return err
+	}
+	defer held.Release()
+	return nil
+}
+
+func lockLeaked(ctx context.Context, mu *async.Mutex) error {
+	held, err := mu.Lock(ctx) // want "held returned by async.Mutex.Lock is not released on all paths"
+	if err != nil {
+		return err
+	}
+	if cond {
+		return nil // want "this return statement may be reached without releasing held acquired on line [0-9]+"
+	}
+	held.Release()
+	return nil
+}
+
+func tryLockNotOkIsNotALeak(mu *async.Mutex) {
+	held, ok := mu.TryLock()
+	if !ok {
+		return
+	}
+	held.Release()
+}
+
+func tryLockOkBranch(sem *async.Semaphore) {
+	permit, ok := sem.TryAcquire()
+	if ok {
+		permit.Release()
+	}
+}
+
+func tryLockLeaked(sem *async.Semaphore) {
+	permit, ok := sem.TryAcquire() // want "permit returned by async.Semaphore.TryAcquire is not released on all paths"
+	if !ok {
+		return
+	}
+	if cond {
+		return // want "this return statement may be reached without releasing permit acquired on line [0-9]+"
+	}
+	permit.Release()
+}
+
+func tryLockBlankIsALeak(mu *async.Mutex) bool {
+	// Unlike an error probe, a discarded Try permit is held on the ok
+	// branch with nothing able to release it.
+	if _, ok := mu.TryLock(); ok { // want "the handle returned by async.Mutex.TryLock should be released, not discarded"
+		return true
+	}
+	return false
+}
