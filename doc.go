@@ -10,8 +10,9 @@
 //     are ownership leases.
 //   - async — bounded fan-out: a Runner states a Limit once and runs labeled
 //     tasks (Gather, Race, FirstSuccess), a function over a collection (Map,
-//     ForEach), or workers over one owned value (Broadcast). Pipeline chains
-//     typed stages; Group tracks goroutines with panic recovery.
+//     ForEach), workers over one owned value (Broadcast), or an ErrGroup
+//     that replaces x/sync/errgroup. Pipeline chains typed stages; Group
+//     tracks goroutines with panic recovery.
 //   - dedupe — coalesces concurrent calls per key so one runs and every
 //     caller gets the result; results become owned handles only on request.
 //   - resilience — Retry with classifiers, backoff, and an injectable Clock;

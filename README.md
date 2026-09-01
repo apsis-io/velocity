@@ -6,7 +6,7 @@ built on Go 1.27 generic methods, with a `go vet` analyzer that catches
 leaked handles before the code runs.
 
 ```sh
-go get github.com/apsis-io/velocity@v0.1.0
+go get github.com/apsis-io/velocity@v0.2.0
 ```
 
 **Status: v0.** Requires Go 1.27. The API is deliberate but young — there
@@ -141,6 +141,30 @@ Err}` per failed item in the joined error, and a failed item's slot is the
 zero value. `Broadcast` fans one owned value out to workers under concurrent
 read borrows; `Pipeline` chains typed stages via a generic `Then[R]`; `Group`
 wraps `sync.WaitGroup.Go` with panic recovery.
+
+### Replacing `x/sync/errgroup`
+
+`run.ErrGroup(ctx)` is `errgroup.WithContext` with the pieces it lacks:
+
+```go
+eg, ctx := run.ErrGroup(ctx)              // Limit from the Runner; bounds goroutines
+for _, item := range items {
+    eg.Go(func(ctx context.Context) error { return process(ctx, item) })
+}
+err := eg.Wait()                          // first error; siblings were cancelled on it
+```
+
+| | `errgroup` | `async.ErrGroup` |
+|---|---|---|
+| context | closed over | passed to each function |
+| limit | `SetLimit` per group | stated once on the `Runner` |
+| a panic | crashes the process (or re-panics in `Wait`) | recovered into a `*Panic` error |
+| after the first failure | later functions still run | not run |
+| all errors | first only | `Wait` first, `Errors()` all, in order |
+| a function that ignores cancellation | `Wait` hangs | `WaitContext(ctx)` bounds it |
+| instrumentation | none | `Hooks` see wait and run time |
+| typed results | index bookkeeping by hand | `Gather` / `Map` |
+| cost, 8 functions | 3.2 µs / 20 allocs | 3.4 µs / 12 allocs; at a limit of 4, 4.8 vs 4.8 |
 
 ## dedupe
 

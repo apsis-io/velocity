@@ -155,3 +155,53 @@ func BenchmarkAsyncGatherVelocityLimited(b *testing.B) {
 		asyncVelocitySink, _ = run.Gather(ctx, tasks...)
 	}
 }
+
+// BenchmarkErrGroup compares first-error fan-out with the same eight
+// functions: velocity ErrGroup versus x/sync/errgroup, both unlimited and
+// both with a limit of 4. Neither returns values; that is Gather's job.
+func BenchmarkErrGroup(b *testing.B) {
+	ctx := context.Background()
+	fns := make([]func(context.Context) error, asyncTaskCount)
+	for i := range fns {
+		fns[i] = func(ctx context.Context) error { _, err := benchmarkTask(ctx, i); return err }
+	}
+	for _, limit := range []int{0, 4} {
+		name := "unlimited"
+		if limit > 0 {
+			name = fmt.Sprintf("limit-%d", limit)
+		}
+		b.Run("velocity/"+name, func(b *testing.B) {
+			l := async.Unlimited
+			if limit > 0 {
+				l = async.Limited(limit)
+			}
+			run := async.Must(async.New(l))
+			b.ReportAllocs()
+			for b.Loop() {
+				eg, gctx := run.ErrGroup(ctx)
+				for _, fn := range fns {
+					eg.Go(fn)
+				}
+				_ = gctx
+				if err := eg.Wait(); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+		b.Run("errgroup/"+name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				eg, gctx := errgroup.WithContext(ctx)
+				if limit > 0 {
+					eg.SetLimit(limit)
+				}
+				for _, fn := range fns {
+					eg.Go(func() error { return fn(gctx) })
+				}
+				if err := eg.Wait(); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}

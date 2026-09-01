@@ -31,6 +31,11 @@ one actually does:
 | **hunch** `All` | source index, via post-hoc sort | none | first error |
 | **errgroup** | caller writes by index | `SetLimit` (unused here) | first error |
 
+| | first error cancels | limit | panics | all errors |
+|---|---|---|---|---|
+| **velocity** `async.ErrGroup` | yes, with cause | Runner's, bounds goroutines | recovered as error | `Errors()` |
+| **x/sync** `errgroup` | yes, with cause | `SetLimit`, bounds goroutines | re-panic in `Wait` | first only |
+
 | | per-item result | pool | cancellable |
 |---|---|---|---|
 | **velocity** `async.Map` | bare `R`; `*ItemError` per failure, joined | `Limited(n)` workers | yes, via `ctx` |
@@ -83,6 +88,13 @@ median of -count=5
 | velocity `Limited(4)` | 6995 | 1992 | 20 |
 | hunch | 8451 | 1960 | 34 |
 
+**ErrGroup** (8 functions, first-error semantics)
+
+| | unlimited ns/op | allocs | limit 4 ns/op | allocs |
+|---|---|---|---|---|
+| x/sync errgroup | 3206 | 20 | 4847 | 21 |
+| velocity `ErrGroup` | 3386 | 12 | 4760 | 13 |
+
 **Async map** (one function over a collection, 8 workers)
 
 | | 8 items ns/op | 1024 items ns/op | B/op at 1024 | allocs/op |
@@ -134,6 +146,16 @@ of those, it is the right tool.
 `Race`/`FirstSuccess`, which do use it to stop siblings) and allocated an error
 slice even when nothing failed. Removing both took it from 23 to 19 allocations
 and narrowed the gap to errgroup from 1.5x to 1.3x.
+
+**`ErrGroup` matches errgroup within noise and allocates ~40% less**,
+while also recovering panics, passing the context, skipping functions
+submitted after failure, and collecting every error. Two things it took to
+get there: `sync.WaitGroup.Add` + `go` rather than `WaitGroup.Go`, whose
+wrapper closure is an allocation and an indirection per function; and a
+plain permit send checked afterwards rather than a `select` against the group
+context, which cost ~250 ns per contended permit and bought only an earlier
+return for a submitter stuck behind functions that ignore cancellation —
+which x/sync does not offer either.
 
 **`Map` is within ~8% of conc at 1024 items, and cancellable where conc is
 not.** All three arms dispatch the same way — a fixed pool pulling indices from

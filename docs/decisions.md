@@ -231,6 +231,22 @@ and both made because velocity had no consumers yet:
   while the success path touches only the result slot. Within ~8% of conc
   now, and cancellable where conc is not.
 
+## ErrGroup (implemented)
+
+`async.ErrGroup` exists so `x/sync/errgroup` has no remaining reason to be
+imported alongside velocity. It keeps errgroup's contract — first error
+cancels the group context with that error as cause, `Wait` returns it, a
+Limit bounds goroutines by blocking the submitter — and adds what errgroup
+lacks: the context is passed to each function; panics become a `*Panic`
+error instead of crashing; a function that gets its permit after failure is
+not run; `Errors` joins every error in submission order; `WaitContext`
+bounds a wait on functions that ignore cancellation; the Runner's Hooks
+observe each function. It is built on the Runner so the Limit is stated
+once. Benchmarked at parity with errgroup (3.4 vs 3.2 µs unlimited, 4.8 vs
+4.8 at a limit of 4) with ~40% fewer allocations; the permit wait is a plain
+send checked afterwards, because a `select` against the group context cost
+~250 ns per contended permit for a property errgroup does not have either.
+
 ## First consumer feedback (implemented)
 
 Periapsis ported seven `conc`/`x/sync` sites to v0.1.0 and reported back.

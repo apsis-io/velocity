@@ -76,3 +76,19 @@ func ExampleRunner_Gather_takeRecipe() {
 	fmt.Println(len(firstTwo), len(lastTwo))
 	// Output: 2 2
 }
+
+func ExampleRunner_ErrGroup() {
+	run := async.Must(async.New(async.Limited(2)))
+	eg, ctx := run.ErrGroup(context.Background())
+	for _, n := range []int{1, 2, 3} {
+		eg.Go(func(ctx context.Context) error {
+			if n == 2 {
+				return errors.New("two failed")
+			}
+			<-ctx.Done() // siblings stop when the first error cancels the group
+			return nil
+		})
+	}
+	fmt.Println(eg.Wait(), context.Cause(ctx))
+	// Output: two failed two failed
+}
