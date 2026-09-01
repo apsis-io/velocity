@@ -71,6 +71,15 @@ jobs:
           go test -race -count=2 ./...
           go -C failsafeown test -race ./...
 
+      # failsafeown pins a released velocity, so its own tests cannot catch a
+      # working-tree change to ownership that breaks it. Run it once more
+      # against this checkout; the edit is not committed.
+      - name: failsafeown against the working tree
+        run: |
+          go -C failsafeown mod edit -replace github.com/apsis-io/velocity=..
+          go -C failsafeown test ./...
+          git -C failsafeown checkout go.mod
+
       # Leak diagnostics for advanced borrows only compile under this tag.
       - name: test -tags=velocitydebug
         run: go test -tags=velocitydebug -race ./...
