@@ -27,8 +27,9 @@ func TestMapPreservesInputOrderAndReportsFailuresByIndex(t *testing.T) {
 	if !errors.Is(err, odd) {
 		t.Fatalf("error = %v", err)
 	}
-	// Results are in input order; a failed item's slot holds what fn returned.
-	if !slices.Equal(got, []int{-1, 20, -3, 40, -5}) {
+	// Results are in input order; a failed item's slot is zero even though fn
+	// returned -n beside its error.
+	if !slices.Equal(got, []int{0, 20, 0, 40, 0}) {
 		t.Fatalf("results = %v", got)
 	}
 	// The joined error carries one ItemError per failure, in index order

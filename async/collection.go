@@ -17,10 +17,9 @@ import (
 //
 // Failures are the exception, so they are reported out of band: the returned
 // error joins one *ItemError per failed item, carrying its index, and the
-// result slot for a failed item holds fn's returned R (the zero value unless
-// fn chose otherwise). A caller who needs to know which items failed walks
-// the joined error with errors.As; one who does not can treat it as a single
-// error.
+// result slot for a failed item is the zero R whatever fn returned beside
+// its error. A caller who needs to know which items failed walks the joined
+// error with errors.As; one who does not can treat it as a single error.
 //
 // An empty collection returns an empty slice and no error, unlike an empty
 // Plan, since a collection is a value rather than a configuration.
@@ -85,6 +84,8 @@ func (r *Runner) Map[T, R any](ctx context.Context, items []T, fn func(context.C
 					hook(i, "", waited, time.Since(runStart), err)
 				}
 				if err != nil {
+					var zero R
+					results[i] = zero
 					failures.add(i, err)
 				}
 			}

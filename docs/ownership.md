@@ -94,7 +94,9 @@ handle that is discarded, or has a control-flow path to a return on which it
 is never released — modelled on vet's `lostcancel`. It is conservative:
 passing the handle anywhere counts as a use, only `Project`/`Update`/
 `Value`/`Held`/`State` and `_ = h` do not, and the failure branch of the
-acquisition's own error check is not a leak. It cannot see that a loop ran.
+acquisition's own error check is not a leak. A loop that provably runs at
+least once (`for {}`, a constant range or count, a non-empty literal) counts
+a release inside it; a loop whose count is only known at runtime does not.
 
 ## Retirement
 

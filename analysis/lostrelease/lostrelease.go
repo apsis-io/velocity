@@ -19,12 +19,18 @@
 // conservative. Only calls that consume the resource without discharging it
 // (Project, Update, Value, Held, State) and `_ = handle` do not count. A
 // path taken because the acquisition's own error result is non-nil is not
-// reported, since no handle exists on it.
+// reported, since no handle exists on it, and neither is the zero-iteration
+// exit of a loop that provably runs at least once (`for {}`, `for range 3`,
+// `for i := 0; i < n; ...` with constant bounds, a range over a non-empty
+// literal or array); a release inside such a loop counts. A loop whose
+// iteration count depends on a value at runtime is still assumed able to
+// run zero times.
 package lostrelease
 
 import (
 	"fmt"
 	"go/ast"
+	"go/constant"
 	"go/token"
 	"go/types"
 
@@ -375,11 +381,24 @@ outer:
 	return search(defblock)
 }
 
-// successors returns b's successors with the failure branch of a test on
-// errVar removed: on that branch the acquisition returned no handle, so
-// there is nothing to release.
+// successors returns b's successors minus the edges a path cannot take:
+// the failure branch of a test on errVar, where the acquisition returned no
+// handle and there is nothing to release; and the zero-iteration exit of a
+// loop that provably runs at least once, so a release inside such a loop
+// counts on every path through it.
 func successors(pass *analysis.Pass, b *cfg.Block, errVar *types.Var) []*cfg.Block {
-	if errVar == nil || len(b.Succs) != 2 || len(b.Nodes) == 0 {
+	if len(b.Succs) != 2 {
+		return b.Succs
+	}
+	switch b.Kind {
+	case cfg.KindForLoop, cfg.KindRangeLoop:
+		// Succs[0] enters the body, Succs[1] leaves the loop.
+		if runsAtLeastOnce(pass.TypesInfo, b.Stmt) {
+			return []*cfg.Block{b.Succs[0], nil}
+		}
+		return b.Succs
+	}
+	if errVar == nil || len(b.Nodes) == 0 {
 		return b.Succs
 	}
 	cond, ok := b.Nodes[len(b.Nodes)-1].(ast.Expr)
@@ -393,6 +412,75 @@ func successors(pass *analysis.Pass, b *cfg.Block, errVar *types.Var) []*cfg.Blo
 		return []*cfg.Block{b.Succs[0], nil}
 	}
 	return b.Succs
+}
+
+// runsAtLeastOnce reports whether a loop statement's body is certain to
+// execute: `for {}`, `for i := c1; i < c2; ...` with constants c1 < c2, a
+// range over a positive integer constant, a non-empty composite literal, a
+// string constant, or an array type of positive length.
+func runsAtLeastOnce(info *types.Info, stmt ast.Stmt) bool {
+	switch loop := stmt.(type) {
+	case *ast.ForStmt:
+		if loop.Cond == nil {
+			return true
+		}
+		return firstIterationHolds(info, loop.Init, loop.Cond)
+	case *ast.RangeStmt:
+		x := ast.Unparen(loop.X)
+		if tv, ok := info.Types[x]; ok && tv.Value != nil {
+			switch tv.Value.Kind() {
+			case constant.Int:
+				n, exact := constant.Int64Val(tv.Value)
+				return exact && n > 0
+			case constant.String:
+				return len(constant.StringVal(tv.Value)) > 0
+			}
+		}
+		if lit, ok := x.(*ast.CompositeLit); ok {
+			return len(lit.Elts) > 0
+		}
+		if tv, ok := info.Types[x]; ok {
+			if arr, ok := types.Unalias(tv.Type).Underlying().(*types.Array); ok {
+				return arr.Len() > 0
+			}
+		}
+	}
+	return false
+}
+
+// firstIterationHolds evaluates `i op c` for the pattern `i := c0; i op c`
+// where c0 and c are integer constants and i is the loop's own variable.
+func firstIterationHolds(info *types.Info, init ast.Stmt, cond ast.Expr) bool {
+	assign, ok := init.(*ast.AssignStmt)
+	if !ok || assign.Tok != token.DEFINE || len(assign.Lhs) != 1 || len(assign.Rhs) != 1 {
+		return false
+	}
+	loopVar, ok := assign.Lhs[0].(*ast.Ident)
+	if !ok {
+		return false
+	}
+	start := constInt(info, assign.Rhs[0])
+	bin, ok := ast.Unparen(cond).(*ast.BinaryExpr)
+	if !ok {
+		return false
+	}
+	id, ok := ast.Unparen(bin.X).(*ast.Ident)
+	if !ok || info.Uses[id] != info.Defs[loopVar] || start == nil {
+		return false
+	}
+	bound := constInt(info, bin.Y)
+	if bound == nil {
+		return false
+	}
+	return constant.Compare(start, bin.Op, bound)
+}
+
+func constInt(info *types.Info, e ast.Expr) constant.Value {
+	tv, ok := info.Types[ast.Unparen(e)]
+	if !ok || tv.Value == nil || tv.Value.Kind() != constant.Int {
+		return nil
+	}
+	return tv.Value
 }
 
 // failsWhen reports the comparison operator if cond is `errVar != nil` or

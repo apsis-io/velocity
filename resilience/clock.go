@@ -5,10 +5,21 @@ import (
 	"time"
 )
 
-// Clock supplies time and cancellation-aware sleeping to Retry.
+// Clock supplies time to Retry and Breaker: the current reading,
+// cancellation-aware sleeping, and deferred execution. ManualClock
+// implements it for tests.
 type Clock interface {
 	Now() time.Time
 	Sleep(context.Context, time.Duration) error
+	// AfterFunc runs f on its own goroutine once d has elapsed, unless the
+	// returned Timer is stopped first.
+	AfterFunc(d time.Duration, f func()) Timer
+}
+
+// Timer is a pending AfterFunc. Stop reports whether it prevented f from
+// running.
+type Timer interface {
+	Stop() bool
 }
 
 type realClock struct{}
@@ -17,6 +28,8 @@ type realClock struct{}
 func RealClock() Clock { return realClock{} }
 
 func (realClock) Now() time.Time { return time.Now() }
+
+func (realClock) AfterFunc(d time.Duration, f func()) Timer { return time.AfterFunc(d, f) }
 
 func (realClock) Sleep(ctx context.Context, delay time.Duration) error {
 	if delay <= 0 {

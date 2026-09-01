@@ -99,8 +99,10 @@ type BreakerPolicy struct {
 // has recovered. Fail fast is the whole point, so a rejected call returns
 // ErrOpen immediately; nothing in a Breaker waits.
 //
-// Transitions happen lazily, on the next call or State read after the
-// relevant time has passed, so a Breaker needs no goroutine or timer.
+// Opening schedules the move to HalfOpen through the Clock's AfterFunc, so
+// State and Hooks.OnStateChange reflect the elapsed OpenFor on their own
+// rather than at the next call. Every operation also applies any due
+// transition itself, so a late timer changes nothing.
 type Breaker struct {
 	policy BreakerPolicy
 	clock  Clock
@@ -111,6 +113,7 @@ type Breaker struct {
 	inflight   int    // HalfOpen probes admitted and not yet reported
 	generation uint64 // reports from an earlier generation are ignored
 	expiry     time.Time
+	recovery   Timer // pending Open -> HalfOpen, while Open
 }
 
 // NewBreaker validates the policy and returns a Closed breaker.
@@ -318,9 +321,15 @@ func (b *Breaker) enterLocked(state State, now time.Time) *stateChange {
 	b.counts = Counts{}
 	b.inflight = 0
 	b.generation++
+	if b.recovery != nil {
+		b.recovery.Stop()
+		b.recovery = nil
+	}
 	switch state {
 	case Open:
 		b.expiry = now.Add(b.policy.OpenFor)
+		generation := b.generation
+		b.recovery = b.clock.AfterFunc(b.policy.OpenFor, func() { b.recover(generation) })
 	case Closed:
 		b.expiry = now.Add(b.policy.Interval)
 	default:
@@ -330,6 +339,25 @@ func (b *Breaker) enterLocked(state State, now time.Time) *stateChange {
 		return nil
 	}
 	return change
+}
+
+// recover is the scheduled Open -> HalfOpen move. The generation check makes
+// a timer that fires after a Reset, or after the lazy path already moved
+// on, a no-op.
+func (b *Breaker) recover(generation uint64) {
+	now := b.clock.Now()
+	b.mu.Lock()
+	if b.generation != generation || b.state != Open {
+		b.mu.Unlock()
+		return
+	}
+	// The clock may deliver slightly early; defer to the lazy path then.
+	var transition *stateChange
+	if !now.Before(b.expiry) {
+		transition = b.enterLocked(HalfOpen, now)
+	}
+	b.mu.Unlock()
+	b.notify(transition)
 }
 
 // notify runs the hook for a transition, outside the lock.

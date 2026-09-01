@@ -354,7 +354,8 @@ value, err := resilience.Retry(ctx, resilience.Policy{
 
 `resilience.Breaker` stops calling a resource that keeps failing and probes
 it again after `OpenFor`. Rejection is immediate — nothing in a breaker
-waits, and transitions happen lazily on the next call rather than on a timer.
+waits; recovery is scheduled through the `Clock`, so `State` and the
+`OnStateChange` hook move on their own when `OpenFor` elapses.
 `Do` is a generic method; `Allow` serves calls that cannot be wrapped:
 
 ```go

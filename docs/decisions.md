@@ -193,8 +193,11 @@ Three follow-ups from the same review:
   acquisition fails, not a discard, which is how tests assert conflicts. It
   lives in its own module so the library does not depend on `x/tools`, and
   runs through `go vet -vettool` (`just lint`). Running it over velocity
-  itself found only test code releasing inside loops the analyzer cannot
-  prove ran; those were restructured rather than the rule weakened.
+  itself found only test code releasing inside `for range 3` loops, which
+  the CFG treats as possibly zero-iteration; the analyzer now prunes the
+  exit edge of a loop that provably runs at least once — `for {}`, a
+  constant range or count, a non-empty literal or array — and still assumes
+  a runtime-bounded loop may not run.
 - **A concurrent model test** now drives one cell from eight goroutines
   through every access and transfer operation with a deadline, so the
   no-wait claim is exercised rather than asserted.
@@ -217,6 +220,9 @@ and both made because velocity had no consumers yet:
   the registration race now cancels the context it derived, which used to
   stay registered with the base context. `Do` went from 1603 ns / 10 allocs
   to ~1300 / 6 — janos's allocation count, ~220 ns behind it.
+- **`async.Map` zeroes a failed item's slot.** Whatever `fn` returned
+  beside its error is discarded, so the results slice is deterministic and
+  a caller who ignores the error cannot read a half-built value.
 - **`async.Map` returns `[]R`.** The 48-byte `Outcome` per item was chosen
   for symmetry with `Gather` and was the entire 1.6x gap to conc. `Gather`
   has labels and heterogeneous tasks; a collection map has neither, and

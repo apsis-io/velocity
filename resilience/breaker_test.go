@@ -152,6 +152,72 @@ func TestBreakerLifecycle(t *testing.T) {
 	}
 }
 
+// Opening schedules recovery through the Clock, so the state and the hook
+// move on their own when OpenFor elapses, with no call to prompt them.
+func TestBreakerRecoversOnTheClockWithoutACall(t *testing.T) {
+	clock := resilience.NewManualClock(time.Unix(0, 0))
+	var rec recorder
+	b := newBreaker(t, clock, &rec, resilience.BreakerPolicy{
+		Trip:    resilience.ConsecutiveFailures(1),
+		OpenFor: time.Minute,
+	})
+	_, _ = b.Do(context.Background(), fail)
+	if got := rec.all(); len(got) != 1 || got[0].to != resilience.Open {
+		t.Fatalf("transitions after trip = %+v", got)
+	}
+	clock.Advance(59 * time.Second)
+	if got := rec.all(); len(got) != 1 {
+		t.Fatalf("recovered early: %+v", got)
+	}
+	// The hook fires from Advance itself; nothing has touched the breaker.
+	clock.Advance(time.Second)
+	if got := rec.all(); len(got) != 2 || got[1].from != resilience.Open || got[1].to != resilience.HalfOpen {
+		t.Fatalf("transitions after OpenFor = %+v", got)
+	}
+	if got := b.State(); got != resilience.HalfOpen {
+		t.Fatalf("state = %v", got)
+	}
+
+	// Reset while Open cancels the pending recovery: no stray HalfOpen later.
+	_, _ = b.Do(context.Background(), fail) // reopen
+	b.Reset()
+	clock.Advance(2 * time.Minute)
+	got := rec.all()
+	if last := got[len(got)-1]; last.to != resilience.Closed {
+		t.Fatalf("stale recovery fired after Reset: %+v", got)
+	}
+	if got := b.State(); got != resilience.Closed {
+		t.Fatalf("state after Reset and elapsed OpenFor = %v", got)
+	}
+}
+
+// With the real clock the timer goroutine drives recovery; the lazy path
+// must agree with it rather than transition twice.
+func TestBreakerRecoveryTimerAndLazyPathAgree(t *testing.T) {
+	var rec recorder
+	b, err := resilience.NewBreaker(resilience.BreakerPolicy{
+		Trip:    resilience.ConsecutiveFailures(1),
+		OpenFor: 5 * time.Millisecond,
+		Hooks:   rec.hooks(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = b.Do(context.Background(), fail)
+	deadline := time.Now().Add(time.Second)
+	for b.State() != resilience.HalfOpen {
+		if time.Now().After(deadline) {
+			t.Fatal("never recovered")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(10 * time.Millisecond) // let a late timer, if any, fire
+	got := rec.all()
+	if len(got) != 2 || got[1].to != resilience.HalfOpen {
+		t.Fatalf("transitions = %+v, want exactly one recovery", got)
+	}
+}
+
 func TestBreakerHalfOpenBoundsProbes(t *testing.T) {
 	clock := resilience.NewManualClock(time.Unix(0, 0))
 	b := newBreaker(t, clock, nil, resilience.BreakerPolicy{

@@ -144,3 +144,48 @@ func inClosure(owner *ownership.Owner[int]) func() error {
 func viewIsNotABorrow(owner *ownership.Owner[int]) (int, error) {
 	return owner.View(func(v int) (int, error) { return v, nil })
 }
+
+func releasedInConstantLoop(owner *ownership.Owner[int]) {
+	borrow, _ := owner.Borrow()
+	for range 3 {
+		_ = borrow.Release()
+	}
+}
+
+func releasedInInfiniteLoop(owner *ownership.Owner[int]) {
+	borrow, _ := owner.Borrow()
+	for {
+		_ = borrow.Release()
+		if cond {
+			return
+		}
+	}
+}
+
+func releasedInCountedLoop(owner *ownership.Owner[int]) {
+	borrow, _ := owner.Borrow()
+	for i := 0; i < 2; i++ {
+		_ = borrow.Release()
+	}
+}
+
+func releasedInLiteralRange(owner *ownership.Owner[int]) {
+	borrow, _ := owner.Borrow()
+	for range []int{1} {
+		_ = borrow.Release()
+	}
+}
+
+func releasedInRuntimeLoop(owner *ownership.Owner[int], n int) {
+	borrow, _ := owner.Borrow() // want "borrow returned by ownership.Owner.Borrow is not released on all paths"
+	for range n {
+		_ = borrow.Release()
+	}
+} // want "this return statement may be reached without releasing borrow acquired on line [0-9]+"
+
+func releasedInEmptyLiteralRange(owner *ownership.Owner[int]) {
+	borrow, _ := owner.Borrow() // want "borrow returned by ownership.Owner.Borrow is not released on all paths"
+	for range []int{} {
+		_ = borrow.Release()
+	}
+} // want "this return statement may be reached without releasing borrow acquired on line [0-9]+"

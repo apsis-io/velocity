@@ -3,6 +3,7 @@ package resilience_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -22,6 +23,11 @@ func (c *fakeClock) Sleep(ctx context.Context, delay time.Duration) error {
 	c.mu.Unlock()
 	return nil
 }
+func (c *fakeClock) AfterFunc(time.Duration, func()) resilience.Timer { return neverTimer{} }
+
+type neverTimer struct{}
+
+func (neverTimer) Stop() bool { return true }
 
 func TestRetryRetriesAndPreservesLastError(t *testing.T) {
 	want := errors.New("failed")
@@ -75,7 +81,8 @@ func TestRetryCancellationDuringBackoff(t *testing.T) {
 
 type blockingClock struct{ cancel context.CancelFunc }
 
-func (blockingClock) Now() time.Time { return time.Time{} }
+func (blockingClock) Now() time.Time                                   { return time.Time{} }
+func (blockingClock) AfterFunc(time.Duration, func()) resilience.Timer { return neverTimer{} }
 func (c blockingClock) Sleep(ctx context.Context, _ time.Duration) error {
 	c.cancel()
 	<-ctx.Done()
@@ -123,5 +130,30 @@ func TestManualClockDrivesRetryDeterministically(t *testing.T) {
 		func(context.Context) (int, error) { return 0, errors.New("fail") })
 	if !errors.Is(err, cause) {
 		t.Fatalf("Retry with done context = %v, want the cause from Sleep", err)
+	}
+}
+
+func TestManualClockAfterFuncOrderAndStop(t *testing.T) {
+	clock := resilience.NewManualClock(time.Unix(0, 0))
+	var fired []string
+	clock.AfterFunc(3*time.Second, func() { fired = append(fired, "c") })
+	clock.AfterFunc(time.Second, func() { fired = append(fired, "a") })
+	stopped := clock.AfterFunc(2*time.Second, func() { fired = append(fired, "b") })
+	// A callback may schedule more; it runs when its own time comes.
+	clock.AfterFunc(time.Second, func() {
+		clock.AfterFunc(time.Second, func() { fired = append(fired, "nested") })
+	})
+	if !stopped.Stop() || stopped.Stop() {
+		t.Fatal("Stop should succeed once")
+	}
+	clock.Advance(10 * time.Second)
+	if want := []string{"a", "nested", "c"}; !slices.Equal(fired, want) {
+		t.Fatalf("fired = %v, want %v", fired, want)
+	}
+	// Non-positive delay runs immediately.
+	ran := false
+	clock.AfterFunc(0, func() { ran = true })
+	if !ran {
+		t.Fatal("zero-delay AfterFunc did not run")
 	}
 }
