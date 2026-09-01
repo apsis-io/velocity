@@ -206,7 +206,12 @@ func TestHedgeBudgetBoundsExtraLoad(t *testing.T) {
 		Delay:       fixedDelay(0), // hedge immediately, if allowed
 		Budget:      budget,
 	}
-	var attempts atomic.Int64
+	// Counted in OnAttempt, which runs on the collecting goroutine before
+	// the attempt's own goroutine starts: counting inside fn would instead
+	// observe the scheduler, since a losing attempt may not have run by the
+	// time the winner returns.
+	var launched atomic.Int64
+	policy.Hooks = resilience.HedgeHooks{OnAttempt: func(int, bool) { launched.Add(1) }}
 	release := make(chan struct{})
 	var wg sync.WaitGroup
 	// Twenty executions at a 0.25 ratio fund five hedges, so the dependency
@@ -214,7 +219,6 @@ func TestHedgeBudgetBoundsExtraLoad(t *testing.T) {
 	for range 20 {
 		wg.Go(func() {
 			_, _ = resilience.Hedge(context.Background(), policy, func(ctx context.Context, attempt int) (int, error) {
-				attempts.Add(1)
 				if attempt == 0 {
 					select {
 					case <-release:
@@ -229,7 +233,7 @@ func TestHedgeBudgetBoundsExtraLoad(t *testing.T) {
 	close(release)
 	wg.Wait()
 
-	total := attempts.Load()
+	total := launched.Load()
 	if total > 25 {
 		t.Fatalf("attempts = %d for 20 executions at ratio 0.25, want at most 25", total)
 	}
@@ -246,16 +250,16 @@ func TestHedgeEmptyBudgetDoesNotHang(t *testing.T) {
 		t.Fatal(err)
 	}
 	boom := errors.New("boom")
-	var attempts atomic.Int32
+	var launched atomic.Int32
 	policy := resilience.HedgePolicy[int]{
 		MaxAttempts: 5,
 		Delay:       fixedDelay(0),
 		Budget:      budget,
+		Hooks:       resilience.HedgeHooks{OnAttempt: func(int, bool) { launched.Add(1) }},
 	}
 	done := make(chan error, 1)
 	go func() {
 		_, err := resilience.Hedge(context.Background(), policy, func(context.Context, int) (int, error) {
-			attempts.Add(1)
 			return 0, boom
 		})
 		done <- err
@@ -268,8 +272,8 @@ func TestHedgeEmptyBudgetDoesNotHang(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Hedge hung waiting for a hedge the budget would never fund")
 	}
-	if got := attempts.Load(); got != 1 {
-		t.Fatalf("attempts = %d, want the single funded one", got)
+	if got := launched.Load(); got != 1 {
+		t.Fatalf("launched = %d attempts, want the single funded one", got)
 	}
 	if tokens := budget.Tokens(); tokens < 0 || tokens > 1 {
 		t.Fatalf("tokens = %v, want within the burst", tokens)
@@ -282,13 +286,17 @@ func TestNilHedgeBudgetPermits(t *testing.T) {
 	if budget.Tokens() != 0 {
 		t.Fatal("nil budget reported tokens")
 	}
-	policy := resilience.HedgePolicy[int]{MaxAttempts: 3, Delay: fixedDelay(0), Budget: budget}
-	var started atomic.Int32
+	var launched atomic.Int32
+	policy := resilience.HedgePolicy[int]{
+		MaxAttempts: 3,
+		Delay:       fixedDelay(0),
+		Budget:      budget,
+		Hooks:       resilience.HedgeHooks{OnAttempt: func(int, bool) { launched.Add(1) }},
+	}
 	release := make(chan struct{})
 	// Keyed off the attempt index, not a shared counter: which goroutine
 	// increments a counter first is not ordered, but the index is.
 	value, err := resilience.Hedge(context.Background(), policy, func(ctx context.Context, attempt int) (int, error) {
-		started.Add(1)
 		if attempt < 2 {
 			select {
 			case <-release:
@@ -302,8 +310,8 @@ func TestNilHedgeBudgetPermits(t *testing.T) {
 	if err != nil || value != 2 {
 		t.Fatalf("Hedge = (%d, %v), want the third attempt", value, err)
 	}
-	if got := started.Load(); got != 3 {
-		t.Fatalf("started = %d attempts, want all 3 funded by a nil budget", got)
+	if got := launched.Load(); got != 3 {
+		t.Fatalf("launched = %d attempts, want all 3 funded by a nil budget", got)
 	}
 }
 
