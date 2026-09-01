@@ -62,19 +62,27 @@ func FuzzOwnershipModel(f *testing.F) {
 					frozen = frozen[:len(frozen)-1]
 				}
 			case 10:
+				// Scoped reads coexist with advanced read borrows and never
+				// leave state behind.
 				if owner != nil {
-					if borrow, err := owner.BorrowUntracked(); err == nil {
-						reads = append(reads, borrow)
-					} else if !knownLifecycleError(err) {
-						t.Fatalf("BorrowUntracked: %v", err)
+					before := owner.State()
+					_, err := owner.View(func(value int) (int, error) { return value, nil })
+					if err != nil && !knownLifecycleError(err) {
+						t.Fatalf("View: %v", err)
+					}
+					if after := owner.State(); after != before {
+						t.Fatalf("View changed state: %+v -> %+v", before, after)
 					}
 				}
 			case 11:
 				if owner != nil {
-					if borrow, err := owner.BorrowMutUntracked(); err == nil {
-						writes = append(writes, borrow)
-					} else if !knownLifecycleError(err) {
-						t.Fatalf("BorrowMutUntracked: %v", err)
+					before := owner.State()
+					err := owner.WithWrite(func(value *int) error { *value++; return nil })
+					if err != nil && !knownLifecycleError(err) {
+						t.Fatalf("WithWrite: %v", err)
+					}
+					if after := owner.State(); after != before {
+						t.Fatalf("WithWrite changed state: %+v -> %+v", before, after)
 					}
 				}
 			case 0:

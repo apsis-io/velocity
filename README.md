@@ -1,98 +1,25 @@
 # velocity
 
-Experimental Go 1.27 concurrency foundations. The current release contains
-composable clone/drop traits and runtime ownership/borrow-state enforcement.
+Experimental Go 1.27 concurrency foundations: deterministic cleanup and
+handoff (`ownership`, `pool`), bounded task execution (`async`), request
+coalescing (`dedupe`), and retry/circuit-breaker policies (`resilience`),
+built on Go 1.27 generic methods throughout.
 
-## Scoped access
+## Ownership
 
-```go
-owner, err := ownership.New([]int{1, 2, 3})
-if err != nil {
-    return err
-}
-defer owner.Release()
-
-sum, err := owner.Read(func(access ownership.ReadAccess[[]int]) (int, error) {
-    return access.Project(func(values []int) (int, error) {
-        return values[0] + values[1] + values[2], nil
-    })
-})
-```
-
-Mutation uses an exclusive capability. A returned error does not roll changes
-back:
-
-```go
-_, err = owner.Write(func(access ownership.WriteAccess[[]int]) (struct{}, error) {
-    return access.Update(func(values *[]int) (struct{}, error) {
-        *values = append(*values, 4)
-        return struct{}{}, nil
-    })
-})
-```
-
-## Advanced borrows
-
-Advanced handles make lifetime explicit. Always release them:
-
-```go
-borrow, err := owner.Borrow()
-if err != nil {
-    return err
-}
-defer borrow.Release()
-
-first, err := borrow.Project(func(values []int) (int, error) {
-    return values[0], nil
-})
-```
-
-Multiple reads may coexist. A write borrow, move, take, or release during a read
-returns `ownership.ErrConflict` immediately; ownership never waits internally.
-Sharing one write capability between goroutines is safe, but overlapping updates
-also return `ErrConflict` rather than receiving the same mutable pointer.
-
-## Move, take, and sharing
-
-```go
-moved, err := owner.Move()       // old owner becomes moved
-value, err := moved.IntoValue()       // exits ownership without running Drop
-
-owner, _ = ownership.New(value)
-shared, err := owner.IntoShared()
-peer, err := shared.Clone()      // explicit counted handle
-_ = peer.Release()
-owner, err = shared.IntoOwner()  // succeeds only when sole and unborrowed
-```
-
-`Release` and `Close` are exact aliases. Cleanup is idempotent after successful
-release or transfer. A successful borrow release has completed its state change;
-it is never silently deferred. Reentrant release from Drop returns immediately.
-
-## Drop and snapshot
-
-```go
-owner, err := ownership.New(
-    []byte("velocity"),
-    ownership.WithDrop(func(value []byte) error {
-        clear(value)
-        return nil
-    }),
-    ownership.WithClone(func(value []byte) ([]byte, error) {
-        return bytes.Clone(value), nil
-    }),
-)
-copy, err := owner.Snapshot()
-```
-
-Drop runs at most once on explicit final release. Its first error is returned
-once and retained by `State`. Runtime cleanup never runs Drop. A Clone is only
-as independent as its implementation; velocity cannot validate clone quality.
+`ownership` decides when cleanup runs and makes transfer between goroutines
+explicit. Its borrow checks are an assertion layer: a conflict is reported at
+once as `ErrConflict`, never waited out, so nothing in the package can
+deadlock. It is not Rust ownership and not a mutex; use a plain `defer
+Close()` or an `RWMutex` where those are the right tool. See
+[`docs/ownership.md`](docs/ownership.md) for the model and
+[`docs/ownership-cheatsheet.md`](docs/ownership-cheatsheet.md) for the API.
 
 ## Resource patterns
 
-`NewCloser` owns an `io.Closer`, and `View`/`Mutate` read and write without
-the intermediate accessor:
+`NewCloser` owns an `io.Closer`; `View`/`Mutate` (and their error-only forms
+`WithRead`/`WithWrite`) touch the value under a borrow that lasts exactly as
+long as the call:
 
 ```go
 conn := ownership.NewCloser(rawConn)
@@ -101,6 +28,9 @@ defer conn.Close()
 name, err := cfg.View(func(c Config) (string, error) { return c.Name, nil })
 err = cfg.WithWrite(func(c *Config) error { c.Retries++; return nil })
 ```
+
+Concurrent `View`s coexist; a `Mutate` meanwhile returns `ErrConflict`
+immediately. A returned error does not roll a mutation back.
 
 `Scope` unwinds a multi-step construction that fails partway, so each
 acquisition no longer has to close everything opened before it:
@@ -186,7 +116,7 @@ defer frozen.Release()
 ```
 
 `Map` transforms an owned value into another type while keeping cleanup
-intact — unlike `IntoValue`, which exits ownership without running Drop:
+intact — unlike `Detach`, which exits ownership without running Drop:
 
 ```go
 writer, err := file.Map(
@@ -199,21 +129,66 @@ writer, err := file.Map(
 The callback must not close the source value itself: the source Drop still
 runs afterwards.
 
+## Transfer, sharing, and Drop
+
+```go
+moved, err := owner.Move()       // old owner becomes moved
+value, err := moved.Detach()     // exits ownership; Drop never runs
+
+owner, _ = ownership.New(value)
+shared, err := owner.IntoShared()
+peer, err := shared.Clone()      // explicit counted handle
+_ = peer.Release()
+owner, err = shared.IntoOwner()  // succeeds only when sole and unborrowed
+```
+
+`Release` and `Close` are exact aliases and idempotent. `Shared` exists for
+one reason: `Drop` runs when the *last* handle releases, deterministically,
+which the garbage collector cannot promise. Assigning a `*Shared` does not
+count a handle — call `Clone`.
+
+```go
+owner, err := ownership.New(
+    []byte("velocity"),
+    ownership.WithDrop(func(value []byte) error { clear(value); return nil }),
+    ownership.WithClone(func(value []byte) ([]byte, error) { return bytes.Clone(value), nil }),
+)
+copy, err := owner.Snapshot()
+```
+
+Drop runs at most once on final release; its first error is returned once
+and retained by `State`. A Clone is only as independent as its
+implementation; velocity cannot validate clone quality.
+
+## Advanced borrows
+
+For a borrow that must span a call boundary — a goroutine, a `dedupe` round.
+Always release; a leaked borrow blocks its cell until released.
+
+```go
+borrow, err := owner.Borrow()
+defer borrow.Release()
+
+first, err := borrow.Project(func(values []int) (int, error) { return values[0], nil })
+```
+
+Multiple reads coexist. A write borrow, move, or release during a read
+returns `ErrConflict` immediately. With `-tags=velocitydebug`, a borrow
+that becomes unreachable while held is logged through `slog.Default()` and
+released; production builds have no such net.
+
 ## Safety boundary
 
-This package enforces borrow state at runtime. It is not Rust ownership and does
-not add deep `const` to Go. A map, slice, pointer, interface, or projected value
-can retain aliases outside a callback. Use a correct Clone and `Snapshot` when
-isolation matters. See [`docs/ownership.md`](docs/ownership.md).
+Borrow state is enforced at runtime, on handles, not on data. A map, slice,
+pointer, or interface reached through a callback remains usable after the
+borrow ends, and nothing can revoke it. The guarantee is therefore exact for
+value types and porous for reference types; use a correct Clone and
+`Snapshot` when isolation matters.
 
 All user callbacks, Clone, and Drop functions must return normally. They must
 not panic or call `runtime.Goexit`; returned errors are the supported failure
 channel. Deferred scoped cleanup still releases borrows if a violating callback
 panics.
-
-With `-tags=velocitydebug`, leaked advanced borrows emit structured diagnostics
-through `slog.Default()`. Applications may configure any handler, including
-`tint`; velocity does not configure global logging.
 
 ## Opcodes and opruntime
 
@@ -327,7 +302,7 @@ results, err := owner.View(func(items []Item) ([]async.Outcome[Result], error) {
 ```
 
 `async.Broadcast` fans one `*ownership.Owner[T]` out to concurrent workers
-using `Owner[T].Read`'s existing concurrent-read guarantee. `async.Pipeline`
+using `Owner[T].View`'s existing concurrent-read guarantee. `async.Pipeline`
 chains heterogeneously-typed stages via a generic `Then[R any]` method.
 `async.Group` wraps `sync.WaitGroup.Go` with panic recovery and a
 context-aware `Close`.

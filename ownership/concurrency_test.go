@@ -194,7 +194,7 @@ func TestCallbackPanicReleasesBorrow(t *testing.T) {
 				t.Fatal("expected panic")
 			}
 		}()
-		_, _ = owner.Write(func(access ownership.WriteAccess[int]) (struct{}, error) {
+		_, _ = owner.Mutate(func(*int) (struct{}, error) {
 			panic("contract violation")
 		})
 	}()

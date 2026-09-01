@@ -1,9 +1,17 @@
 # Ownership model
 
-`ownership` enforces a small runtime state machine around values that remain
-inside its handles. It makes conflicting concurrent access observable and
-transfer explicit. It cannot provide compile-time alias analysis or deep
-immutability.
+`ownership` is a **deterministic cleanup and handoff** package: it decides
+when `Drop` runs, makes transfer between goroutines explicit, and unwinds
+partial construction. Its borrow checks are an **assertion layer** on top of
+that — a conflict is reported as a bug, immediately, never waited out. It
+cannot provide compile-time alias analysis or deep immutability, and it is
+not a substitute for a mutex where waiting is the right answer.
+
+That framing decides what is in the package. `NewCloser`, `Lease`, `Scope`,
+`pool`, `Frozen`, `Map`, and `Seal`/`Drained` are the shapes that pay off.
+Scoped `View`/`Mutate` are how a value is touched while owned; advanced
+`Borrow`/`BorrowMut` exist for a borrow that must span a call boundary and
+are otherwise avoided.
 
 ## Cell states
 
@@ -14,7 +22,7 @@ immutability.
         |         <-- IntoOwner (sole, unborrowed) --
         |
  unique -+-- Move -> unique
-        |-- IntoValue -> bare T (no Drop)
+        |-- Detach -> bare T (no Drop)
         |-- Map -> unique (new cell over U; this cell released)
         |
         |             Freeze
@@ -52,13 +60,13 @@ increment the handle count. Call `Clone` explicitly.
   handle can release while another handle owns a read; final release cannot.
 - User code never runs while the cell mutex is held. Compatible nested reads
   work; conflicting reentrant operations fail instead of deadlocking.
-- Callback accessors expire before the callback returns. Advanced handles
+- A scoped borrow lasts exactly as long as its callback. Advanced handles
   validate liveness on every Project/Update.
 
 ## Transfer and release
 
 `Move` returns a fresh Owner over the same cell and invalidates the old handle.
-`IntoValue` consumes the Owner and returns bare T without invoking Drop.
+`Detach` consumes the Owner and returns bare T without invoking Drop.
 `IntoShared` consumes unique ownership. `IntoOwner` is the inverse only when its
 Shared handle is the sole handle and there are no borrows.
 
@@ -70,18 +78,15 @@ later releases return nil immediately instead of waiting for Drop. Its error is
 returned by the first release only, retained in State after Drop returns, and
 not retried.
 
-`runtime.AddCleanup` protects only leaked advanced borrow leases and emits a
-leak diagnostic under `velocitydebug`. It never decrements Owner/Shared handle
-counts, invokes Drop, or provides deterministic correctness.
-
-That protection is most of the cost of an advanced borrow: it accounts for four
-of the five allocations `Borrow` makes. `BorrowUntracked` and
-`BorrowMutUntracked` skip it, and are otherwise identical in preconditions,
-conflicts, and returned type. They suit callers whose release is guaranteed on
-every path including panics — `dedupe`'s borrowed-input API is one — and are
-wrong anywhere release is merely intended, because a handle that is never
-released then blocks its cell permanently. Scoped `Read`/`Write` remain the
-default: they cannot leak and allocate once.
+A leaked advanced borrow blocks its cell until it is released, and production
+builds have no safety net for it. Under `-tags=velocitydebug` a
+`runtime.AddCleanup` fires once the handle is unreachable while still held,
+logs the leak through `slog.Default()`, and releases the lease so the test
+can continue. That is a diagnostic: it never decrements handle counts,
+invokes Drop, or runs at a predictable time, and an earlier design that
+registered it unconditionally paid four of an advanced borrow's five
+allocations to turn a deterministic wedge into a GC-timed heisenbug. Scoped
+`View`/`Mutate` remain the default: they cannot leak and allocate once.
 
 ## Retirement
 
@@ -151,19 +156,18 @@ readers (`Frozen`).
 | several resources acquired in sequence | `NewScope` |
 | anything else needing borrow enforcement | `New` |
 
-`View`/`Mutate` read and write without the intermediate accessor;
-`WithRead`/`WithWrite` are their error-only forms. All four keep the
-callback-scoped lifetime: the value must not outlive the call.
+`View`/`Mutate` read and write under a borrow that lasts exactly as long as
+the call; `WithRead`/`WithWrite` are their error-only forms. The value must
+not outlive the call.
 
-`Detach` and `IntoValue` are the same operation. `Detach` is the name to
-reach for, because it says what changes — the caller now owns cleanup, and
-Drop will never run. Reaching for either merely to pass a value through an
-API that wants a bare `T` is how resources leak.
+`Detach` is named for what changes — the caller now owns cleanup, and Drop
+will never run. Reaching for it merely to pass a value through an API that
+wants a bare `T` is how resources leak.
 
 ## Alias boundary
 
 Go assignment is shallow for slices, maps, pointers, channels, functions, and
-interfaces. `Project` receives T by assignment and `Update` receives a pointer
+interfaces. `View` receives T by assignment and `Mutate` receives a pointer
 to the cell value during an exclusive borrow. A callback can deliberately copy
 or retain an interior alias; the library cannot revoke it later. Pre-existing
 aliases from before `New` are equally invisible.
@@ -175,7 +179,7 @@ immutability. Do not describe this package as Rust-equivalent ownership or
 
 ## Callback contract
 
-Project, Update, Clone, and Drop callbacks must return normally and report
+View, Mutate, Project, Update, Clone, and Drop callbacks must return normally and report
 failure through errors. They must not panic or call `runtime.Goexit`. Scoped
 borrows still use deferred release so a panic does not strand the borrow state,
 but panic behavior is otherwise normal Go behavior and not part of the result

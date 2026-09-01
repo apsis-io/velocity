@@ -7,7 +7,8 @@ import (
 )
 
 // Broadcast runs read-only workers concurrently against one owned input.
-// Each worker receives a shallow value copy from an independent read borrow.
+// Each worker receives a shallow value copy under its own read borrow, which
+// Owner.View already permits concurrently.
 func Broadcast[T, R any](ctx context.Context, input *ownership.Owner[T], limit Limit, hooks Hooks, workers ...func(context.Context, T) (R, error)) ([]Outcome[R], error) {
 	if input == nil {
 		return nil, &PlanError{Index: -1, Cause: ErrNilOwner}
@@ -19,11 +20,7 @@ func Broadcast[T, R any](ctx context.Context, input *ownership.Owner[T], limit L
 			continue
 		}
 		tasks[i] = Task[R]{Run: func(taskCtx context.Context) (R, error) {
-			return input.Read(func(access ownership.ReadAccess[T]) (R, error) {
-				return access.Project(func(value T) (R, error) {
-					return worker(taskCtx, value)
-				})
-			})
+			return input.View(func(value T) (R, error) { return worker(taskCtx, value) })
 		}}
 	}
 	plan, err := NewPlan(limit, hooks, tasks...)

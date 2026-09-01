@@ -19,39 +19,33 @@ func mustOwner[T any](t *testing.T, value T, opts ...ownership.Option[T]) *owner
 	return owner
 }
 
-func TestOwnerReadWriteAndAccessorExpiry(t *testing.T) {
+func TestOwnerViewAndMutate(t *testing.T) {
 	owner := mustOwner(t, 10)
-	var read ownership.ReadAccess[int]
-	got, err := owner.Read(func(access ownership.ReadAccess[int]) (string, error) {
-		read = access
-		return access.Project(func(value int) (string, error) { return "value", nil })
-	})
+	got, err := owner.View(func(value int) (string, error) { return "value", nil })
 	if err != nil || got != "value" {
-		t.Fatalf("Read = (%q, %v)", got, err)
+		t.Fatalf("View = (%q, %v)", got, err)
 	}
-	if _, err := read.Project(func(value int) (int, error) { return value, nil }); !errors.Is(err, ownership.ErrReleased) {
-		t.Fatalf("expired read error = %v", err)
-	}
-
-	var write ownership.WriteAccess[int]
-	gotInt, err := owner.Write(func(access ownership.WriteAccess[int]) (int, error) {
-		write = access
-		return access.Update(func(value *int) (int, error) {
-			*value += 5
-			return *value, errors.New("committed")
-		})
+	// A returned error does not roll the mutation back.
+	gotInt, err := owner.Mutate(func(value *int) (int, error) {
+		*value += 5
+		return *value, errors.New("committed")
 	})
 	if gotInt != 15 || err == nil || err.Error() != "committed" {
-		t.Fatalf("Write = (%d, %v)", gotInt, err)
+		t.Fatalf("Mutate = (%d, %v)", gotInt, err)
 	}
-	if _, err := write.Update(func(value *int) (int, error) { return *value, nil }); !errors.Is(err, ownership.ErrReleased) {
-		t.Fatalf("expired write error = %v", err)
-	}
-	value, err := owner.Read(func(access ownership.ReadAccess[int]) (int, error) {
-		return access.Project(func(value int) (int, error) { return value, nil })
-	})
+	value, err := owner.View(func(value int) (int, error) { return value, nil })
 	if err != nil || value != 15 {
 		t.Fatalf("committed value = (%d, %v)", value, err)
+	}
+	// Nil callbacks are rejected before any borrow is taken.
+	if _, err := owner.View[int](nil); !errors.Is(err, ownership.ErrProjection) {
+		t.Fatalf("nil View = %v", err)
+	}
+	if err := owner.WithWrite(nil); !errors.Is(err, ownership.ErrProjection) {
+		t.Fatalf("nil WithWrite = %v", err)
+	}
+	if state := owner.State(); state.Readers != 0 || state.Writer {
+		t.Fatalf("state after rejected callbacks = %+v", state)
 	}
 }
 
@@ -110,9 +104,9 @@ func TestMoveIntoValueAndCleanup(t *testing.T) {
 	if err := owner.Release(); err != nil {
 		t.Fatal(err)
 	}
-	value, err := moved.IntoValue()
+	value, err := moved.Detach()
 	if err != nil || value != 7 {
-		t.Fatalf("IntoValue = (%d, %v)", value, err)
+		t.Fatalf("Detach = (%d, %v)", value, err)
 	}
 	if err := moved.Close(); err != nil {
 		t.Fatal(err)
@@ -145,9 +139,9 @@ func TestSharedCloneReleaseAndIntoOwner(t *testing.T) {
 	if err := shared.Close(); err != nil {
 		t.Fatal(err)
 	}
-	value, err := unwrapped.IntoValue()
+	value, err := unwrapped.Detach()
 	if err != nil || value != 3 {
-		t.Fatalf("IntoValue = (%d, %v)", value, err)
+		t.Fatalf("Detach = (%d, %v)", value, err)
 	}
 }
 
@@ -290,9 +284,7 @@ func TestSnapshotAndCloneValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	copyValue[0] = 99
-	original, err := owner.Read(func(access ownership.ReadAccess[[]int]) (int, error) {
-		return access.Project(func(value []int) (int, error) { return value[0], nil })
-	})
+	original, err := owner.View(func(value []int) (int, error) { return value[0], nil })
 	if err != nil || original != 1 {
 		t.Fatalf("original = (%d, %v)", original, err)
 	}
@@ -317,11 +309,11 @@ func TestOptionsAndProjectionErrors(t *testing.T) {
 		t.Fatalf("duplicate clone = %v", err)
 	}
 	owner := mustOwner(t, 1)
-	if _, err := owner.Read[string](nil); !errors.Is(err, ownership.ErrProjection) {
-		t.Fatalf("nil Read callback = %v", err)
+	if _, err := owner.View[string](nil); !errors.Is(err, ownership.ErrProjection) {
+		t.Fatalf("nil View callback = %v", err)
 	}
-	if _, err := owner.Write[string](nil); !errors.Is(err, ownership.ErrProjection) {
-		t.Fatalf("nil Write callback = %v", err)
+	if _, err := owner.Mutate[string](nil); !errors.Is(err, ownership.ErrProjection) {
+		t.Fatalf("nil Mutate callback = %v", err)
 	}
 }
 

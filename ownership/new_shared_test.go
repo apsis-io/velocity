@@ -37,18 +37,14 @@ func TestNewSharedBorrowsAndScopedAccess(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = write.Release()
-	_, err = shared.Write(func(access ownership.WriteAccess[int]) (struct{}, error) {
-		return access.Update(func(value *int) (struct{}, error) {
-			*value++
-			return struct{}{}, nil
-		})
+	_, err = shared.Mutate(func(value *int) (struct{}, error) {
+		*value++
+		return struct{}{}, nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := shared.Read(func(access ownership.ReadAccess[int]) (int, error) {
-		return access.Project(func(value int) (int, error) { return value, nil })
-	})
+	value, err := shared.View(func(value int) (int, error) { return value, nil })
 	if err != nil || value != 3 {
 		t.Fatalf("Read = (%d, %v)", value, err)
 	}
@@ -75,9 +71,9 @@ func TestNewSharedCloneAndIntoOwner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	value, err := owner.IntoValue()
+	value, err := owner.Detach()
 	if err != nil || value != 1 {
-		t.Fatalf("IntoValue = (%d, %v)", value, err)
+		t.Fatalf("Detach = (%d, %v)", value, err)
 	}
 }
 
@@ -95,9 +91,7 @@ func TestNewSharedDropAndSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshot[0] = 9
-	original, err := shared.Read(func(access ownership.ReadAccess[[]int]) (int, error) {
-		return access.Project(func(value []int) (int, error) { return value[0], nil })
-	})
+	original, err := shared.View(func(value []int) (int, error) { return value[0], nil })
 	if err != nil || original != 1 {
 		t.Fatalf("original = (%d, %v)", original, err)
 	}

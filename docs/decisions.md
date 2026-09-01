@@ -137,6 +137,39 @@ This records current selections, not superseded planning alternatives.
   Scoped `Read`/`Write` stay the default — they cannot leak and allocate
   once.
 
+## Ownership repositioned (implemented)
+
+A design review concluded that `ownership`'s resource-pattern layer was good
+and its generic runtime-borrow-checker core promised more than Go can
+deliver: borrow enforcement is exact for value types, which rarely need it,
+and porous for reference types, where a projected alias can never be
+revoked; and `ErrConflict`-on-contention is the wrong default for shared
+state, where waiting (`RWMutex`) is what callers want. The package is now
+positioned as **deterministic cleanup and handoff, with borrow checks as an
+assertion layer**, and the API was cut to match:
+
+- `ReadAccess`/`WriteAccess` and `Read`/`Write` are gone. `View`/`Mutate`
+  and `WithRead`/`WithWrite` were already the ergonomic form and the older
+  layer only added a second level of ceremony for the same lifetime. Scoped
+  access now holds the lease directly through one shared helper per
+  direction; a scoped read dropped from ~141 ns to ~100 ns because two
+  closures went with it.
+- `IntoValue` is gone; `Detach` is the name, because it says what changes.
+- `BorrowUntracked`/`BorrowMutUntracked` are gone, and so is the
+  unconditional `runtime.AddCleanup` on advanced borrows. In production a
+  leaked borrow blocks its cell until released — a deterministic, visible
+  failure — rather than being silently reclaimed at whatever moment the GC
+  chooses, which turned a bug into a heisenbug and cost four of five
+  allocations. Under `-tags=velocitydebug` the cleanup still registers,
+  logs the leak, and releases. `Borrow` is now ~164 ns / 2 allocs from
+  ~385 ns / 5.
+- `Shared` stays. Hand-counted handles in a GC'd language exist for exactly
+  one thing, running `Drop` deterministically on the last release, and
+  that is also the hook a future manual-free runtime proposal would need;
+  a `Drop` that can return memory is only useful if something knows when
+  the last user is gone.
+- The no-wait invariant is untouched. It is the design.
+
 ## Opcodes and opruntime (implemented)
 
 - `opcodes` defines plain `Op`/`Instruction` data shapes only. No binary

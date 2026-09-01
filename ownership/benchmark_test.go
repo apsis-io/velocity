@@ -30,9 +30,7 @@ func BenchmarkOwner(b *testing.B) {
 		defer owner.Release()
 		b.ReportAllocs()
 		for b.Loop() {
-			ownershipSink, _ = owner.Read(func(access ownership.ReadAccess[int]) (int, error) {
-				return access.Project(func(value int) (int, error) { return value, nil })
-			})
+			ownershipSink, _ = owner.View(func(value int) (int, error) { return value, nil })
 		}
 	})
 	b.Run("advanced-read", func(b *testing.B) {
@@ -45,24 +43,12 @@ func BenchmarkOwner(b *testing.B) {
 			_ = borrow.Release()
 		}
 	})
-	b.Run("advanced-read-untracked", func(b *testing.B) {
-		owner, _ := ownership.New(1)
-		defer owner.Release()
-		b.ReportAllocs()
-		for b.Loop() {
-			borrow, _ := owner.BorrowUntracked()
-			ownershipSink, _ = borrow.Project(func(value int) (int, error) { return value, nil })
-			_ = borrow.Release()
-		}
-	})
 	b.Run("scoped-write", func(b *testing.B) {
 		owner, _ := ownership.New(1)
 		defer owner.Release()
 		b.ReportAllocs()
 		for b.Loop() {
-			ownershipSink, _ = owner.Write(func(access ownership.WriteAccess[int]) (int, error) {
-				return access.Update(func(value *int) (int, error) { *value++; return *value, nil })
-			})
+			ownershipSink, _ = owner.Mutate(func(value *int) (int, error) { *value++; return *value, nil })
 		}
 	})
 	b.Run("move", func(b *testing.B) {
@@ -70,7 +56,7 @@ func BenchmarkOwner(b *testing.B) {
 		for b.Loop() {
 			owner, _ := ownership.New(1)
 			moved, _ := owner.Move()
-			ownershipSink, _ = moved.IntoValue()
+			ownershipSink, _ = moved.Detach()
 		}
 	})
 	b.Run("conflict", func(b *testing.B) {
@@ -111,9 +97,7 @@ func BenchmarkShared(b *testing.B) {
 		b.RunParallel(func(pb *testing.PB) {
 			for pb.Next() {
 				clone, _ := shared.Clone()
-				ownershipSink, _ = clone.Read(func(access ownership.ReadAccess[int]) (int, error) {
-					return access.Project(func(value int) (int, error) { return value, nil })
-				})
+				ownershipSink, _ = clone.View(func(value int) (int, error) { return value, nil })
 				_ = clone.Release()
 			}
 		})
@@ -124,7 +108,7 @@ func BenchmarkShared(b *testing.B) {
 			owner, _ := ownership.New(1)
 			shared, _ := owner.IntoShared()
 			owner, _ = shared.IntoOwner()
-			ownershipSink, _ = owner.IntoValue()
+			ownershipSink, _ = owner.Detach()
 		}
 	})
 }

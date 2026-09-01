@@ -3,7 +3,7 @@ package ownership
 import "errors"
 
 // Map consumes this Owner and returns one over a value derived from it,
-// preserving cleanup. It exists because IntoValue is otherwise the only exit
+// preserving cleanup. It exists because Detach is otherwise the only exit
 // from ownership and deliberately does not run Drop, so wrapping an owned
 // resource by hand silently discards the original Drop.
 //

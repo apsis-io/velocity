@@ -73,115 +73,41 @@ func (o *Owner[T]) BorrowMut() (*WriteBorrow[T], error) {
 	return newWriteBorrow(lease), nil
 }
 
-// BorrowUntracked is Borrow without the runtime cleanup that reclaims a
-// leaked borrow. It allocates less, but a caller that never releases the
-// returned handle blocks this cell permanently rather than having the borrow
-// reclaimed once the handle becomes unreachable.
+// View runs fn against the value under a read borrow that lasts exactly as
+// long as the call. Concurrent Views coexist; a Mutate meanwhile reports
+// ErrConflict.
 //
-// Prefer the scoped Read, which cannot leak. Prefer Borrow whenever release
-// is not obviously guaranteed on every path, including panics.
-func (o *Owner[T]) BorrowUntracked() (*ReadBorrow[T], error) {
-	if o == nil || o.c == nil {
-		return nil, &ReleasedError{Operation: OpBorrow}
-	}
-	lease, err := o.c.acquireRead(&o.h, modeUnique)
-	if err != nil {
-		return nil, err
-	}
-	return newUntrackedReadBorrow(lease), nil
-}
-
-// BorrowMutUntracked is BorrowMut with the same trade BorrowUntracked makes.
-func (o *Owner[T]) BorrowMutUntracked() (*WriteBorrow[T], error) {
-	if o == nil || o.c == nil {
-		return nil, &ReleasedError{Operation: OpBorrowMut}
-	}
-	lease, err := o.c.acquireWrite(&o.h, modeUnique)
-	if err != nil {
-		return nil, err
-	}
-	return newUntrackedWriteBorrow(lease), nil
-}
-
-// Read runs fn under a callback-scoped shared read borrow.
-func (o *Owner[T]) Read[R any](fn func(ReadAccess[T]) (R, error)) (R, error) {
-	if fn == nil {
-		var zero R
-		return zero, &ProjectionError{Operation: OpProject}
-	}
-	if o == nil || o.c == nil {
+// fn receives a shallow copy that must not outlive the call. Retaining a
+// slice, map, pointer, or interface reached through it escapes the borrow,
+// and nothing can revoke it afterwards.
+func (o *Owner[T]) View[R any](fn func(T) (R, error)) (R, error) {
+	if o == nil {
 		var zero R
 		return zero, &ReleasedError{Operation: OpBorrow}
 	}
-	lease, err := o.c.acquireRead(&o.h, modeUnique)
-	if err != nil {
-		var zero R
-		return zero, err
-	}
-	defer lease.closeScoped()
-	return fn(ReadAccess[T]{lease: lease})
+	return scopedView(o.c, &o.h, modeUnique, fn)
 }
 
-// Write runs fn under a callback-scoped exclusive mutable borrow.
-func (o *Owner[T]) Write[R any](fn func(WriteAccess[T]) (R, error)) (R, error) {
-	if fn == nil {
-		var zero R
-		return zero, &ProjectionError{Operation: OpUpdate}
-	}
-	if o == nil || o.c == nil {
+// Mutate runs fn with exclusive mutable access under a write borrow that
+// lasts exactly as long as the call. Mutations are not rolled back when fn
+// returns an error.
+func (o *Owner[T]) Mutate[R any](fn func(*T) (R, error)) (R, error) {
+	if o == nil {
 		var zero R
 		return zero, &ReleasedError{Operation: OpBorrowMut}
 	}
-	lease, err := o.c.acquireWrite(&o.h, modeUnique)
-	if err != nil {
-		var zero R
-		return zero, err
-	}
-	defer lease.closeScoped()
-	return fn(WriteAccess[T]{lease: lease})
-}
-
-// View runs fn against the value under a callback-scoped read borrow. It is
-// Read without the intermediate ReadAccess, for the common case of projecting
-// a value out.
-//
-// The same lifetime rule applies: fn receives a shallow copy that must not
-// outlive the call. Retaining a slice, map, pointer, or interface reached
-// through it escapes the borrow.
-func (o *Owner[T]) View[R any](fn func(T) (R, error)) (R, error) {
-	if fn == nil {
-		var zero R
-		return zero, &ProjectionError{Operation: OpProject}
-	}
-	return o.Read(func(access ReadAccess[T]) (R, error) { return access.Project(fn) })
-}
-
-// Mutate runs fn against the value under a callback-scoped exclusive borrow.
-// It is Write without the intermediate WriteAccess. Mutations are not rolled
-// back when fn returns an error.
-func (o *Owner[T]) Mutate[R any](fn func(*T) (R, error)) (R, error) {
-	if fn == nil {
-		var zero R
-		return zero, &ProjectionError{Operation: OpUpdate}
-	}
-	return o.Write(func(access WriteAccess[T]) (R, error) { return access.Update(fn) })
+	return scopedMutate(o.c, &o.h, modeUnique, fn)
 }
 
 // WithRead is View for callbacks that report only an error.
 func (o *Owner[T]) WithRead(fn func(T) error) error {
-	if fn == nil {
-		return &ProjectionError{Operation: OpProject}
-	}
-	_, err := o.View(func(value T) (struct{}, error) { return struct{}{}, fn(value) })
+	_, err := o.View(errOnly(fn))
 	return err
 }
 
 // WithWrite is Mutate for callbacks that report only an error.
 func (o *Owner[T]) WithWrite(fn func(*T) error) error {
-	if fn == nil {
-		return &ProjectionError{Operation: OpUpdate}
-	}
-	_, err := o.Mutate(func(value *T) (struct{}, error) { return struct{}{}, fn(value) })
+	_, err := o.Mutate(errOnly(fn))
 	return err
 }
 
@@ -203,9 +129,7 @@ func (o *Owner[T]) Snapshot() (T, error) {
 		var zero T
 		return zero, &NoCloneError{Operation: OpSnapshot}
 	}
-	return o.Read(func(access ReadAccess[T]) (T, error) {
-		return access.Project(clone)
-	})
+	return o.View(clone)
 }
 
 // Move transfers the cell to a fresh Owner and invalidates this handle.
@@ -236,28 +160,21 @@ func (o *Owner[T]) Move() (*Owner[T], error) {
 // merely to pass a value through an API that wants a bare T, because nothing
 // will close what the Owner was going to close. Release is the operation that
 // keeps cleanup with the Owner.
-//
-// Detach is an exact alias of IntoValue, named for what it does to ownership
-// rather than for the value it returns.
-func (o *Owner[T]) Detach() (T, error) { return o.IntoValue() }
-
-// IntoValue consumes this Owner and returns the bare value without running Drop.
-// See Detach, which is the same operation named after its effect on cleanup.
-func (o *Owner[T]) IntoValue() (T, error) {
+func (o *Owner[T]) Detach() (T, error) {
 	if o == nil || o.c == nil {
 		var zero T
-		return zero, &ReleasedError{Operation: OpIntoValue}
+		return zero, &ReleasedError{Operation: OpDetach}
 	}
 	c := o.c
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if err := c.checkHandle(&o.h, OpIntoValue); err != nil {
+	if err := c.checkHandle(&o.h, OpDetach); err != nil {
 		var zero T
 		return zero, err
 	}
 	if c.mode != modeUnique || o.h.borrows != 0 || c.readers != 0 || c.writer {
 		var zero T
-		return zero, c.conflictLocked(OpIntoValue)
+		return zero, c.conflictLocked(OpDetach)
 	}
 	value := c.value
 	var zero T

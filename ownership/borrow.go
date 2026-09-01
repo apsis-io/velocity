@@ -89,10 +89,13 @@ func (l *lease[T]) release(op Operation) (released bool, err error) {
 // ReadBorrow is an explicitly released shared read borrow. It must not be
 // copied after first use.
 //
-// Only the advanced borrow vocabulary allocates this wrapper and registers a
-// runtime cleanup, because only an advanced borrow can be leaked. Scoped
-// Read/Write hold the lease directly and release it by defer, so they need
-// neither.
+// Only the advanced borrow vocabulary allocates this wrapper, because only an
+// advanced borrow can be leaked: scoped View/Mutate hold the lease directly
+// and release it by defer. A leaked ReadBorrow blocks its cell until it is
+// released; there is no runtime safety net. Under -tags=velocitydebug a
+// runtime cleanup detects the leak once the handle is unreachable, logs it,
+// and releases the lease so tests keep going. That is a diagnostic, not a
+// guarantee, and production builds do not pay for it.
 type ReadBorrow[T any] struct {
 	_ noCopy
 
@@ -102,14 +105,8 @@ type ReadBorrow[T any] struct {
 
 func newReadBorrow[T any](lease *lease[T]) *ReadBorrow[T] {
 	borrow := &ReadBorrow[T]{lease: lease}
-	borrow.cleanup = runtime.AddCleanup(borrow, cleanupLease[T], lease)
+	borrow.cleanup = trackLeak(borrow, lease)
 	return borrow
-}
-
-// newUntrackedReadBorrow omits the cleanup registration. A zero runtime.Cleanup
-// tolerates Stop, so Release and closeScoped need no special case.
-func newUntrackedReadBorrow[T any](lease *lease[T]) *ReadBorrow[T] {
-	return &ReadBorrow[T]{lease: lease}
 }
 
 // Project invokes fn with a shallow copy of T while this borrow remains live.
@@ -163,14 +160,8 @@ type WriteBorrow[T any] struct {
 
 func newWriteBorrow[T any](lease *lease[T]) *WriteBorrow[T] {
 	borrow := &WriteBorrow[T]{lease: lease}
-	borrow.cleanup = runtime.AddCleanup(borrow, cleanupLease[T], lease)
+	borrow.cleanup = trackLeak(borrow, lease)
 	return borrow
-}
-
-// newUntrackedWriteBorrow omits the cleanup registration, as
-// newUntrackedReadBorrow does.
-func newUntrackedWriteBorrow[T any](lease *lease[T]) *WriteBorrow[T] {
-	return &WriteBorrow[T]{lease: lease}
 }
 
 // Update invokes fn with exclusive mutable access while this borrow remains
@@ -204,10 +195,3 @@ func (b *WriteBorrow[T]) Release() error {
 
 // Close is an exact alias of Release.
 func (b *WriteBorrow[T]) Close() error { return b.Release() }
-
-func cleanupLease[T any](lease *lease[T]) {
-	released, _ := lease.release(OpRelease)
-	if released {
-		logLeakedBorrow(lease.id, lease.kind)
-	}
-}

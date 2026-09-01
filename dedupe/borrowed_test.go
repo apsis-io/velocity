@@ -133,9 +133,7 @@ func TestDoBorrowedMutPublishesAfterLoanRelease(t *testing.T) {
 	if state := input.State(); state.Readers != 0 || state.Writer {
 		t.Fatalf("input at publication = %+v", state)
 	}
-	value, err := input.Read(func(access ownership.ReadAccess[int]) (int, error) {
-		return access.Project(func(value int) (int, error) { return value, nil })
-	})
+	value, err := input.View(func(value int) (int, error) { return value, nil })
 	if err != nil || value != 7 {
 		t.Fatalf("input = (%d, %v)", value, err)
 	}

@@ -1,282 +1,190 @@
 # Ownership cheatsheet
 
-Runtime lifecycle and borrow-state enforcement for Go values—useful with [[ownership]], [[Go ownership]], [[Go generics]], [[Structured concurrency]], and [[Resource cleanup]], but not compile-time or deep ownership.
+Deterministic cleanup and handoff for Go values, with borrow checks as a
+runtime assertion layer. Not compile-time ownership, not deep immutability.
 
-Canonical package: `github.com/apsis-io/velocity/ownership`  
-Detailed model: [[ownership design]] / [ownership.md](ownership.md)  
-Project guide: [README.md](../README.md)
+Canonical package: `github.com/apsis-io/velocity/ownership`
+Model and reasoning: [ownership.md](ownership.md) · Project guide: [README.md](../README.md)
+
+## Pick the entry point
+
+| shape | use |
+|---|---|
+| an `io.Closer` to own | `NewCloser(c)` |
+| a value with custom cleanup | `New(v, WithDrop(...))` |
+| a read-only value to publish | `NewFrozen(v)` / `owner.Freeze()` |
+| a permit, allocation, or reference to hand back | `NewLease(v, release)` |
+| several resources acquired in sequence | `NewScope()` |
+| a bounded set of reusable resources | `pool.New(...)` — checkouts are leases |
+| counted handles with `Drop` on the last | `NewShared(v)` / `owner.IntoShared()` |
+
+If a plain `defer Close()` would do, use that. Ownership earns its ceremony
+only where a lifetime mistake leaks, closes early, uses after close, or makes
+a goroutine handoff ambiguous.
 
 ## Lifecycle at a glance
 
 ```text
-New(value) -> Owner[T]
+New / NewCloser -> Owner[T]
 
-Owner.Move()       -> Owner[T]  // old handle becomes moved
-Owner.IntoValue()  -> T         // leaves ownership; Drop does not run
-Owner.IntoShared() -> Shared[T]
+Owner.Move()       -> Owner[T]    // old handle spent (ErrMoved)
+Owner.Detach()     -> T           // leaves ownership; Drop never runs
+Owner.Map(fn)      -> Owner[U]    // new type, Drop chain preserved
+Owner.IntoShared() -> Shared[T]   // counted; Clone adds a handle
+Owner.Freeze()     -> Frozen[T]   // counted, read-only by type
 
-Shared.Clone()     -> Shared[T] // explicit counted handle
-Shared.IntoOwner() -> Owner[T]  // only sole + unborrowed
+Shared.IntoOwner() / Frozen.IntoOwner() -> Owner[T]  // sole + unborrowed only
 
-final Owner/Shared Release() or Close() -> Drop once
+Seal()  -> no new borrows, irreversible
+Drained() <-chan struct{}         // closed once sealed and borrow-free
+
+final Release() or Close() -> Drop runs once
 ```
 
-## Construction and traits
+## Construction
 
 ```go
-type Option[T any] interface { /* sealed */ }
-
 func New[T any](value T, opts ...Option[T]) (*Owner[T], error)
-func WithDrop[T any](drop traits.Drop[T]) Option[T]
-func WithClone[T any](clone traits.Clone[T]) Option[T]
+func NewCloser[T io.Closer](value T) *Owner[T]              // cannot fail
+func NewShared[T any](value T, opts ...Option[T]) (*Shared[T], error)
+func NewFrozen[T any](value T, opts ...Option[T]) (*Frozen[T], error)
+func NewLease[T any](value T, release func(T) error) (*Lease[T], error)
+func NewScope() *Scope
 
-// github.com/apsis-io/velocity/traits
-type Drop[T any] func(T) error
-type Clone[T any] func(T) (T, error)
+func WithDrop[T any](drop traits.Drop[T]) Option[T]     // func(T) error
+func WithClone[T any](clone traits.Clone[T]) Option[T]  // func(T) (T, error); enables Snapshot
+```
+
+## Scoped access — the default
+
+The borrow lasts exactly as long as the call. The value must not outlive it.
+
+```go
+func (o *Owner[T]) View[R any](fn func(T) (R, error)) (R, error)
+func (o *Owner[T]) Mutate[R any](fn func(*T) (R, error)) (R, error)
+func (o *Owner[T]) WithRead(fn func(T) error) error
+func (o *Owner[T]) WithWrite(fn func(*T) error) error
+// Shared has all four; Frozen has View and WithRead only.
 ```
 
 ```go
-owner, err := ownership.New(
-    value,
-    ownership.WithDrop(func(value Resource) error {
-        return value.Close()
-    }),
-    ownership.WithClone(func(value Resource) (Resource, error) {
-        return value.Clone()
-    }),
-)
-if err != nil {
-    return err
-}
-defer owner.Release()
+name, err := cfg.View(func(c Config) (string, error) { return c.Name, nil })
+err = cfg.WithWrite(func(c *Config) error { c.Retries++; return nil })
 ```
 
-## Exact handle API
+Concurrent `View`s coexist. A `Mutate` during a `View`, or any access during
+a `Mutate`, returns `ErrConflict` immediately — nothing waits. A returned
+error does not roll a mutation back.
+
+## Advanced borrows — explicit lifetime
+
+For a borrow that must span a call boundary (a goroutine, a dedupe round).
+Always release; a leaked borrow blocks its cell until it is released.
 
 ```go
-type Owner[T any] struct { /* unexported; do not copy */ }
-
-func (o *Owner[T]) Read[R any](func(ReadAccess[T]) (R, error)) (R, error)
-func (o *Owner[T]) Write[R any](func(WriteAccess[T]) (R, error)) (R, error)
 func (o *Owner[T]) Borrow() (*ReadBorrow[T], error)
 func (o *Owner[T]) BorrowMut() (*WriteBorrow[T], error)
+
+func (b *ReadBorrow[T]) Project[R any](fn func(T) (R, error)) (R, error)
+func (b *WriteBorrow[T]) Update[R any](fn func(*T) (R, error)) (R, error)
+func (b *ReadBorrow[T]) Release() error   // idempotent; Close is an alias
+```
+
+Under `-tags=velocitydebug`, a borrow that becomes unreachable while still
+held is logged through `slog.Default()` and released. Production builds have
+no such net; that is deliberate, and why `Borrow` is cheap there.
+
+## Transfer
+
+```go
 func (o *Owner[T]) Move() (*Owner[T], error)
-func (o *Owner[T]) IntoValue() (T, error)
+func (o *Owner[T]) Detach() (T, error)
+func (o *Owner[T]) Map[U any](fn func(T) (U, error), opts ...Option[U]) (*Owner[U], error)
 func (o *Owner[T]) IntoShared() (*Shared[T], error)
-func (o *Owner[T]) Snapshot() (T, error)
-func (o *Owner[T]) State() State
-func (o *Owner[T]) Release() error
-func (o *Owner[T]) Close() error
-```
-
-```go
-type Shared[T any] struct { /* unexported; do not copy */ }
-
+func (o *Owner[T]) Freeze() (*Frozen[T], error)
 func (s *Shared[T]) Clone() (*Shared[T], error)
-func (s *Shared[T]) Read[R any](func(ReadAccess[T]) (R, error)) (R, error)
-func (s *Shared[T]) Write[R any](func(WriteAccess[T]) (R, error)) (R, error)
-func (s *Shared[T]) Borrow() (*ReadBorrow[T], error)
-func (s *Shared[T]) BorrowMut() (*WriteBorrow[T], error)
 func (s *Shared[T]) IntoOwner() (*Owner[T], error)
-func (s *Shared[T]) Snapshot() (T, error)
-func (s *Shared[T]) State() State
-func (s *Shared[T]) Release() error
-func (s *Shared[T]) Close() error
+func (f *Frozen[T]) Clone() (*Frozen[T], error)
+func (f *Frozen[T]) IntoOwner() (*Owner[T], error)
 ```
 
-`Close` is an exact alias for `Release`. Assigning a `*Shared[T]` pointer does not create another counted handle; call `Clone`.
+Every transfer requires no outstanding borrows and fails with `ErrConflict`
+otherwise. `Detach` is the only exit that skips `Drop`; reaching for it to
+pass a bare `T` through an API is how resources leak. `Map`'s callback must
+not close the source value — the source `Drop` still runs, after the derived
+one.
 
-## Scoped access—the default
-
-```go
-type ReadAccess[T any] struct { /* scoped */ }
-func (a ReadAccess[T]) Project[R any](func(T) (R, error)) (R, error)
-
-type WriteAccess[T any] struct { /* scoped */ }
-func (a WriteAccess[T]) Update[R any](func(*T) (R, error)) (R, error)
-```
+## Retirement
 
 ```go
-name, err := owner.Read(func(access ownership.ReadAccess[Config]) (string, error) {
-    return access.Project(func(cfg Config) (string, error) {
-        return cfg.Name, nil
-    })
-})
-
-_, err = owner.Write(func(access ownership.WriteAccess[Config]) (struct{}, error) {
-    return access.Update(func(cfg *Config) (struct{}, error) {
-        cfg.Enabled = true
-        return struct{}{}, nil
-    })
-})
-```
-
-The capability expires when the outer `Read`/`Write` callback returns. An access callback already running in another goroutine may finish; new calls through the escaped capability return `ErrReleased`, and the borrow is released when the final active callback ends.
-
-## Advanced explicit borrows
-
-```go
-type ReadBorrow[T any] struct { /* unexported; do not copy */ }
-func (b *ReadBorrow[T]) Project[R any](func(T) (R, error)) (R, error)
-func (b *ReadBorrow[T]) Release() error
-func (b *ReadBorrow[T]) Close() error
-
-type WriteBorrow[T any] struct { /* unexported; do not copy */ }
-func (b *WriteBorrow[T]) Update[R any](func(*T) (R, error)) (R, error)
-func (b *WriteBorrow[T]) Release() error
-func (b *WriteBorrow[T]) Close() error
+func (o *Owner[T]) Seal() error
+func (o *Owner[T]) Drained() <-chan struct{}
 ```
 
 ```go
-read, err := owner.Borrow()
-if err != nil {
-    return err
+owner.Seal()
+select {
+case <-owner.Drained():
+case <-ctx.Done():
+    return ctx.Err()
 }
-defer read.Release()
-value, err := read.Project(func(value T) (T, error) { return value, nil })
-
-write, err := owner.BorrowMut()
-if err != nil {
-    return err
-}
-defer write.Release()
-_, err = write.Update(func(value *T) (struct{}, error) {
-    // mutate value
-    return struct{}{}, nil
-})
+return owner.Release()
 ```
 
-Advanced Release is linearizable. During an active Project/Update it returns `ErrConflict`; retry after the callback ends. Nil means released or already released—never deferred.
+The wait is yours: nothing in the package blocks, which is what makes it
+unable to deadlock.
 
-## Sharing and conversion
+## Lease and Scope
 
 ```go
-shared, err := owner.IntoShared()
-if err != nil {
-    return err
-}
-defer shared.Release()
+func (l *Lease[T]) Value() (T, error)   // ErrReleased once handed back
+func (l *Lease[T]) Held() bool
+func (l *Lease[T]) Move() (*Lease[T], error)
+func (l *Lease[T]) Release() error      // exactly once; repeats return the first error
 
-peer, err := shared.Clone()
-if err != nil {
-    return err
-}
-if err := peer.Release(); err != nil {
-    return err
-}
-
-owner, err = shared.IntoOwner() // succeeds only when sole + unborrowed
+func (s *Scope) Own[T any](owner *Owner[T]) error   // moves the owner in
+func (s *Scope) OwnCloser(closer io.Closer) error
+func (s *Scope) OnRelease(release func() error) error
+func (s *Scope) Disarm() int            // success path: the built value owns them now
+func (s *Scope) Close() error           // LIFO, continues past failures, errors joined
 ```
-
-A failed `IntoOwner` leaves the Shared handle unchanged.
-
-## Snapshot
 
 ```go
-owner, err := ownership.New(
-    []byte("secret"),
-    ownership.WithClone(func(value []byte) ([]byte, error) {
-        return bytes.Clone(value), nil
-    }),
-)
-snapshot, err := owner.Snapshot()
+scope := ownership.NewScope()
+defer scope.Close()
+conn, err := dial(); if err != nil { return nil, err }
+_ = scope.OwnCloser(conn)
+raw, err := dial(); if err != nil { return nil, err }   // scope.Close closes conn
+_ = scope.OwnCloser(raw)
+scope.Disarm()
+return &Bundle{conn, raw}, nil
 ```
 
-Snapshot validates handle liveness first, temporarily read-borrows, then calls Clone outside lifecycle locks. Without Clone it returns `ErrNoClone`.
-
-## State
+## State and errors
 
 ```go
 type State struct {
-    Shared    bool
-    Released  bool
-    Moved     bool
-    Readers   int
+    Shared, Frozen, Sealed, Released, Moved bool
+    Readers, Shares int
     Writer    bool
-    Shares    int
     DropError error
 }
+func (o *Owner[T]) State() State   // also on Shared and Frozen
 ```
 
-`State` is synchronized and never contains the owned value.
+Sentinels: `ErrConflict`, `ErrMoved`, `ErrReleased`, `ErrSealed`,
+`ErrNoClone`, `ErrProjection`, `ErrInvalidConfig`, `ErrDuplicateOption`,
+`ErrNilOption`, `ErrScopeClosed`. Typed wrappers (`ConflictError`,
+`MovedError`, `ReleasedError`, `SealedError`, `ScopeError`, `ConfigError`,
+…) carry the `Operation` and unwrap to the sentinel.
 
-## Errors
+## Contract
 
-```go
-var (
-    ErrConflict        error
-    ErrMoved           error
-    ErrReleased        error
-    ErrNoClone         error
-    ErrInvalidConfig   error
-    ErrProjection      error
-    ErrDuplicateOption error
-    ErrNilOption       error
-)
-
-type ConflictError struct {
-    Operation Operation
-    Readers   int
-    Writer    bool
-    Shares    int
-}
-type MovedError struct{ Operation Operation }
-type ReleasedError struct{ Operation Operation }
-type NoCloneError struct{ Operation Operation }
-type ProjectionError struct{ Operation Operation }
-type ConfigError struct {
-    Option string
-    Reason error
-}
-```
-
-```go
-if errors.Is(err, ownership.ErrConflict) {
-    var conflict *ownership.ConflictError
-    if errors.As(err, &conflict) {
-        log.Printf("%s: readers=%d writer=%t shares=%d",
-            conflict.Operation, conflict.Readers, conflict.Writer, conflict.Shares)
-    }
-}
-```
-
-```go
-type Operation string
-
-const (
-    OpBorrow      Operation = "borrow"
-    OpBorrowMut   Operation = "borrow mutable"
-    OpMove        Operation = "move"
-    OpIntoValue   Operation = "into value"
-    OpIntoShared  Operation = "into shared"
-    OpClone       Operation = "clone shared"
-    OpIntoOwner   Operation = "into owner"
-    OpRelease     Operation = "release"
-    OpProject     Operation = "project"
-    OpUpdate      Operation = "update"
-    OpSnapshot    Operation = "snapshot"
-)
-```
-
-## Concurrency guarantees
-
-- Multiple read borrows and projections may coexist.
-- One write borrow excludes all readers and writers.
-- Overlapping Update calls through the same write capability return `ErrConflict`.
-- Borrow conflicts fail immediately; ownership never waits for access.
-- Successful Release completes its state transition before returning.
-- Final release marks the cell released and detaches the value before Drop.
-- Only the first final releaser runs Drop; reentrant/concurrent later Release calls return nil without waiting.
-- Drop errors go to the first releaser and then remain visible in `State.DropError`.
-- Project, Update, Clone, and Drop callbacks must return normally—not panic or call `runtime.Goexit`.
-
-## What ownership cannot enforce
-
-- Pre-existing aliases created before `New`.
-- Maps, slices, pointers, interfaces, channels, or interior pointers retained by callbacks.
-- Deep immutability or Go `const` semantics.
-- Transactional rollback when Update returns an error.
-- Whether Clone really returns independent storage.
-- Compile-time moves, lifetime analysis, or Rust-equivalent ownership.
-
-See [[Go ownership]], [[Resource cleanup]], and the detailed [ownership design](ownership.md) before relying on the safety boundary.
+- Callbacks return normally. A panic in a scoped callback still releases the
+  borrow; everything else about it is ordinary Go.
+- `Drop` runs at most once, on final release, outside the lock; its first
+  error is returned once and retained in `State.DropError`.
+- Assigning a `*Shared` or `*Frozen` does not count a handle. Call `Clone`.
+- Aliases are invisible: a slice, map, pointer, or interface reached through a
+  callback remains usable after the borrow ends. Use `Snapshot` with a real
+  `Clone` when isolation matters.

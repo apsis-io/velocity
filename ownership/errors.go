@@ -24,7 +24,7 @@ const (
 	OpBorrow     Operation = "borrow"
 	OpBorrowMut  Operation = "borrow mutable"
 	OpMove       Operation = "move"
-	OpIntoValue  Operation = "into value"
+	OpDetach     Operation = "detach"
 	OpIntoShared Operation = "into shared"
 	OpFreeze     Operation = "freeze"
 	OpMap        Operation = "map"

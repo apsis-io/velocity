@@ -81,9 +81,7 @@ func TestFrozenReadsConcurrentlyAndCounts(t *testing.T) {
 	_ = first.Release()
 	_ = second.Release()
 
-	value, err := frozen.Read(func(access ownership.ReadAccess[int]) (int, error) {
-		return access.Project(func(value int) (int, error) { return value, nil })
-	})
+	value, err := frozen.View(func(value int) (int, error) { return value, nil })
 	if err != nil || value != 9 {
 		t.Fatalf("Read = (%d, %v)", value, err)
 	}
@@ -110,17 +108,15 @@ func TestFrozenIntoOwnerRequiresSoleHandle(t *testing.T) {
 		t.Fatalf("IntoOwner when sole = %v", err)
 	}
 	// Thawing restores mutability.
-	if _, err := owner.Write(func(access ownership.WriteAccess[int]) (struct{}, error) {
-		return access.Update(func(value *int) (struct{}, error) {
-			*value *= 3
-			return struct{}{}, nil
-		})
+	if _, err := owner.Mutate(func(value *int) (struct{}, error) {
+		*value *= 3
+		return struct{}{}, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	got, err := owner.IntoValue()
+	got, err := owner.Detach()
 	if err != nil || got != 9 {
-		t.Fatalf("IntoValue = (%d, %v)", got, err)
+		t.Fatalf("Detach = (%d, %v)", got, err)
 	}
 }
 
@@ -140,9 +136,7 @@ func TestFrozenDropRunsOnceOnFinalRelease(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshot[0] = 99
-	original, err := frozen.Read(func(access ownership.ReadAccess[[]int]) (int, error) {
-		return access.Project(func(value []int) (int, error) { return value[0], nil })
-	})
+	original, err := frozen.View(func(value []int) (int, error) { return value[0], nil })
 	if err != nil || original != 1 {
 		t.Fatalf("snapshot leaked into original: (%d, %v)", original, err)
 	}

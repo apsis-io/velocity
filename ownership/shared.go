@@ -72,103 +72,36 @@ func (s *Shared[T]) BorrowMut() (*WriteBorrow[T], error) {
 	return newWriteBorrow(lease), nil
 }
 
-// BorrowUntracked is Borrow without the runtime cleanup that reclaims a
-// leaked borrow. See Owner.BorrowUntracked for the trade it makes.
-func (s *Shared[T]) BorrowUntracked() (*ReadBorrow[T], error) {
-	if s == nil || s.c == nil {
-		return nil, &ReleasedError{Operation: OpBorrow}
-	}
-	lease, err := s.c.acquireRead(&s.h, modeShared)
-	if err != nil {
-		return nil, err
-	}
-	return newUntrackedReadBorrow(lease), nil
-}
-
-// BorrowMutUntracked is BorrowMut with the same trade BorrowUntracked makes.
-func (s *Shared[T]) BorrowMutUntracked() (*WriteBorrow[T], error) {
-	if s == nil || s.c == nil {
-		return nil, &ReleasedError{Operation: OpBorrowMut}
-	}
-	lease, err := s.c.acquireWrite(&s.h, modeShared)
-	if err != nil {
-		return nil, err
-	}
-	return newUntrackedWriteBorrow(lease), nil
-}
-
-// Read runs fn under a callback-scoped shared read borrow.
-func (s *Shared[T]) Read[R any](fn func(ReadAccess[T]) (R, error)) (R, error) {
-	if fn == nil {
-		var zero R
-		return zero, &ProjectionError{Operation: OpProject}
-	}
-	if s == nil || s.c == nil {
+// View runs fn against the value under a read borrow that lasts exactly as
+// long as the call. See Owner.View, including the rule that the value must
+// not outlive the call.
+func (s *Shared[T]) View[R any](fn func(T) (R, error)) (R, error) {
+	if s == nil {
 		var zero R
 		return zero, &ReleasedError{Operation: OpBorrow}
 	}
-	lease, err := s.c.acquireRead(&s.h, modeShared)
-	if err != nil {
-		var zero R
-		return zero, err
-	}
-	defer lease.closeScoped()
-	return fn(ReadAccess[T]{lease: lease})
+	return scopedView(s.c, &s.h, modeShared, fn)
 }
 
-// Write runs fn under a callback-scoped exclusive mutable borrow.
-func (s *Shared[T]) Write[R any](fn func(WriteAccess[T]) (R, error)) (R, error) {
-	if fn == nil {
-		var zero R
-		return zero, &ProjectionError{Operation: OpUpdate}
-	}
-	if s == nil || s.c == nil {
+// Mutate runs fn with exclusive mutable access under a write borrow that
+// lasts exactly as long as the call. See Owner.Mutate.
+func (s *Shared[T]) Mutate[R any](fn func(*T) (R, error)) (R, error) {
+	if s == nil {
 		var zero R
 		return zero, &ReleasedError{Operation: OpBorrowMut}
 	}
-	lease, err := s.c.acquireWrite(&s.h, modeShared)
-	if err != nil {
-		var zero R
-		return zero, err
-	}
-	defer lease.closeScoped()
-	return fn(WriteAccess[T]{lease: lease})
-}
-
-// View runs fn against the value under a callback-scoped read borrow. See
-// Owner.View, including the rule that the value must not outlive the call.
-func (s *Shared[T]) View[R any](fn func(T) (R, error)) (R, error) {
-	if fn == nil {
-		var zero R
-		return zero, &ProjectionError{Operation: OpProject}
-	}
-	return s.Read(func(access ReadAccess[T]) (R, error) { return access.Project(fn) })
-}
-
-// Mutate runs fn against the value under a callback-scoped exclusive borrow.
-func (s *Shared[T]) Mutate[R any](fn func(*T) (R, error)) (R, error) {
-	if fn == nil {
-		var zero R
-		return zero, &ProjectionError{Operation: OpUpdate}
-	}
-	return s.Write(func(access WriteAccess[T]) (R, error) { return access.Update(fn) })
+	return scopedMutate(s.c, &s.h, modeShared, fn)
 }
 
 // WithRead is View for callbacks that report only an error.
 func (s *Shared[T]) WithRead(fn func(T) error) error {
-	if fn == nil {
-		return &ProjectionError{Operation: OpProject}
-	}
-	_, err := s.View(func(value T) (struct{}, error) { return struct{}{}, fn(value) })
+	_, err := s.View(errOnly(fn))
 	return err
 }
 
 // WithWrite is Mutate for callbacks that report only an error.
 func (s *Shared[T]) WithWrite(fn func(*T) error) error {
-	if fn == nil {
-		return &ProjectionError{Operation: OpUpdate}
-	}
-	_, err := s.Mutate(func(value *T) (struct{}, error) { return struct{}{}, fn(value) })
+	_, err := s.Mutate(errOnly(fn))
 	return err
 }
 
@@ -190,9 +123,7 @@ func (s *Shared[T]) Snapshot() (T, error) {
 		var zero T
 		return zero, &NoCloneError{Operation: OpSnapshot}
 	}
-	return s.Read(func(access ReadAccess[T]) (T, error) {
-		return access.Project(clone)
-	})
+	return s.View(clone)
 }
 
 // IntoOwner consumes the sole unborrowed Shared handle and returns a unique

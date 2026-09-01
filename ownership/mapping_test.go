@@ -41,9 +41,7 @@ func TestMapTransfersAndChainsDropInOrder(t *testing.T) {
 		t.Fatalf("source Borrow after Map = %v", err)
 	}
 
-	got, err := derived.Read(func(access ownership.ReadAccess[string]) (string, error) {
-		return access.Project(func(value string) (string, error) { return value, nil })
-	})
+	got, err := derived.View(func(value string) (string, error) { return value, nil })
 	if err != nil || got != "42" {
 		t.Fatalf("derived value = (%q, %v)", got, err)
 	}
@@ -121,9 +119,7 @@ func TestMapLeavesSourceUsableWhenFnFails(t *testing.T) {
 	if state := source.State(); state.Moved || state.Released || state.Writer || state.Readers != 0 {
 		t.Fatalf("source after failed Map = %+v", state)
 	}
-	value, err := source.Read(func(access ownership.ReadAccess[int]) (int, error) {
-		return access.Project(func(value int) (int, error) { return value, nil })
-	})
+	value, err := source.View(func(value int) (int, error) { return value, nil })
 	if err != nil || value != 5 {
 		t.Fatalf("source still usable = (%d, %v)", value, err)
 	}
@@ -193,9 +189,7 @@ func TestMapDerivedSupportsSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshot[0] = 99
-	original, err := derived.Read(func(access ownership.ReadAccess[[]int]) (int, error) {
-		return access.Project(func(value []int) (int, error) { return value[0], nil })
-	})
+	original, err := derived.View(func(value []int) (int, error) { return value[0], nil })
 	if err != nil || original != 3 {
 		t.Fatalf("snapshot leaked: (%d, %v)", original, err)
 	}

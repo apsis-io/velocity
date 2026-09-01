@@ -94,54 +94,20 @@ func (f *Frozen[T]) Borrow() (*ReadBorrow[T], error) {
 	return newReadBorrow(lease), nil
 }
 
-// BorrowUntracked is Borrow without the runtime cleanup that reclaims a leaked
-// borrow. See Owner.BorrowUntracked for the trade it makes.
-func (f *Frozen[T]) BorrowUntracked() (*ReadBorrow[T], error) {
-	if f == nil || f.c == nil {
-		return nil, &ReleasedError{Operation: OpBorrow}
-	}
-	lease, err := f.c.acquireRead(&f.h, modeFrozen)
-	if err != nil {
-		return nil, err
-	}
-	return newUntrackedReadBorrow(lease), nil
-}
-
-// Read runs fn under a callback-scoped shared read borrow.
-func (f *Frozen[T]) Read[R any](fn func(ReadAccess[T]) (R, error)) (R, error) {
-	if fn == nil {
-		var zero R
-		return zero, &ProjectionError{Operation: OpProject}
-	}
-	if f == nil || f.c == nil {
+// View runs fn against the value under a read borrow that lasts exactly as
+// long as the call. See Owner.View, including the rule that the value must
+// not outlive the call.
+func (f *Frozen[T]) View[R any](fn func(T) (R, error)) (R, error) {
+	if f == nil {
 		var zero R
 		return zero, &ReleasedError{Operation: OpBorrow}
 	}
-	lease, err := f.c.acquireRead(&f.h, modeFrozen)
-	if err != nil {
-		var zero R
-		return zero, err
-	}
-	defer lease.closeScoped()
-	return fn(ReadAccess[T]{lease: lease})
-}
-
-// View runs fn against the value under a callback-scoped read borrow. See
-// Owner.View, including the rule that the value must not outlive the call.
-func (f *Frozen[T]) View[R any](fn func(T) (R, error)) (R, error) {
-	if fn == nil {
-		var zero R
-		return zero, &ProjectionError{Operation: OpProject}
-	}
-	return f.Read(func(access ReadAccess[T]) (R, error) { return access.Project(fn) })
+	return scopedView(f.c, &f.h, modeFrozen, fn)
 }
 
 // WithRead is View for callbacks that report only an error.
 func (f *Frozen[T]) WithRead(fn func(T) error) error {
-	if fn == nil {
-		return &ProjectionError{Operation: OpProject}
-	}
-	_, err := f.View(func(value T) (struct{}, error) { return struct{}{}, fn(value) })
+	_, err := f.View(errOnly(fn))
 	return err
 }
 
@@ -163,9 +129,7 @@ func (f *Frozen[T]) Snapshot() (T, error) {
 		var zero T
 		return zero, &NoCloneError{Operation: OpSnapshot}
 	}
-	return f.Read(func(access ReadAccess[T]) (T, error) {
-		return access.Project(clone)
-	})
+	return f.View(clone)
 }
 
 // IntoOwner thaws the sole unborrowed Frozen handle back into a unique Owner,

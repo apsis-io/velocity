@@ -7,36 +7,30 @@ import (
 	"github.com/apsis-io/velocity/ownership"
 )
 
-func ExampleOwner_Read() {
+func ExampleOwner_View() {
 	owner, _ := ownership.New([]int{1, 2, 3})
 	defer owner.Release()
 
-	sum, _ := owner.Read(func(access ownership.ReadAccess[[]int]) (int, error) {
-		return access.Project(func(values []int) (int, error) {
-			total := 0
-			for _, value := range values {
-				total += value
-			}
-			return total, nil
-		})
+	sum, _ := owner.View(func(values []int) (int, error) {
+		total := 0
+		for _, value := range values {
+			total += value
+		}
+		return total, nil
 	})
 	fmt.Println(sum)
 	// Output: 6
 }
 
-func ExampleOwner_Write() {
+func ExampleOwner_Mutate() {
 	owner, _ := ownership.New(3)
 	defer owner.Release()
 
-	_, _ = owner.Write(func(access ownership.WriteAccess[int]) (struct{}, error) {
-		return access.Update(func(value *int) (struct{}, error) {
-			*value *= 2
-			return struct{}{}, nil
-		})
+	_ = owner.WithWrite(func(value *int) error {
+		*value *= 2
+		return nil
 	})
-	value, _ := owner.Read(func(access ownership.ReadAccess[int]) (int, error) {
-		return access.Project(func(value int) (int, error) { return value, nil })
-	})
+	value, _ := owner.View(func(value int) (int, error) { return value, nil })
 	fmt.Println(value)
 	// Output: 6
 }
@@ -48,9 +42,7 @@ func ExampleOwner_IntoShared() {
 	clone, _ := shared.Clone()
 	defer clone.Release()
 
-	length, _ := clone.Read(func(access ownership.ReadAccess[string]) (int, error) {
-		return access.Project(func(value string) (int, error) { return len(value), nil })
-	})
+	length, _ := clone.View(func(value string) (int, error) { return len(value), nil })
 	fmt.Println(length)
 	// Output: 8
 }
