@@ -10,6 +10,7 @@ var (
 	ErrInvalidPolicy  = errors.New("invalid resilience policy")
 	ErrInvalidBackoff = errors.New("invalid retry backoff")
 	ErrInvalidBreaker = errors.New("invalid breaker policy")
+	ErrInvalidBudget  = errors.New("invalid hedge budget")
 	ErrNilFunction    = errors.New("nil resilience function")
 	ErrNilClock       = errors.New("nil resilience clock")
 	ErrNilTrip        = errors.New("nil breaker trip")

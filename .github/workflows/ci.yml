@@ -1,0 +1,107 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The analyzer is built once and reused by every vet step below.
+  VELOCITYVET: ${{ github.workspace }}/bin/velocityvet
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: |
+            go.sum
+            analysis/go.sum
+            benchmarks/go.sum
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::not gofmt'd:"; echo "$unformatted"; exit 1
+          fi
+
+      - name: go vet
+        run: |
+          go vet ./...
+          go -C analysis vet ./...
+          go -C benchmarks vet ./...
+
+      - name: staticcheck
+        uses: dominikh/staticcheck-action@v1
+        with:
+          version: latest
+          install-go: false
+
+      # velocity's own analyzer, over both modules that use the library.
+      - name: lostrelease
+        run: |
+          go -C analysis build -o "$VELOCITYVET" ./cmd/velocityvet
+          go vet -vettool="$VELOCITYVET" ./...
+          go -C benchmarks vet -vettool="$VELOCITYVET" ./...
+
+      - name: test
+        run: |
+          go test ./...
+          go -C analysis test ./...
+
+      - name: test -race
+        run: go test -race -count=2 ./...
+
+      # Leak diagnostics for advanced borrows only compile under this tag.
+      - name: test -tags=velocitydebug
+        run: go test -tags=velocitydebug -race ./...
+
+      - name: examples
+        run: go test ./... -run Example
+
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      # The seed corpus in testdata runs under `go test`; this is the
+      # randomized pass, kept short enough for every push.
+      - name: fuzz the ownership model
+        run: go test ./ownership -run '^$' -fuzz '^FuzzOwnershipModel$' -fuzztime 60s
+      - name: upload crashers
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-corpus
+          path: ownership/testdata/fuzz/
+
+  benchmarks:
+    # Comparison benchmarks are a separate module and are not run for their
+    # numbers here — CI machines are too noisy — only to keep them building.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: benchmarks/go.sum
+      - name: compile benchmarks
+        run: |
+          go test ./... -run '^$' -bench . -benchtime 1x
+          go -C benchmarks test ./... -run '^$' -bench . -benchtime 1x

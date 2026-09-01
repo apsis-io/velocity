@@ -231,6 +231,50 @@ and both made because velocity had no consumers yet:
   while the success path touches only the result slot. Within ~8% of conc
   now, and cancellable where conc is not.
 
+## Hedging, and the five libraries not taken (implemented)
+
+The premise's second list — `faustbrian/go-{resilience,hedge,fault-injection,concurrency-limit,bulkhead,adaptive-throttle}` — was read rather than ported. One idea in it was a genuine gap:
+
+- **`resilience.Hedge` (taken).** Retry cannot help an operation that is
+  merely slow, because it waits for a failure before acting; hedging starts
+  the next attempt while the previous is still running, so p99 falls toward
+  p50. Two pieces of it are what make hedging correct rather than merely
+  parallel, and both fit velocity better than the library they came from.
+  *Disposal*: N attempts produce N results and one is returned, so the
+  losers leak unless something disposes them — and when the result is an
+  owned resource, `Discard` is simply its `Drop`, which no other hedging
+  library is positioned to say. *Budget*: a dependency slow enough to
+  trigger hedging is the last one that should get several times its load,
+  so each execution credits a token bucket and each speculative attempt
+  spends a credit, bounding amplification rather than concurrency. Where
+  go-hedge has three mutually exclusive delay modes (`Delay`, `Schedule`,
+  `DynamicDelay`) and validation to enforce "exactly one", velocity reuses
+  the `Backoff` that `Retry` already has: a fixed delay is a closure, a
+  widening one is `ExponentialBackoff`. Scheduling goes through
+  `Clock.AfterFunc`, so `ManualClock` drives it. A failed attempt does not
+  wait out its delay — the evidence has arrived — which makes Hedge a
+  superset of Retry's shape, and an empty budget must still terminate
+  rather than wait for a hedge that will never be funded.
+- **`go-bulkhead` (not taken).** Bounded partitions with an admission
+  policy of reject-immediately or wait-with-timeout. That is
+  `async.Semaphore.TryAcquire` and `Acquire(ctx)`, and a registry of
+  partitions is a map of them. Nothing to add.
+- **`go-fault-injection` (not taken).** A test tool, not a concurrency
+  foundation. `ManualClock` covers the determinism velocity's own policies
+  need; injecting faults into a caller's filesystem and network belongs in
+  the caller's test suite.
+- **`go-resilience` (not taken).** A composition layer over retry, hedge
+  and budget. Velocity's policies already compose by nesting, which is
+  visible at the call site instead of configured elsewhere.
+- **`go-adaptive-throttle` and `go-concurrency-limit` (deferred, not
+  rejected).** Client-side load shedding proportional to observed reject
+  rate, and a `Limit` that learns from latency (AIMD/Vegas/Gradient2)
+  rather than being a constant. Both are real: an adaptive `async.Limit`
+  would make `Runner` something errgroup structurally cannot be. Both are
+  also large, stateful, and only justifiable against a workload that shows
+  the static limit is wrong — which no consumer has yet reported. Deferred
+  on evidence, not on principle.
+
 ## Cancellable locking and what errgroup gave for free (implemented)
 
 The port's last `x/sync` import was `semaphore.NewWeighted(1)`: weight one

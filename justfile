@@ -23,7 +23,11 @@ race:
 debug:
     go test -tags=velocitydebug ./...
 
-check: fmt vet lint test race debug
+# The same sequence CI runs; see .github/workflows/ci.yml.
+check: fmt vet lint test race debug examples
+
+examples:
+    go test ./... -run Example
 
 fuzz duration="30s":
     go test ./ownership -run '^$' -fuzz '^FuzzOwnershipModel$' -fuzztime {{duration}}

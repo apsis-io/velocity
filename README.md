@@ -1,5 +1,9 @@
 # velocity
 
+[![CI](https://github.com/apsis-io/velocity/actions/workflows/ci.yml/badge.svg)](https://github.com/apsis-io/velocity/actions/workflows/ci.yml)
+[![Go Reference](https://pkg.go.dev/badge/github.com/apsis-io/velocity.svg)](https://pkg.go.dev/github.com/apsis-io/velocity)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+
 Go 1.27 concurrency foundations: deterministic cleanup and handoff,
 bounded fan-out, request coalescing, and retry/circuit-breaker policies —
 built on Go 1.27 generic methods, with a `go vet` analyzer that catches
@@ -241,6 +245,30 @@ A tripped breaker rejects immediately and recovers on the clock; nest it
 inside `Retry` with `ErrOpen` classified as not retryable. `ManualClock`
 makes tests of either deterministic.
 
+`Hedge` is the tail-latency counterpart of `Retry`: `Retry` waits for an
+attempt to fail and cannot help one that is merely slow, while `Hedge`
+starts the next attempt while the previous is still running, so p99 falls
+toward p50. The first success wins and the rest are cancelled.
+
+```go
+value, err := resilience.Hedge(ctx, resilience.HedgePolicy[*Response]{
+    MaxAttempts: 3,
+    Delay:       backoff,                       // the same Backoff Retry uses
+    Budget:      budget,                        // caps the extra load hedging creates
+    Discard:     func(r *Response) error { return r.Body.Close() },
+}, func(ctx context.Context, attempt int) (*Response, error) {
+    return client.Fetch(ctx, request)
+})
+```
+
+`Discard` is the part hedging libraries usually leave to the caller to
+notice: N attempts produce N results and one is returned, so the losers leak
+unless something disposes them. When the result is owned, `Discard` is its
+`Drop`. `Budget` is the other half — a dependency slow enough to trigger
+hedging is the last one that should receive several times its usual load, so
+each execution credits the budget and each speculative attempt spends a
+credit.
+
 ## Performance
 
 Head-to-head numbers against the libraries these packages drew from —
@@ -262,4 +290,8 @@ just bench-compare
 
 ## License
 
-Apache License 2.0 — see [LICENSE](LICENSE) and [NOTICE.md](NOTICE.md).
+Copyright 2026 Malformed C. Licensed under the Apache License, Version 2.0;
+you may not use these files except in compliance with it. See
+[LICENSE](LICENSE) for the terms and [NOTICE.md](NOTICE.md) for the
+attributions — velocity is an independent implementation informed by
+several libraries, none of whose source it bundles.

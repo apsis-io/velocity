@@ -16,7 +16,9 @@
 //   - dedupe — coalesces concurrent calls per key so one runs and every
 //     caller gets the result; results become owned handles only on request.
 //   - resilience — Retry with classifiers, backoff, and an injectable Clock;
-//     a circuit Breaker that never waits; ManualClock for tests of either.
+//     Hedge for latency, racing an operation against itself and disposing
+//     the losers; a circuit Breaker that never waits; ManualClock for
+//     deterministic tests of all three.
 //   - opcodes, opruntime — plain data shapes for operations and a registry
 //     mapping them to Go functions. Not a VM.
 //   - traits — the Drop and Clone function types ownership is configured
