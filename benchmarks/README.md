@@ -58,47 +58,47 @@ median of -count=5
 
 | | ns/op | B/op | allocs/op |
 |---|---|---|---|
-| x/sync | 167 | 80 | 1 |
-| samber | 173 | 80 | 1 |
-| janos | 1044 | 336 | 6 |
-| velocity | 1551 | 584 | 10 |
+| x/sync | 170 | 80 | 1 |
+| samber | 176 | 80 | 1 |
+| janos | 1081 | 336 | 6 |
+| velocity | 1603 | 600 | 10 |
 
 **Dedupe, contended** (`RunParallel`, one shared key)
 
 | | ns/op | B/op | allocs/op |
 |---|---|---|---|
-| x/sync | 277 | 75 | 0 |
-| samber | 283 | 75 | 0 |
-| janos | 348 | 12 | 0 |
-| velocity | 1080 | 429 | 7 |
+| x/sync | 282 | 76 | 0 |
+| samber | 284 | 76 | 0 |
+| janos | 345 | 12 | 0 |
+| velocity | 1109 | 434 | 7 |
 
 **Async gather** (8 trivial tasks)
 
 | | ns/op | B/op | allocs/op |
 |---|---|---|---|
-| errgroup | 3482 | 856 | 35 |
-| velocity `Unlimited` | 4579 | 1752 | 19 |
-| velocity `Limited(4)` | 6559 | 1864 | 20 |
-| hunch | 8122 | 1960 | 34 |
+| errgroup | 3689 | 856 | 35 |
+| velocity `Unlimited` | 4723 | 1880 | 19 |
+| velocity `Limited(4)` | 6995 | 1992 | 20 |
+| hunch | 8451 | 1960 | 34 |
 
 **Async map** (one function over a collection, 8 workers)
 
 | | 8 items ns/op | 1024 items ns/op | B/op at 1024 | allocs/op |
 |---|---|---|---|---|
-| errgroup pool | 3500 | 28875 | 8992 | 20 |
-| conc `MapErr` | 3345 | 32781 | 8592 | 16 |
-| velocity `Map` | 4238 | 51754 | 50520 | 19 |
+| errgroup pool | 3304 | 28863 | 8992 | 20 |
+| conc `MapErr` | 3257 | 33614 | 8592 | 16 |
+| velocity `Map` | 4166 | 53358 | 50520 | 19 |
 
 **dedupe backends**, all three workloads (ns/op, median of 5)
 
 | | uncontended | one shared key | key per goroutine |
 |---|---|---|---|
-| `WithXsyncBackend` (default) | 1548 | **1047** | **596** |
-| `WithMutexBackend` | **1428** | 1158 | 1134 |
-| `WithSharded(8)` | 1559 | 1176 | 613 |
+| `WithXsyncBackend` (default) | 1587 | **1118** | **572** |
+| `WithMutexBackend` | **1457** | 1206 | 1224 |
+| `WithSharded(8)` | 1607 | 1208 | 623 |
 
-Allocations are flat per backend across all three: mutex and sharded 9 (560 B)
-uncontended, xsync 10 (584 B).
+Allocations are flat per backend across all three: mutex and sharded 9 (576 B)
+uncontended, xsync 10 (600 B).
 
 ## What the numbers mean
 
