@@ -12,6 +12,7 @@ type Result[V any] struct {
 // with the requested keys. It is a plain-value form like Do, and an owned group
 // reports ErrOwnedResult for every key.
 func (g *Group[K, V]) DoBatch(ctx context.Context, keys []K, fn func(context.Context, []K) (map[K]V, error)) map[K]Result[V] {
+	g.ready()
 	results := make(map[K]Result[V], len(keys))
 	var err error
 	switch {
@@ -39,8 +40,20 @@ func (g *Group[K, V]) DoBatch(ctx context.Context, keys []K, fn func(context.Con
 	leaders := make([]K, 0, len(unique))
 	calls := make(map[K]*call[V], len(unique))
 	exec := newExecution(g.baseCtx)
-	for _, key := range unique {
-		call, leader := g.joinWithExecution(key, exec)
+	for i, key := range unique {
+		call, leader, err := g.joinWithExecution(ctx, key, exec)
+		if err != nil {
+			// Waiting for an abandoned round was cut short: undo the joins
+			// made so far and report the cause for every key.
+			for _, joined := range unique[:i] {
+				g.leave(joined, calls[joined])
+			}
+			exec.cancel()
+			for _, key := range keys {
+				results[key] = Result[V]{Err: err}
+			}
+			return results
+		}
 		calls[key] = call
 		if leader {
 			leaders = append(leaders, key)

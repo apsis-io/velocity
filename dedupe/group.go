@@ -10,6 +10,9 @@ import (
 )
 
 type Group[K comparable, V any] struct {
+	// once installs defaults into a zero-value Group on first use, so a
+	// Group field in a struct literal works as singleflight.Group does.
+	once    sync.Once
 	baseCtx context.Context
 	backend backend[K, V]
 	drop    func(V) error
@@ -22,7 +25,11 @@ type Group[K comparable, V any] struct {
 }
 
 // Singleflight is an exact alias of Group for readers who know this pattern
-// by its more common name.
+// by its more common name. It is not a drop-in for x/sync/singleflight in
+// one respect: a round whose callers have all left has its context
+// cancelled, and a later caller takes its value only if it still succeeded,
+// starting afresh otherwise; x/sync hands every joiner whatever the round
+// eventually returns. Both keep at most one callback in flight per key.
 type Singleflight[K comparable, V any] = Group[K, V]
 
 // NewSingleflight is an exact alias of New.
@@ -84,7 +91,37 @@ type call[V any] struct {
 // New constructs a duplicate-suppressing group. Work runs under a context
 // derived from context.Background by default, so it outlives any one
 // caller; WithBaseContext changes the parent.
+//
+// The zero value is also a usable Group with every default, so a Group can
+// be a plain struct field; New is needed only to pass options.
 func New[K comparable, V any](opts ...Option[K, V]) (*Group[K, V], error) {
+	g, err := build[K, V](opts)
+	if err != nil {
+		return nil, err
+	}
+	g.once.Do(func() {}) // configured: never apply defaults over it
+	return g, nil
+}
+
+// Must is New for a fixed option list that cannot fail, in the manner of
+// regexp.MustCompile: it panics on error, for package-level and constructor
+// use where there is nowhere to return one.
+func Must[K comparable, V any](g *Group[K, V], err error) *Group[K, V] {
+	if err != nil {
+		panic(err)
+	}
+	return g
+}
+
+// ready installs defaults into a zero-value Group exactly once.
+func (g *Group[K, V]) ready() {
+	g.once.Do(func() {
+		built, _ := build[K, V](nil) // no options: cannot fail
+		g.baseCtx, g.backend, g.hooks = built.baseCtx, built.backend, built.hooks
+	})
+}
+
+func build[K comparable, V any](opts []Option[K, V]) (*Group[K, V], error) {
 	cfg := config[K, V]{baseCtx: context.Background()}
 	for i, opt := range opts {
 		if opt == nil {
@@ -133,12 +170,22 @@ func formatIndex(i int) string {
 // the value. It is the plain form: the result is copied out, nothing is
 // tracked, and a group configured with WithResultDrop or WithResultClone
 // refuses it with ErrOwnedResult, because a bare copy would escape Drop.
+//
+// The context fn receives belongs to the round and is cancelled when the
+// round completes. A value that keeps doing work after Do returns — a lazy
+// handle that issues requests on later reads, a stream, anything holding
+// the context — must therefore not be built from fn's context; derive it
+// from the caller's, or from the group's base context, instead. Binding it
+// to the round's context fails silently until the first later use.
 func (g *Group[K, V]) Do(ctx context.Context, key K, fn func(context.Context) (V, error)) (V, error) {
 	var zero V
 	if err := g.checkPlain(ctx, fn); err != nil {
 		return zero, err
 	}
-	c, leader := g.join(key)
+	c, leader, err := g.join(ctx, key)
+	if err != nil {
+		return zero, err
+	}
 	if leader {
 		go g.run(key, c, fn)
 	}
@@ -153,7 +200,10 @@ func (g *Group[K, V]) DoShared(ctx context.Context, key K, fn func(context.Conte
 	if err := g.check(ctx, fn); err != nil {
 		return nil, err
 	}
-	c, leader := g.join(key)
+	c, leader, err := g.join(ctx, key)
+	if err != nil {
+		return nil, err
+	}
 	if leader {
 		go g.run(key, c, fn)
 	}
@@ -161,6 +211,7 @@ func (g *Group[K, V]) DoShared(ctx context.Context, key K, fn func(context.Conte
 }
 
 func (g *Group[K, V]) check(ctx context.Context, fn func(context.Context) (V, error)) error {
+	g.ready()
 	if ctx == nil {
 		return ErrNilContext
 	}
@@ -177,24 +228,37 @@ func (g *Group[K, V]) checkPlain(ctx context.Context, fn func(context.Context) (
 	return g.check(ctx, fn)
 }
 
-func (g *Group[K, V]) join(key K) (*call[V], bool) {
-	return g.joinWithExecution(key, nil)
+func (g *Group[K, V]) join(ctx context.Context, key K) (*call[V], bool, error) {
+	return g.joinWithExecution(ctx, key, nil)
 }
 
-func (g *Group[K, V]) joinWithExecution(key K, shared *execution) (*call[V], bool) {
+// joinWithExecution registers the caller on the key's current round or
+// starts one.
+//
+// A round every caller has abandoned has its work cancelled, but its key
+// stays registered until the callback actually returns, and a caller
+// arriving meanwhile waits for that under its own context. If the callback
+// then produced a value, the caller takes it — a callback that ignored its
+// cancellation did the work, so it is not repeated; if it failed, which for
+// a cooperative callback means it reported the cancellation the caller had
+// no part in, the caller starts a fresh round instead. Either way at most
+// one callback is in flight per key, which is what singleflight users rely
+// on, and no caller ever receives another caller's cancellation. Forget
+// releases the key for a caller who wants a fresh round at once.
+func (g *Group[K, V]) joinWithExecution(ctx context.Context, key K, shared *execution) (*call[V], bool, error) {
 	for {
 		actual, loaded := g.backend.load(key)
 		if loaded {
-			actual.mu.Lock()
-			if actual.accepting {
-				actual.waiting++
-				actual.mu.Unlock()
-				if g.hooks.OnJoin != nil {
-					g.hooks.OnJoin(key, false)
-				}
-				return actual, false
+			if joined := g.tryJoin(key, actual); joined {
+				return actual, false, nil
 			}
-			actual.mu.Unlock()
+			adopted, err := g.awaitRetired(ctx, key, actual)
+			if err != nil {
+				return nil, false, err
+			}
+			if adopted {
+				return actual, false, nil
+			}
 			continue
 		}
 		candidate := &call[V]{done: make(chan struct{}), exec: shared, accepting: true, waiting: 1}
@@ -208,24 +272,66 @@ func (g *Group[K, V]) joinWithExecution(key K, shared *execution) (*call[V], boo
 			if g.hooks.OnJoin != nil {
 				g.hooks.OnJoin(key, true)
 			}
-			return candidate, true
+			return candidate, true, nil
 		}
 		if shared == nil {
 			// Lost the race to register: the context derived for this
 			// candidate would otherwise stay registered with baseCtx.
 			candidate.own.cancel()
 		}
-		actual.mu.Lock()
-		if actual.accepting {
-			actual.waiting++
-			actual.mu.Unlock()
-			if g.hooks.OnJoin != nil {
-				g.hooks.OnJoin(key, false)
-			}
-			return actual, false
+		if joined := g.tryJoin(key, actual); joined {
+			return actual, false, nil
 		}
-		actual.mu.Unlock()
+		adopted, err := g.awaitRetired(ctx, key, actual)
+		if err != nil {
+			return nil, false, err
+		}
+		if adopted {
+			return actual, false, nil
+		}
 	}
+}
+
+// tryJoin adds the caller to a round that is still accepting.
+func (g *Group[K, V]) tryJoin(key K, c *call[V]) bool {
+	c.mu.Lock()
+	if !c.accepting {
+		c.mu.Unlock()
+		return false
+	}
+	c.waiting++
+	c.mu.Unlock()
+	if g.hooks.OnJoin != nil {
+		g.hooks.OnJoin(key, false)
+	}
+	return true
+}
+
+// awaitRetired blocks until an abandoned round's callback has returned, or
+// ctx is done. It then adopts the round — registering the caller as one more
+// recipient — if the callback succeeded and the value is a plain copy; an
+// owned round's cell was released with its last caller and cannot be
+// re-shared. Otherwise the caller retries and starts afresh once complete
+// has unregistered the key.
+func (g *Group[K, V]) awaitRetired(ctx context.Context, key K, c *call[V]) (adopted bool, err error) {
+	select {
+	case <-c.done:
+	case <-ctx.Done():
+		return false, context.Cause(ctx)
+	}
+	if g.owned {
+		return false, nil
+	}
+	c.mu.Lock()
+	if c.err == nil && c.panicErr == nil {
+		c.waiting++
+		adopted = true
+	}
+	c.mu.Unlock()
+	if adopted && g.hooks.OnJoin != nil {
+		g.hooks.OnJoin(key, false)
+	}
+	return adopted, nil
 }
 
 func (g *Group[K, V]) runBatch(keys []K, calls map[K]*call[V], fn func(context.Context, []K) (map[K]V, error)) {
@@ -407,20 +513,28 @@ func (g *Group[K, V]) leave(key K, c *call[V]) {
 	}
 	c.mu.Unlock()
 	if abandon {
+		// Cancel the work but leave the key registered: complete removes it
+		// once the callback returns, and until then a new caller waits in
+		// join rather than starting a second callback for the same key.
 		c.exec.abandon()
-		// Remove only this generation; a concurrent replacement is preserved.
-		g.backend.compareAndDelete(key, c)
 	}
 	if release != nil {
 		_ = release.Release()
 	}
 }
 
-// Forget stops tracking key without interrupting work already in progress.
-func (g *Group[K, V]) Forget(key K) bool { _, ok := g.backend.delete(key); return ok }
+// Forget stops tracking key without interrupting work already in progress,
+// so the next caller starts a fresh round even if an abandoned callback for
+// the key is still running.
+func (g *Group[K, V]) Forget(key K) bool {
+	g.ready()
+	_, ok := g.backend.delete(key)
+	return ok
+}
 
 // Cancel asks the in-flight operation for a key to stop.
 func (g *Group[K, V]) Cancel(key K) bool {
+	g.ready()
 	c, ok := g.backend.load(key)
 	if !ok {
 		return false

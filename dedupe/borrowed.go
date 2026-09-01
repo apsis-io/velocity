@@ -49,6 +49,7 @@ func (g *Group[K, V]) DoBorrowedMut[I any](ctx context.Context, key K, input *ow
 // checkBorrowed takes the nil-ness of input as a bool because a typed nil
 // pointer boxed into an interface would not compare equal to nil.
 func (g *Group[K, V]) checkBorrowed(ctx context.Context, nilInput, haveFn bool) error {
+	g.ready()
 	switch {
 	case g.owned:
 		return ErrOwnedResult
@@ -63,7 +64,12 @@ func (g *Group[K, V]) checkBorrowed(ctx context.Context, nilInput, haveFn bool) 
 }
 
 func (g *Group[K, V]) doBorrowed(ctx context.Context, key K, release func() error, wrapped func(context.Context) (V, error)) (V, error) {
-	c, leader := g.join(key)
+	c, leader, err := g.join(ctx, key)
+	if err != nil {
+		_ = release()
+		var zero V
+		return zero, err
+	}
 	if !leader {
 		_ = release()
 		return g.wait(ctx, key, c)

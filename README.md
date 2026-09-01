@@ -145,8 +145,11 @@ wraps `sync.WaitGroup.Go` with panic recovery.
 ## dedupe
 
 `Group[K, V]` coalesces concurrent calls per key: one runs, every caller
-gets the result, and a caller that leaves does not cancel the work unless it
-was the last one.
+gets the result. The zero value works; `New` takes options. A caller that
+leaves does not cancel the work unless it was the last one — and even then
+the key stays registered until the callback returns, so a callback that
+ignores its context never stacks: a later caller waits for it and takes its
+value if it succeeded, or starts afresh if it failed.
 
 ```go
 group, err := dedupe.New[string, Report]()
@@ -155,6 +158,10 @@ report, err := group.Do(ctx, "report-42", func(ctx context.Context) (Report, err
     return fetchReport(ctx, 42)
 })
 ```
+
+The context `fn` receives is the round's and is cancelled when the round
+completes, so a value that keeps doing I/O after `Do` returns (a lazy
+handle, a stream) must not be built from it.
 
 `DoBatch` runs one function over several keys; `DoBorrowed` loans an owned
 input to the round. When the result is a resource, configure

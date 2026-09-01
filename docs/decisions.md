@@ -231,6 +231,37 @@ and both made because velocity had no consumers yet:
   while the success path touches only the result slot. Within ~8% of conc
   now, and cancellable where conc is not.
 
+## First consumer feedback (implemented)
+
+Periapsis ported seven `conc`/`x/sync` sites to v0.1.0 and reported back.
+Three changes came out of it:
+
+- **An abandoned round holds its key until the callback returns.** `leave`
+  used to cancel the work and unregister the key in one step, so a callback
+  that ignored its context — a third-party provider wedged on some other
+  context — let every later caller start another one: a 10 ms ping loop
+  stacked 10 flights in a second where `x/sync` ran one. Now cancellation
+  is still delivered, but the key stays until `complete`, and a caller
+  arriving meanwhile waits under its own context. If the callback then
+  succeeded, the caller takes the value (the work was done; it is not
+  repeated); if it failed — which for a cooperative callback means it
+  reported a cancellation the caller had no part in — the caller starts
+  afresh. That is at-most-one-in-flight like `x/sync`, without ever handing
+  a caller someone else's cancellation, and without an opt-in. `Forget`
+  is the explicit way to start over behind a wedged callback. An owned
+  round is never adopted, because its cell was released with its last
+  caller.
+- **Docs on the round context.** A `v1.Image` resolved inside `Do` kept
+  issuing HTTP under the round's context after `Do` returned, and the round
+  had cancelled it. `Do` now says so; a value that works after the round
+  must be built from the caller's or the base context.
+- **Zero-value `Group` and `Must`.** Seven tests built a partial struct
+  literal with a `Group` field and nil-panicked, because `singleflight.Group`
+  works uninitialised and ours did not. It does now, with every default; a
+  `sync.Once` installs them on first use. `dedupe.Must`, `async.Must`, and
+  `pool.Must` cover constructors that return no error, in the manner of
+  `regexp.MustCompile`, so consumers stop writing the same shim.
+
 ## Developer experience pass (implemented)
 
 Four changes from a DX review, all breaking, all free because velocity had

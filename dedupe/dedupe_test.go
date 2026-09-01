@@ -146,12 +146,16 @@ func TestDoSharedPlainGroupGivesIndependentHandles(t *testing.T) {
 	}
 }
 
-func TestFreshCallerAfterAbandonmentStartsNewCall(t *testing.T) {
+// An abandoned round's key stays registered until its callback returns, so
+// a callback that ignores its context bounds later callers to one in-flight
+// call per key instead of stacking fresh rounds behind it. Forget is the
+// explicit way to start over.
+func TestAbandonedRoundHoldsKeyUntilCallbackReturns(t *testing.T) {
 	group := newGroup(t)
 	started := make(chan struct{})
 	release := make(chan struct{})
 	var calls atomic.Int32
-	fn := func(context.Context) (int, error) {
+	fn := func(context.Context) (int, error) { // ignores ctx: blocks on release
 		calls.Add(1)
 		select {
 		case <-started:
@@ -163,21 +167,98 @@ func TestFreshCallerAfterAbandonmentStartsNewCall(t *testing.T) {
 	}
 	leaderCtx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go func() { _, _ = group.Do(leaderCtx, "key", fn) }()
+	leaderDone := make(chan error, 1)
+	go func() { _, err := group.Do(leaderCtx, "key", fn); leaderDone <- err }()
 	<-started
 	cancel()
-	deadline := time.After(time.Second)
-	for calls.Load() == 1 {
-		freshCtx, freshCancel := context.WithTimeout(context.Background(), time.Millisecond)
-		_, _ = group.Do(freshCtx, "key", fn)
-		freshCancel()
-		select {
-		case <-deadline:
-			t.Fatal("fresh caller did not start a new generation")
-		default:
+	if err := <-leaderDone; !errors.Is(err, context.Canceled) {
+		t.Fatalf("leader = %v, want cancellation", err)
+	}
+
+	// The callback is still running. A fresh caller waits for it rather
+	// than starting a second one, and its own deadline bounds that wait.
+	freshCtx, freshCancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer freshCancel()
+	if _, err := group.Do(freshCtx, "key", fn); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("fresh caller = %v, want its own deadline", err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("calls = %d, want the one still running", calls.Load())
+	}
+
+	// A patient caller takes the abandoned callback's value when it finally
+	// arrives: the work was done, so it is not repeated.
+	patient := make(chan int, 1)
+	go func() {
+		v, err := group.Do(context.Background(), "key", fn)
+		if err != nil {
+			t.Error(err)
 		}
+		patient <- v
+	}()
+	time.Sleep(10 * time.Millisecond)
+	close(release)
+	if v := <-patient; v != 1 || calls.Load() != 1 {
+		t.Fatalf("patient caller = %d after %d calls, want the abandoned round's value without a second call", v, calls.Load())
+	}
+}
+
+// Forget releases an abandoned round's key so the next caller starts a new
+// round at once instead of waiting for a wedged callback.
+func TestForgetReleasesAbandonedKey(t *testing.T) {
+	group := newGroup(t)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+	fn := func(context.Context) (int, error) {
+		n := calls.Add(1)
+		if n == 1 {
+			close(started)
+			<-release
+		}
+		return int(n), nil
+	}
+	leaderCtx, cancel := context.WithCancel(context.Background())
+	leaderDone := make(chan struct{})
+	go func() { _, _ = group.Do(leaderCtx, "key", fn); close(leaderDone) }()
+	<-started
+	cancel()
+	<-leaderDone
+	if !group.Forget("key") {
+		t.Fatal("Forget = false")
+	}
+	value, err := group.Do(context.Background(), "key", fn)
+	if err != nil || value != 2 {
+		t.Fatalf("caller after Forget = (%d, %v), want a second round", value, err)
 	}
 	close(release)
+}
+
+// When the abandoned callback honours its context it returns promptly, and
+// the waiting caller then leads a fresh round.
+func TestFreshCallerFollowsCooperativeAbandonedRound(t *testing.T) {
+	group := newGroup(t)
+	started := make(chan struct{})
+	var calls atomic.Int32
+	fn := func(ctx context.Context) (int, error) {
+		n := calls.Add(1)
+		if n == 1 {
+			close(started)
+			<-ctx.Done()
+			return 0, ctx.Err()
+		}
+		return int(n), nil
+	}
+	leaderCtx, cancel := context.WithCancel(context.Background())
+	leaderDone := make(chan struct{})
+	go func() { _, _ = group.Do(leaderCtx, "key", fn); close(leaderDone) }()
+	<-started
+	cancel()
+	<-leaderDone // the round is abandoned only once its last caller has left
+	value, err := group.Do(context.Background(), "key", fn)
+	if err != nil || value != 2 {
+		t.Fatalf("fresh caller = (%d, %v), want a second round's value", value, err)
+	}
 }
 
 func TestForgetAndCancel(t *testing.T) {
@@ -265,4 +346,39 @@ func sortedKeys[V any](values map[string]V) []string {
 	}
 	slices.Sort(keys)
 	return keys
+}
+
+// A zero-value Group works with every default, as singleflight.Group does,
+// so a Group can be a plain struct field.
+func TestZeroValueGroupIsUsable(t *testing.T) {
+	type manager struct {
+		pulls dedupe.Group[string, int]
+	}
+	m := &manager{}
+	value, err := m.pulls.Do(context.Background(), "img", func(context.Context) (int, error) { return 3, nil })
+	if err != nil || value != 3 {
+		t.Fatalf("Do = (%d, %v)", value, err)
+	}
+	if m.pulls.Forget("img") {
+		t.Fatal("Forget found a finished key")
+	}
+	results := m.pulls.DoBatch(context.Background(), []string{"a"}, func(context.Context, []string) (map[string]int, error) {
+		return map[string]int{"a": 1}, nil
+	})
+	if results["a"].Value != 1 {
+		t.Fatalf("DoBatch = %+v", results)
+	}
+}
+
+func TestMustPanicsOnlyOnError(t *testing.T) {
+	group := dedupe.Must(dedupe.New[string, int]())
+	if group == nil {
+		t.Fatal("Must returned nil")
+	}
+	defer func() {
+		if recover() == nil {
+			t.Fatal("Must did not panic on error")
+		}
+	}()
+	dedupe.Must(dedupe.New[string, int](dedupe.WithSharded[string, int](0)))
 }

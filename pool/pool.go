@@ -52,6 +52,15 @@ func New[T any](cfg Config[T]) (*Pool[T], error) {
 	return &Pool[T]{cfg: cfg, permits: make(chan struct{}, cfg.Max)}, nil
 }
 
+// Must is New for a Config that cannot fail, in the manner of
+// regexp.MustCompile: it panics on error.
+func Must[T any](p *Pool[T], err error) *Pool[T] {
+	if err != nil {
+		panic(err)
+	}
+	return p
+}
+
 // Checkout is one held resource. It is an ownership.Lease, so Value reports
 // ErrReleased once returned, Release returns the resource exactly once, and
 // Close is Release — which also makes a Checkout an io.Closer a Scope can

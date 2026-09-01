@@ -71,6 +71,18 @@ func TestNamedAndFuncsFormsMatchTasks(t *testing.T) {
 	}
 }
 
+func TestMustPanicsOnlyOnError(t *testing.T) {
+	if async.Must(async.New(async.Unlimited)) == nil {
+		t.Fatal("Must returned nil")
+	}
+	defer func() {
+		if recover() == nil {
+			t.Fatal("Must did not panic on error")
+		}
+	}()
+	async.Must(async.New(async.Limit{}))
+}
+
 func TestTaskValidation(t *testing.T) {
 	run := runner(t, async.Unlimited)
 	for _, tt := range []struct {

@@ -99,6 +99,16 @@ func New(limit Limit, opts ...Option) (*Runner, error) {
 	return r, nil
 }
 
+// Must is New for a fixed argument list that cannot fail, in the manner of
+// regexp.MustCompile: it panics on error, for package-level and constructor
+// use where there is nowhere to return one.
+func Must(r *Runner, err error) *Runner {
+	if err != nil {
+		panic(err)
+	}
+	return r
+}
+
 // Limit reports the configured concurrency limit.
 func (r *Runner) Limit() Limit { return r.limit }
 
