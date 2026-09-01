@@ -231,6 +231,50 @@ and both made because velocity had no consumers yet:
   while the success path touches only the result slot. Within ~8% of conc
   now, and cancellable where conc is not.
 
+## failsafe-go: the boundary, and the bridge (implemented)
+
+The premise singled failsafe-go out — "actually it's maintained and maybe
+used directly?" — and it was right to. It is ~10k lines, actively
+maintained, and covers retry, circuit breaker, hedge, timeout, fallback,
+rate limiter, bulkhead, adaptive limiter, adaptive throttler, budget, cache
+policy, priority, and HTTP/gRPC integrations. velocity's `resilience` is
+2,250 lines covering three of those. It is a **strict subset**, and the
+README now says so rather than implying otherwise: if you want breadth, use
+failsafe-go.
+
+Two things survive that comparison, and they are the same thing twice:
+
+- **`Hedge.Discard`.** Their `hedgepolicy` cancels losing attempts'
+  contexts but never disposes their *results* — the only cleanup mention in
+  the package is about context references. A hedge over a connection
+  therefore leaks N-1 of them. That is not a defect in failsafe-go: a
+  library that treats the result as opaque cannot know that dropping one
+  costs something. velocity can, because `ownership` exists.
+- **The `failsafeown` module.** Rather than compete, bridge: make failsafe's
+  result type `*ownership.Owner[T]` and release whatever the policy chain
+  did not return. It closes the same hole across *their* policies —
+  a hedge's losers, a retry rejecting a result by predicate (a leak with no
+  error anywhere to hint at it), a fallback dropping the primary's result, a
+  timeout returning before a result that arrives anyway. It tracks by
+  pointer identity rather than hooking failsafe internals, and keeps
+  disposing after `Get` returns, since a hedge's loser can arrive later.
+  Deleting the release makes five of its tests fail, which is the check that
+  the tests measure the leak rather than describe it. A separate module, so
+  the library keeps no dependency on failsafe-go, grpc, or protobuf.
+
+One idea taken back the other way: **`LatencyDelay`**, after their
+`NewWithDelayQuantile`. A static hedge delay has to be guessed for a
+distribution the caller does not know and that moves under load; hedging at
+the p95 of recent successful attempts defines "too slow" by what the
+dependency has been doing. Theirs uses a t-digest; a ring buffer with
+nearest-rank is enough at a hedge window's sample count and needs no
+dependency.
+
+Not taken: their adaptive limiter and throttler remain the deferred items
+recorded below — but the reason has changed. They are no longer worth
+building here at all, because failsafe-go has them and `failsafeown` now
+makes them usable with owned results.
+
 ## Hedging, and the five libraries not taken (implemented)
 
 The premise's second list — `faustbrian/go-{resilience,hedge,fault-injection,concurrency-limit,bulkhead,adaptive-throttle}` — was read rather than ported. One idea in it was a genuine gap:

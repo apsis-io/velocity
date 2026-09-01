@@ -24,9 +24,12 @@
 //   - traits — the Drop and Clone function types ownership is configured
 //     with, composable as Drop(...).Clone(...).
 //
-// The analysis module (a separate go.mod, so the library does not depend on
-// x/tools) ships lostrelease, a go vet analyzer that reports an ownership
-// borrow, lease, or pool checkout not released on every path.
+// Two further modules keep their dependencies out of the library. The
+// analysis module ships lostrelease, a go vet analyzer that reports an
+// ownership borrow, lease, or pool checkout not released on every path. The
+// failsafeown module runs failsafe-go's policies over owned results,
+// releasing whatever the policy chain discards — the leak a library that
+// treats results as opaque cannot see.
 //
 // Every package follows the same rules: nothing waits except where the
 // caller's context governs it, errors are typed and unwrap to sentinels,

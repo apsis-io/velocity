@@ -409,3 +409,117 @@ func TestHedgeInsideBreaker(t *testing.T) {
 		t.Fatalf("breaker = %v after two failed attempts, want open", got)
 	}
 }
+
+func TestLatencyDelayEstimatesFromObservedDurations(t *testing.T) {
+	warmup := 5 * time.Second
+	d, err := resilience.NewLatencyDelay(0.9, 100, 10, warmup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Below minSamples there is nothing to estimate from.
+	for range 9 {
+		d.Observe(0, 10*time.Millisecond, nil, false)
+	}
+	if got := d.Delay(1); got != warmup {
+		t.Fatalf("delay = %v before minSamples, want the warmup %v", got, warmup)
+	}
+	if got := d.Samples(); got != 9 {
+		t.Fatalf("samples = %d", got)
+	}
+
+	// 100 samples of 1..100ms: p90 by nearest rank is the 90th, 90ms.
+	d, _ = resilience.NewLatencyDelay(0.9, 100, 10, warmup)
+	for i := 1; i <= 100; i++ {
+		d.Observe(0, time.Duration(i)*time.Millisecond, nil, false)
+	}
+	if got := d.Delay(1); got != 90*time.Millisecond {
+		t.Fatalf("p90 = %v, want 90ms", got)
+	}
+	if got := d.Samples(); got != 100 {
+		t.Fatalf("samples = %d, want the full window", got)
+	}
+
+	// The ring forgets: 100 fresh fast samples replace the slow ones.
+	for range 100 {
+		d.Observe(0, time.Millisecond, nil, false)
+	}
+	if got := d.Delay(1); got != time.Millisecond {
+		t.Fatalf("p90 after the window turned over = %v, want 1ms", got)
+	}
+}
+
+// A failed attempt's duration says how fast the dependency broke, not how
+// long its work takes, so it is not recorded.
+func TestLatencyDelayIgnoresFailuresAndInvalidConfig(t *testing.T) {
+	d, err := resilience.NewLatencyDelay(0.5, 10, 1, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d.Observe(0, time.Hour, errors.New("broke"), false)
+	d.Observe(0, -time.Second, nil, false)
+	if got := d.Samples(); got != 0 {
+		t.Fatalf("samples = %d, want failures and negatives ignored", got)
+	}
+
+	for _, bad := range [][4]any{
+		{0.0, 10, 1, time.Second}, {1.0, 10, 1, time.Second},
+		{0.5, 0, 1, time.Second}, {0.5, 10, 0, time.Second},
+		{0.5, 10, 11, time.Second}, {0.5, 10, 1, -time.Second},
+	} {
+		_, err := resilience.NewLatencyDelay(bad[0].(float64), bad[1].(int), bad[2].(int), bad[3].(time.Duration))
+		if !errors.Is(err, resilience.ErrInvalidBackoff) {
+			t.Fatalf("NewLatencyDelay%v = %v, want rejection", bad, err)
+		}
+	}
+
+	var nilDelay *resilience.LatencyDelay
+	nilDelay.Observe(0, time.Second, nil, false)
+	if nilDelay.Delay(1) != 0 || nilDelay.Samples() != 0 {
+		t.Fatal("a nil LatencyDelay is not inert")
+	}
+}
+
+// Wired into a policy, the delay adapts: a warm estimate hedges a slow
+// attempt that a cold one would have waited out.
+func TestHedgeWithLatencyDelay(t *testing.T) {
+	latency, err := resilience.NewLatencyDelay(0.9, 32, 4, time.Hour)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := resilience.HedgePolicy[int]{
+		MaxAttempts: 2,
+		Delay:       latency.Delay,
+		Hooks:       resilience.HedgeHooks{OnAttemptComplete: latency.Observe},
+	}
+	// Four fast executions warm the estimate; the warmup would never hedge.
+	for range 4 {
+		if _, err := resilience.Hedge(context.Background(), policy, func(context.Context, int) (int, error) {
+			return 1, nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if latency.Samples() != 4 {
+		t.Fatalf("samples = %d, want the four completed attempts", latency.Samples())
+	}
+	if got := latency.Delay(1); got >= time.Hour {
+		t.Fatalf("delay = %v, still the warmup after warming", got)
+	}
+
+	// Now a slow attempt is overtaken, using a delay nobody had to guess.
+	release := make(chan struct{})
+	value, err := resilience.Hedge(context.Background(), policy, func(ctx context.Context, attempt int) (int, error) {
+		if attempt == 0 {
+			select {
+			case <-release:
+			case <-ctx.Done():
+			}
+			return 0, ctx.Err()
+		}
+		return 2, nil
+	})
+	close(release)
+	if err != nil || value != 2 {
+		t.Fatalf("Hedge = (%d, %v), want the hedge to have overtaken", value, err)
+	}
+}

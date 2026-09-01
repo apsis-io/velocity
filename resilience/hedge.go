@@ -3,6 +3,8 @@ package resilience
 import (
 	"context"
 	"errors"
+	"math"
+	"slices"
 	"sync"
 	"time"
 )
@@ -316,4 +318,108 @@ func (b *HedgeBudget) Tokens() float64 {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return b.tokens
+}
+
+// LatencyDelay derives a hedge delay from observed latency instead of a
+// guess. A static delay has to be chosen for a latency distribution the
+// caller does not yet know and that shifts under load; this hedges an
+// attempt once it has taken longer than the given quantile of recent
+// successful ones, so "too slow" is defined by what the dependency has
+// actually been doing.
+//
+//	latency, err := resilience.NewLatencyDelay(0.95, 256, 20, time.Second)
+//	policy := resilience.HedgePolicy[T]{
+//	    MaxAttempts: 2,
+//	    Delay:       latency.Delay,
+//	    Hooks:       resilience.HedgeHooks{OnAttemptComplete: latency.Observe},
+//	}
+//
+// The two halves are wired separately because Hooks has one slot: a caller
+// with their own instrumentation calls Observe from inside it. Only
+// successful attempts are recorded — a failure's duration says how fast the
+// dependency broke, not how long its work takes.
+//
+// It is safe for concurrent use; share one per dependency, as the samples
+// are only meaningful across executions.
+type LatencyDelay struct {
+	quantile   float64
+	minSamples int
+	warmup     time.Duration
+
+	mu      sync.Mutex
+	samples []time.Duration // ring buffer of recent successful durations
+	next    int
+	filled  bool
+	scratch []time.Duration
+}
+
+// NewLatencyDelay records the last window successful durations and hedges at
+// the given quantile of them. Until minSamples have been recorded there is
+// nothing to estimate from and warmup is used instead; pass a warmup longer
+// than any plausible response to hold hedging off entirely until then.
+func NewLatencyDelay(quantile float64, window, minSamples int, warmup time.Duration) (*LatencyDelay, error) {
+	if quantile <= 0 || quantile >= 1 || window <= 0 || minSamples <= 0 || minSamples > window || warmup < 0 {
+		return nil, &PolicyError{Cause: ErrInvalidBackoff}
+	}
+	return &LatencyDelay{
+		quantile:   quantile,
+		minSamples: minSamples,
+		warmup:     warmup,
+		samples:    make([]time.Duration, window),
+		scratch:    make([]time.Duration, 0, window),
+	}, nil
+}
+
+// Observe records one attempt's duration. It has the shape of
+// HedgeHooks.OnAttemptComplete so it can be assigned to it directly.
+func (d *LatencyDelay) Observe(_ int, duration time.Duration, err error, _ bool) {
+	if d == nil || err != nil || duration < 0 {
+		return
+	}
+	d.mu.Lock()
+	d.samples[d.next] = duration
+	d.next++
+	if d.next == len(d.samples) {
+		d.next = 0
+		d.filled = true
+	}
+	d.mu.Unlock()
+}
+
+// Delay reports the current quantile of recorded durations, for every
+// attempt: an attempt is slow by the same standard whichever one it is. It
+// has the shape of Backoff.
+func (d *LatencyDelay) Delay(int) time.Duration {
+	if d == nil {
+		return 0
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	count := d.next
+	if d.filled {
+		count = len(d.samples)
+	}
+	if count < d.minSamples {
+		return d.warmup
+	}
+	// Nearest-rank on a copy: the window is small and this runs once per
+	// attempt launch, not per request.
+	d.scratch = append(d.scratch[:0], d.samples[:count]...)
+	slices.Sort(d.scratch)
+	rank := int(math.Ceil(d.quantile*float64(count))) - 1
+	return d.scratch[max(0, min(rank, count-1))]
+}
+
+// Samples reports how many durations have been recorded, up to the window,
+// which is how a test or a metric sees whether the estimate is warm.
+func (d *LatencyDelay) Samples() int {
+	if d == nil {
+		return 0
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.filled {
+		return len(d.samples)
+	}
+	return d.next
 }

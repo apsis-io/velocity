@@ -269,6 +269,43 @@ hedging is the last one that should receive several times its usual load, so
 each execution credits the budget and each speculative attempt spends a
 credit.
 
+`Delay` can be measured rather than guessed: `NewLatencyDelay(0.95, …)`
+hedges an attempt once it exceeds the p95 of recent successful ones, so
+"too slow" tracks what the dependency has actually been doing.
+
+### On failsafe-go
+
+`resilience` is three policies, not a resilience framework, and that is the
+whole of it. [failsafe-go](https://github.com/failsafe-go/failsafe-go)
+covers much more — timeout, fallback, rate limiting, bulkhead, adaptive
+concurrency and throttling, HTTP and gRPC integrations — is actively
+maintained, and is the better choice when breadth is what you want. velocity
+does not try to catch up with it.
+
+What failsafe-go cannot express is that a **result may own something**. Every
+policy that discards a result leaks it when the result is a connection, a
+file, or a lock: a hedge drops N−1 results, a retry with a result predicate
+discards one that arrived perfectly well, a fallback drops the primary's, a
+timeout returns before a result that arrives anyway. That is not a bug in
+failsafe-go — a library that treats the result as opaque cannot know that
+dropping one costs something.
+
+The [`failsafeown`](failsafeown) module supplies the missing half. Make the
+result an `*ownership.Owner[T]`, which carries its own `Drop`, and whatever
+the policy chain does not hand back is released:
+
+```go
+exec := failsafe.With(
+    fallback.NewWithResult(spare),
+    hedgepolicy.NewWithDelay[*ownership.Owner[*Conn]](50*time.Millisecond),
+)
+conn, err := failsafeown.Get(ctx, exec, dial, failsafeown.Hooks[*Conn]{})
+// every connection the chain dialled and dropped is closed
+```
+
+It is a separate module, so the library itself keeps no dependency on
+failsafe-go.
+
 ## Performance
 
 Head-to-head numbers against the libraries these packages drew from —
