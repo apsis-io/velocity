@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/apsis-io/velocity/async"
+	"github.com/apsis-io/velocity/ownership"
 )
 
 func ExampleGather() {
@@ -18,6 +19,37 @@ func ExampleGather() {
 	// Output:
 	// one 1
 	// two 2
+}
+
+func ExampleMap() {
+	outcomes, err := async.Map(context.Background(), async.Limited(2), async.Hooks{}, []int{1, 2, 3},
+		func(_ context.Context, n int) (int, error) { return n * n, nil })
+	fmt.Println(err)
+	for _, outcome := range outcomes {
+		fmt.Println(outcome.Index, outcome.Value)
+	}
+	// Output:
+	// <nil>
+	// 0 1
+	// 1 4
+	// 2 9
+}
+
+// Running Map inside a read keeps the borrow for as long as any worker can
+// see the slice, since they all finish before Map returns.
+func ExampleMap_ownedCollection() {
+	owner, _ := ownership.New([]string{"a", "bb", "ccc"})
+	defer owner.Release()
+
+	lengths, _ := owner.View(func(items []string) ([]async.Outcome[int], error) {
+		return async.Map(context.Background(), async.Unlimited, async.Hooks{}, items,
+			func(_ context.Context, s string) (int, error) { return len(s), nil })
+	})
+	for _, outcome := range lengths {
+		fmt.Print(outcome.Value, " ")
+	}
+	fmt.Println()
+	// Output: 1 2 3
 }
 
 func ExampleGather_takeRecipe() {

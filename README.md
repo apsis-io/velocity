@@ -296,6 +296,18 @@ outcomes, err := async.Gather(ctx, plan) // source-index order, errors.Join'd
 `Hooks.OnTaskComplete` reports permit-queue wait time separately from a
 task's own run time — the split isn't visible from outside `Gather`/`Race`.
 
+`async.Map`/`ForEach` run one function over a collection from a fixed pool
+of `Limit` goroutines, rather than one goroutine per item, and return an
+`Outcome` per item in input order. Run it inside a read to fan out over an
+owned slice; every worker finishes before `Map` returns, so the borrow covers
+them all:
+
+```go
+results, err := owner.View(func(items []Item) ([]async.Outcome[Result], error) {
+    return async.Map(ctx, async.Limited(8), async.Hooks{}, items, process)
+})
+```
+
 `async.Broadcast` fans one `*ownership.Owner[T]` out to concurrent workers
 using `Owner[T].Read`'s existing concurrent-read guarantee. `async.Pipeline`
 chains heterogeneously-typed stages via a generic `Then[R any]` method.

@@ -39,9 +39,24 @@ func NewPlan[T any](limit Limit, hooks Hooks, tasks ...Task[T]) (Plan[T], error)
 	return plan, nil
 }
 
-func (p Plan[T]) valid() error {
-	if !p.limit.configured || (!p.limit.unlimited && p.limit.value <= 0) {
+func (l Limit) valid() error {
+	if !l.configured || (!l.unlimited && l.value <= 0) {
 		return &PlanError{Index: -1, Cause: ErrInvalidLimit}
+	}
+	return nil
+}
+
+// workers is how many goroutines the limit allows for n units of work.
+func (l Limit) workers(n int) int {
+	if l.unlimited {
+		return n
+	}
+	return min(l.value, n)
+}
+
+func (p Plan[T]) valid() error {
+	if err := p.limit.valid(); err != nil {
+		return err
 	}
 	if len(p.tasks) == 0 {
 		return &PlanError{Index: -1, Cause: ErrNoTasks}

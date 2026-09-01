@@ -30,6 +30,12 @@ one actually does:
 | **hunch** `All` | source index, via post-hoc sort | none | first error |
 | **errgroup** | caller writes by index | `SetLimit` (unused here) | first error |
 
+| | per-item result | pool | cancellable |
+|---|---|---|---|
+| **velocity** `async.Map` | `Outcome` (index, value, error) | `Limited(n)` workers | yes, via `ctx` |
+| **conc** `iter.Mapper.MapErr` | bare `R`, errors joined | `MaxGoroutines` workers | **no** |
+| **errgroup** hand-rolled pool | bare `R`, first error | atomic-counter workers | no |
+
 Fairness rules the benchmarks follow, so the deltas mean something:
 
 - Every arm's callback does **identical** trivial work.
@@ -44,7 +50,7 @@ Indicative only — measured on one machine, not authoritative.
 
 ```
 Intel(R) Xeon(R) CPU E5-2690 v4 @ 2.60GHz · linux/amd64 · go1.27.0
-hunch v1.1.3 · go-singleflightx v0.3.2 · resenje.org/singleflight v0.4.3 · x/sync v0.22.0
+hunch v1.1.3 · go-singleflightx v0.3.2 · resenje.org/singleflight v0.4.3 · x/sync v0.22.0 · conc v0.3.0
 median of -count=5
 ```
 
@@ -74,6 +80,14 @@ median of -count=5
 | velocity `Unlimited` | 4579 | 1752 | 19 |
 | velocity `Limited(4)` | 6559 | 1864 | 20 |
 | hunch | 8122 | 1960 | 34 |
+
+**Async map** (one function over a collection, 8 workers)
+
+| | 8 items ns/op | 1024 items ns/op | B/op at 1024 | allocs/op |
+|---|---|---|---|---|
+| errgroup pool | 3500 | 28875 | 8992 | 20 |
+| conc `MapErr` | 3345 | 32781 | 8592 | 16 |
+| velocity `Map` | 4238 | 51754 | 50520 | 19 |
 
 **dedupe backends**, all three workloads (ns/op, median of 5)
 
@@ -121,6 +135,18 @@ of those, it is the right tool.
 `Race`/`FirstSuccess`, which do use it to stop siblings) and allocated an error
 slice even when nothing failed. Removing both took it from 23 to 19 allocations
 and narrowed the gap to errgroup from 1.5x to 1.3x.
+
+**`Map` trails conc by ~1.6x at 1024 items, and the gap is the result shape.**
+All three arms dispatch the same way — a fixed pool pulling indices from an
+atomic counter — but velocity writes a 48-byte `Outcome` per item where the
+others write an 8-byte `int`: six times the allocation to zero and fill, ~50 ns
+per item against ~30. That is the price of knowing *which* items failed rather
+than only that some did; a caller who only needs the joined error has
+`ForEach`, which pays the same because it is `Map` underneath. Per-item clock
+reads for `Hooks` are skipped when no hook is set, which was worth ~40% on its
+own. Against `Gather` over the same collection the comparison is not close:
+`Map` is 12x faster at 1024 items with constant allocations, because `Gather`
+spawns one goroutine per task and `Map` does not.
 
 **`Limited(4)` costs ~50% over `Unlimited`** for 8 trivial tasks. The permit
 channel is not free. With real task bodies that overhead is amortized away, but

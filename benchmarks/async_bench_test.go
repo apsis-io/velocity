@@ -2,10 +2,13 @@ package benchmarks_test
 
 import (
 	"context"
+	"fmt"
+	"sync/atomic"
 	"testing"
 
 	"github.com/aaronjan/hunch"
 	"github.com/apsis-io/velocity/async"
+	"github.com/sourcegraph/conc/iter"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -76,6 +79,60 @@ func BenchmarkAsyncGather(b *testing.B) {
 			asyncErrgroupSink = results
 		}
 	})
+}
+
+// BenchmarkAsyncMap compares homogeneous fan-out over a collection: velocity
+// Map, conc iter.Mapper.MapErr, and a hand-rolled errgroup pool. All three use
+// the same pool size and the same function; only velocity reports per-item
+// outcomes rather than a bare result slice. conc receives *T where the others
+// receive T, which for int is the same load.
+func BenchmarkAsyncMap(b *testing.B) {
+	ctx := context.Background()
+	const workers = 8
+	for _, size := range []int{8, 1024} {
+		items := make([]int, size)
+		for i := range items {
+			items[i] = i
+		}
+		b.Run(fmt.Sprintf("velocity/map/%d", size), func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				asyncVelocitySink, _ = async.Map(ctx, async.Limited(workers), async.Hooks{}, items, benchmarkTask)
+			}
+		})
+		b.Run(fmt.Sprintf("conc/iter.MapErr/%d", size), func(b *testing.B) {
+			mapper := iter.Mapper[int, int]{MaxGoroutines: workers}
+			b.ReportAllocs()
+			for b.Loop() {
+				asyncErrgroupSink, _ = mapper.MapErr(items, func(value *int) (int, error) { return benchmarkTask(ctx, *value) })
+			}
+		})
+		b.Run(fmt.Sprintf("errgroup/pool/%d", size), func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				results := make([]int, len(items))
+				var next atomic.Int64
+				var group errgroup.Group
+				for range min(workers, len(items)) {
+					group.Go(func() error {
+						for {
+							i := int(next.Add(1) - 1)
+							if i >= len(items) {
+								return nil
+							}
+							value, err := benchmarkTask(ctx, items[i])
+							results[i] = value
+							if err != nil {
+								return err
+							}
+						}
+					})
+				}
+				_ = group.Wait()
+				asyncErrgroupSink = results
+			}
+		})
+	}
 }
 
 func BenchmarkAsyncGatherVelocityLimited(b *testing.B) {

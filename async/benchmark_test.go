@@ -2,6 +2,7 @@ package async_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -34,4 +35,34 @@ func BenchmarkGather(b *testing.B) {
 			asyncSink, _ = async.Gather(context.Background(), plan)
 		}
 	})
+}
+
+// BenchmarkMapVersusGather runs the same function over the same collection
+// both ways, to substantiate Map's fixed pool against Gather's one goroutine
+// per task.
+func BenchmarkMapVersusGather(b *testing.B) {
+	square := func(_ context.Context, n int) (int, error) { return n * n, nil }
+	for _, size := range []int{8, 1024} {
+		items := make([]int, size)
+		for i := range items {
+			items[i] = i
+		}
+		b.Run(fmt.Sprintf("map/%d", size), func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				asyncSink, _ = async.Map(context.Background(), async.Limited(8), async.Hooks{}, items, square)
+			}
+		})
+		b.Run(fmt.Sprintf("gather/%d", size), func(b *testing.B) {
+			tasks := make([]async.Task[int], size)
+			for i, item := range items {
+				tasks[i] = async.Task[int]{Run: func(ctx context.Context) (int, error) { return square(ctx, item) }}
+			}
+			plan, _ := async.NewPlan(async.Limited(8), async.Hooks{}, tasks...)
+			b.ReportAllocs()
+			for b.Loop() {
+				asyncSink, _ = async.Gather(context.Background(), plan)
+			}
+		})
+	}
 }
