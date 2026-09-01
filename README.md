@@ -153,6 +153,24 @@ case <-ctx.Done():
 return conn.Release()
 ```
 
+`pool.Pool[T]` puts `Lease` to work for resources that are made, held, and
+returned — connections, buffers, handles. `Get` waits for capacity under the
+caller's context; a `Checkout` *is* a `Lease`, so use after return and
+double return are caught, and `Discard` closes a broken resource instead of
+returning it. It is also an `io.Closer`, so a `Scope` can own it:
+
+```go
+clients, err := pool.New(pool.Config[*Client]{
+    New:   dial,
+    Close: func(c *Client) error { return c.Close() },
+    Max:   8,
+})
+
+checkout, err := clients.Get(ctx)
+defer checkout.Release()          // or checkout.Discard() if it turned out broken
+client, err := checkout.Value()   // ErrReleased once returned
+```
+
 ## Freeze and transform
 
 `Freeze` gives up mutation for a counted read-only handle. `Frozen[T]` has no

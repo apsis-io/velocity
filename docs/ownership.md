@@ -147,6 +147,7 @@ readers (`Frozen`).
 | an `io.Closer` to own | `NewCloser` |
 | a read-only value to publish | `NewFrozen` |
 | a permit, allocation, or reference to hand back | `NewLease` |
+| a bounded set of reusable resources | `pool.New` (checkouts are leases) |
 | several resources acquired in sequence | `NewScope` |
 | anything else needing borrow enforcement | `New` |
 

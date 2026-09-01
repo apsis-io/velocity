@@ -365,6 +365,22 @@ Rewrites the best of `AaronJan/Hunch` and `sourcegraph/conc` as `async` +
   half-open probe slot occupied until the next transition. `Failure` is nil
   by default and counts every error, including the caller's own
   cancellation — explicit over guessing, with the exclusion recipe on the
-  field. Rate limiters remain deferred.
+  field. Rate limiters are not planned: `x/time/rate` already does the job
+  and velocity would add nothing but a wrapper.
+- `pool.Pool[T]` is the concrete primitive behind "resources held and
+  returned", the one shape in the ownership guidance that had none. A
+  `Checkout` embeds `*ownership.Lease[T]` rather than wrapping it, so
+  release-exactly-once, use-after-return detection, `Move`, and `io.Closer`
+  (hence `Scope.OwnCloser`) are inherited rather than re-implemented;
+  `Discard` is the only addition, a flag the lease's release closure reads to
+  destroy instead of return. Capacity is a permit channel covering idle and
+  checked-out resources together, taken before construction and returned
+  after the idle set is updated, so a waiter admitted by a release finds the
+  returned resource already there. Idle reuse is LIFO, warm first. `Close`
+  destroys idle resources and refuses new `Get`s but does not wait for
+  outstanding checkouts, which are destroyed on return — the same
+  non-waiting split as `Seal`/`Drained`, and for the same reason. No health
+  check on `Get`: the caller who used the resource knows whether it is
+  broken, and says so with `Discard`.
 - Root `Task`/`Outcome`/`ID` registry defaults remain future benchmark
   decisions, not committed API, per the original brief.
