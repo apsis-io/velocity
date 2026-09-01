@@ -44,6 +44,33 @@ func TestNewValidation(t *testing.T) {
 	}
 }
 
+func TestNamedAndFuncsFormsMatchTasks(t *testing.T) {
+	run := runner(t, async.Unlimited)
+	one := func(context.Context) (int, error) { return 1, nil }
+	two := func(context.Context) (int, error) { return 0, errors.New("two") }
+
+	got, err := run.GatherFuncs(context.Background(), one, two)
+	if err == nil || len(got) != 2 || got[0].Value != 1 || got[0].Label != "" || got[1].Err == nil {
+		t.Fatalf("GatherFuncs = (%+v, %v)", got, err)
+	}
+	named := async.Named("one", one)
+	if named.Label != "one" || named.Run == nil {
+		t.Fatalf("Named = %+v", named)
+	}
+	if out, err := run.FirstSuccessFuncs(context.Background(), two, one); err != nil || out.Index != 1 || out.Value != 1 {
+		t.Fatalf("FirstSuccessFuncs = (%+v, %v)", out, err)
+	}
+	if out, err := run.RaceFuncs(context.Background(), one); err != nil || out.Value != 1 {
+		t.Fatalf("RaceFuncs = (%+v, %v)", out, err)
+	}
+	if _, err := run.GatherFuncs[int](context.Background()); !errors.Is(err, async.ErrNoTasks) {
+		t.Fatalf("empty GatherFuncs = %v", err)
+	}
+	if _, err := run.GatherFuncs(context.Background(), one, nil); !errors.Is(err, async.ErrNilTask) {
+		t.Fatalf("nil func = %v", err)
+	}
+}
+
 func TestTaskValidation(t *testing.T) {
 	run := runner(t, async.Unlimited)
 	for _, tt := range []struct {

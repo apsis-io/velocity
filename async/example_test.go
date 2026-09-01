@@ -12,8 +12,8 @@ import (
 func ExampleRunner_Gather() {
 	run, _ := async.New(async.Limited(2))
 	outcomes, _ := run.Gather(context.Background(),
-		async.Task[int]{Label: "one", Run: func(context.Context) (int, error) { return 1, nil }},
-		async.Task[int]{Label: "two", Run: func(context.Context) (int, error) { return 2, nil }},
+		async.Named("one", func(context.Context) (int, error) { return 1, nil }),
+		async.Named("two", func(context.Context) (int, error) { return 2, nil }),
 	)
 	fmt.Println(outcomes[0].Label, outcomes[0].Value)
 	fmt.Println(outcomes[1].Label, outcomes[1].Value)
@@ -66,10 +66,10 @@ func ExampleRunner_Map_ownedCollection() {
 
 func ExampleRunner_Gather_takeRecipe() {
 	run, _ := async.New(async.Unlimited)
-	outcomes, _ := run.Gather(context.Background(),
-		async.Task[int]{Run: func(context.Context) (int, error) { return 1, nil }},
-		async.Task[int]{Run: func(context.Context) (int, error) { return 2, nil }},
-		async.Task[int]{Run: func(context.Context) (int, error) { return 3, nil }},
+	outcomes, _ := run.GatherFuncs(context.Background(),
+		func(context.Context) (int, error) { return 1, nil },
+		func(context.Context) (int, error) { return 2, nil },
+		func(context.Context) (int, error) { return 3, nil },
 	)
 	firstTwo := outcomes[:2]
 	lastTwo := outcomes[len(outcomes)-2:]

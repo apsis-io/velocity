@@ -37,6 +37,20 @@ type Task[T any] struct {
 	Run   func(context.Context) (T, error)
 }
 
+// Named builds a labeled Task without the struct literal.
+func Named[T any](label string, run func(context.Context) (T, error)) Task[T] {
+	return Task[T]{Label: label, Run: run}
+}
+
+// tasks wraps bare functions as unlabeled Tasks, for the *Funcs forms.
+func tasks[T any](fns []func(context.Context) (T, error)) []Task[T] {
+	out := make([]Task[T], len(fns))
+	for i, fn := range fns {
+		out[i].Run = fn
+	}
+	return out
+}
+
 // Runner is a concurrency policy — a Limit and optional Hooks — stated once
 // and applied to every operation run through it.
 //

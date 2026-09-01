@@ -103,6 +103,21 @@ func joinedErrors[T any](outcomes []Outcome[T]) error {
 	return errors.Join(errs...)
 }
 
+// GatherFuncs is Gather for unlabeled functions, which is most calls.
+func (r *Runner) GatherFuncs[T any](ctx context.Context, fns ...func(context.Context) (T, error)) ([]Outcome[T], error) {
+	return r.Gather(ctx, tasks(fns)...)
+}
+
+// RaceFuncs is Race for unlabeled functions.
+func (r *Runner) RaceFuncs[T any](ctx context.Context, fns ...func(context.Context) (T, error)) (Outcome[T], error) {
+	return r.Race(ctx, tasks(fns)...)
+}
+
+// FirstSuccessFuncs is FirstSuccess for unlabeled functions.
+func (r *Runner) FirstSuccessFuncs[T any](ctx context.Context, fns ...func(context.Context) (T, error)) (Outcome[T], error) {
+	return r.FirstSuccess(ctx, tasks(fns)...)
+}
+
 func race[T any](ctx context.Context, r *Runner, tasks []Task[T], successOnly bool) (Outcome[T], error) {
 	if err := validTasks(r, tasks); err != nil {
 		return Outcome[T]{}, err

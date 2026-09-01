@@ -251,6 +251,14 @@ no consumers:
   is exported, with `Advance`, `Set`, and a `Sleeps` counter so backoff is
   asserted by count rather than by timing.
 
+Follow-ups: `async.Named(label, fn)` replaces the `Task` literal, and
+`GatherFuncs`/`RaceFuncs`/`FirstSuccessFuncs` take bare functions for the
+unlabeled case, which is most calls. The root package gained a `doc.go`
+mapping problem shapes to packages, since first contact was a `Version`
+constant. `Scope.OwnCloser` keeps its error return despite the `_ =` it
+forces: a resource enrolled after `Close` is silently leaked otherwise,
+which is the exact bug the type exists to prevent.
+
 Rejected: a non-error projection such as `owner.Get(func(T) R) R`. It would
 have to swallow `ErrConflict`, which is the one signal the package exists to
 raise.

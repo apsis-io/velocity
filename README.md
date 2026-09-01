@@ -311,10 +311,11 @@ default) and optional `Hooks` — and every operation runs through it:
 run, err := async.New(async.Limited(4), async.WithHooks(hooks))
 
 outcomes, err := run.Gather(ctx,                // source-index order, errors.Join'd
-    async.Task[int]{Label: "a", Run: fetchA},
-    async.Task[int]{Label: "b", Run: fetchB},
+    async.Named("a", fetchA),
+    async.Named("b", fetchB),
 )
-first, err := run.Race(ctx, tasks...)           // or FirstSuccess
+outcomes, err = run.GatherFuncs(ctx, fetchA, fetchB)   // unlabeled
+first, err := run.Race(ctx, tasks...)                  // or FirstSuccess; *Funcs forms too
 ```
 
 `Hooks.OnTaskComplete` reports permit-queue wait time separately from a
