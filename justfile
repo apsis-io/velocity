@@ -5,6 +5,7 @@ fmt:
 
 vet:
     go vet ./...
+    staticcheck ./...
 
 # Run velocity's own analyzers (lostrelease) as a vet tool over every module.
 lint:

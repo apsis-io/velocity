@@ -19,15 +19,14 @@ type lease[T any] struct {
 	issuer   *handle
 	id       uint64
 	kind     borrowKind
-	closing  bool
 	released bool
-	active   int
+	active   int // Project/Update calls in flight through this lease
 }
 
 func (l *lease[T]) begin(kind borrowKind, op Operation) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if l.closing || l.released || l.kind != kind {
+	if l.released || l.kind != kind {
 		return &ReleasedError{Operation: op}
 	}
 	l.active++
@@ -37,24 +36,12 @@ func (l *lease[T]) begin(kind borrowKind, op Operation) error {
 func (l *lease[T]) end() {
 	l.mu.Lock()
 	l.active--
-	if l.closing && l.active == 0 && !l.released {
-		l.cell.releaseLease(l)
-	}
-	l.mu.Unlock()
-}
-
-func (l *lease[T]) closeScoped() {
-	l.mu.Lock()
-	l.closing = true
-	if l.active == 0 && !l.released {
-		l.cell.releaseLease(l)
-	}
 	l.mu.Unlock()
 }
 
 func (l *lease[T]) withWrite[R any](op Operation, fn func(*T) (R, error)) (R, error) {
 	l.mu.Lock()
-	if l.closing || l.released || l.kind != borrowWrite {
+	if l.released || l.kind != borrowWrite {
 		l.mu.Unlock()
 		var zero R
 		return zero, &ReleasedError{Operation: op}
