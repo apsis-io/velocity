@@ -10,7 +10,7 @@ built on Go 1.27 generic methods, with a `go vet` analyzer that catches
 leaked handles before the code runs.
 
 ```sh
-go get github.com/apsis-io/velocity@v0.3.0
+go get github.com/apsis-io/velocity@v0.4.0
 ```
 
 **Status: v0.** Requires Go 1.27. The API is deliberate but young — there
