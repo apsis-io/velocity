@@ -5,6 +5,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/apsis-io/velocity/ownership"
 )
@@ -204,5 +205,129 @@ func TestCallbackPanicReleasesBorrow(t *testing.T) {
 	}
 	if err := borrow.Release(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestConcurrentModelNeverWaits drives one cell from many goroutines with
+// every access and transfer operation the fuzz model uses, concurrently. The
+// no-wait invariant says every operation returns promptly with either
+// success or a lifecycle error, so the whole run must finish well inside the
+// deadline, and the counters must be balanced once it does.
+func TestConcurrentModelNeverWaits(t *testing.T) {
+	const goroutines, ops = 8, 2000
+	owner := mustOwner(t, 0)
+	// Handles that goroutines share: the owner, and a shared and frozen
+	// derivative produced on the fly by whichever goroutine gets there first.
+	var shared atomic.Pointer[ownership.Shared[int]]
+	var frozen atomic.Pointer[ownership.Frozen[int]]
+
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	for g := range goroutines {
+		wg.Go(func() {
+			seed := uint64(g + 1)
+			next := func() uint64 { seed = seed*6364136223846793005 + 1442695040888963407; return seed >> 33 }
+			for range ops {
+				var err error
+				switch next() % 12 {
+				case 0, 1:
+					_, err = owner.View(func(v int) (int, error) { return v, nil })
+				case 2:
+					err = owner.WithWrite(func(v *int) error { *v++; return nil })
+				case 3:
+					var b *ownership.ReadBorrow[int]
+					if b, err = owner.Borrow(); err == nil {
+						_, err = b.Project(func(v int) (int, error) { return v, nil })
+						_ = b.Release()
+					}
+				case 4:
+					var b *ownership.WriteBorrow[int]
+					if b, err = owner.BorrowMut(); err == nil {
+						_, err = b.Update(func(v *int) (int, error) { *v++; return *v, nil })
+						_ = b.Release()
+					}
+				case 5:
+					_ = owner.State()
+				case 6:
+					// Try to share; only one goroutine can succeed, and only
+					// while nothing is borrowed.
+					if s, e := owner.IntoShared(); e == nil {
+						shared.Store(s)
+					} else {
+						err = e
+					}
+				case 7:
+					if s := shared.Load(); s != nil {
+						if peer, e := s.Clone(); e == nil {
+							_, err = peer.View(func(v int) (int, error) { return v, nil })
+							_ = peer.Release()
+						} else {
+							err = e
+						}
+					}
+				case 8:
+					if s := shared.Load(); s != nil {
+						err = s.WithWrite(func(v *int) error { *v++; return nil })
+					}
+				case 9:
+					if f := frozen.Load(); f != nil {
+						_, err = f.View(func(v int) (int, error) { return v, nil })
+					}
+				case 10:
+					if s := shared.Load(); s != nil && shared.CompareAndSwap(s, nil) {
+						// Thaw back to unique if we are the sole handle,
+						// otherwise put it back for the others.
+						if o, e := s.IntoOwner(); e == nil {
+							if f, e := o.Freeze(); e == nil {
+								frozen.Store(f)
+							} else {
+								err = e
+								_ = o.Release()
+							}
+						} else {
+							err = e
+							shared.Store(s)
+						}
+					}
+				case 11:
+					if f := frozen.Load(); f != nil && frozen.CompareAndSwap(f, nil) {
+						if o, e := f.IntoOwner(); e == nil {
+							if s, e := o.IntoShared(); e == nil {
+								shared.Store(s)
+							} else {
+								err = e
+							}
+						} else {
+							err = e
+							frozen.Store(f)
+						}
+					}
+				}
+				if err != nil && !knownLifecycleError(err) {
+					t.Errorf("goroutine %d: unexpected error %v", g, err)
+					return
+				}
+			}
+		})
+	}
+	go func() { wg.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(30 * time.Second):
+		t.Fatal("concurrent model did not finish: an operation waited")
+	}
+
+	// Whichever handle owns the cell now, the borrow counters are balanced.
+	var state ownership.State
+	switch {
+	case shared.Load() != nil:
+		state = shared.Load().State()
+	case frozen.Load() != nil:
+		state = frozen.Load().State()
+	default:
+		state = owner.State()
+	}
+	if state.Readers != 0 || state.Writer {
+		t.Fatalf("unbalanced state after run: %+v", state)
 	}
 }

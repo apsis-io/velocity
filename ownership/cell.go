@@ -114,23 +114,65 @@ func (c *cell[T]) checkHandle(h *handle, op Operation) error {
 	return nil
 }
 
-func (c *cell[T]) acquireRead(h *handle, expected mode) (*lease[T], error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+// admitReadLocked applies every precondition for a read borrow and, if they
+// hold, counts it. Scoped and advanced borrows share it, so they cannot
+// disagree about what a read is allowed to coexist with.
+func (c *cell[T]) admitReadLocked(h *handle, expected mode) error {
 	if err := c.checkHandle(h, OpBorrow); err != nil {
-		return nil, err
+		return err
 	}
 	if c.mode != expected {
-		return nil, &MovedError{Operation: OpBorrow}
+		return &MovedError{Operation: OpBorrow}
 	}
 	if c.sealed {
-		return nil, &SealedError{Operation: OpBorrow}
+		return &SealedError{Operation: OpBorrow}
 	}
 	if c.writer {
-		return nil, c.conflictLocked(OpBorrow)
+		return c.conflictLocked(OpBorrow)
 	}
 	c.readers++
 	h.borrows++
+	return nil
+}
+
+// admitWriteLocked is admitReadLocked for an exclusive borrow.
+func (c *cell[T]) admitWriteLocked(h *handle, expected mode) error {
+	if err := c.checkHandle(h, OpBorrowMut); err != nil {
+		return err
+	}
+	if c.mode != expected {
+		return &MovedError{Operation: OpBorrowMut}
+	}
+	if c.sealed {
+		return &SealedError{Operation: OpBorrowMut}
+	}
+	if c.writer || c.readers != 0 {
+		return c.conflictLocked(OpBorrowMut)
+	}
+	c.writer = true
+	h.borrows++
+	return nil
+}
+
+// endReadLocked undoes admitReadLocked; endWriteLocked, admitWriteLocked.
+func (c *cell[T]) endReadLocked(h *handle) {
+	c.readers--
+	h.borrows--
+	c.signalDrainedLocked()
+}
+
+func (c *cell[T]) endWriteLocked(h *handle) {
+	c.writer = false
+	h.borrows--
+	c.signalDrainedLocked()
+}
+
+func (c *cell[T]) acquireRead(h *handle, expected mode) (*lease[T], error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := c.admitReadLocked(h, expected); err != nil {
+		return nil, err
+	}
 	c.nextID++
 	return &lease[T]{cell: c, issuer: h, id: c.nextID, kind: borrowRead}, nil
 }
@@ -138,20 +180,9 @@ func (c *cell[T]) acquireRead(h *handle, expected mode) (*lease[T], error) {
 func (c *cell[T]) acquireWrite(h *handle, expected mode) (*lease[T], error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if err := c.checkHandle(h, OpBorrowMut); err != nil {
+	if err := c.admitWriteLocked(h, expected); err != nil {
 		return nil, err
 	}
-	if c.mode != expected {
-		return nil, &MovedError{Operation: OpBorrowMut}
-	}
-	if c.sealed {
-		return nil, &SealedError{Operation: OpBorrowMut}
-	}
-	if c.writer || c.readers != 0 {
-		return nil, c.conflictLocked(OpBorrowMut)
-	}
-	c.writer = true
-	h.borrows++
 	c.nextID++
 	return &lease[T]{cell: c, issuer: h, id: c.nextID, kind: borrowWrite}, nil
 }
@@ -172,12 +203,10 @@ func (c *cell[T]) releaseLeaseLocked(l *lease[T]) bool {
 	l.released = true
 	switch l.kind {
 	case borrowRead:
-		c.readers--
+		c.endReadLocked(l.issuer)
 	case borrowWrite:
-		c.writer = false
+		c.endWriteLocked(l.issuer)
 	}
-	l.issuer.borrows--
-	c.signalDrainedLocked()
 	return true
 }
 

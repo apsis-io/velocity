@@ -6,6 +6,13 @@ fmt:
 vet:
     go vet ./...
 
+# Run velocity's own analyzers (lostrelease) as a vet tool over every module.
+lint:
+    go -C analysis build -o "${TMPDIR:-/tmp}/velocityvet" ./cmd/velocityvet
+    go vet -vettool="${TMPDIR:-/tmp}/velocityvet" ./...
+    go -C benchmarks vet -vettool="${TMPDIR:-/tmp}/velocityvet" ./...
+    go -C analysis test ./...
+
 test:
     go test ./...
 
@@ -15,7 +22,7 @@ race:
 debug:
     go test -tags=velocitydebug ./...
 
-check: fmt vet test race debug
+check: fmt vet lint test race debug
 
 fuzz duration="30s":
     go test ./ownership -run '^$' -fuzz '^FuzzOwnershipModel$' -fuzztime {{duration}}

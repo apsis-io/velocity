@@ -92,7 +92,21 @@ func (b *ReadBorrow[T]) Release() error   // idempotent; Close is an alias
 
 Under `-tags=velocitydebug`, a borrow that becomes unreachable while still
 held is logged through `slog.Default()` and released. Production builds have
-no such net; that is deliberate, and why `Borrow` is cheap there.
+no such net; that is deliberate, and why `Borrow` is cheap there. The static
+net is `just lint`: the `lostrelease` analyzer reports a handle not released
+on every path.
+
+## Capabilities
+
+```go
+type Viewer[T any]  interface { WithRead(func(T) error) error }
+type Mutator[T any] interface { Viewer[T]; WithWrite(func(*T) error) error }
+func View[T, R any](v Viewer[T], fn func(T) (R, error)) (R, error)
+func Mutate[T, R any](m Mutator[T], fn func(*T) (R, error)) (R, error)
+```
+
+Owner and Shared are Mutators; Frozen is a Viewer only. Ask for the
+capability you need in the signature.
 
 ## Transfer
 

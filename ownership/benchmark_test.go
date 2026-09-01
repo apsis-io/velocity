@@ -65,7 +65,9 @@ func BenchmarkOwner(b *testing.B) {
 		defer borrow.Release()
 		b.ReportAllocs()
 		for b.Loop() {
-			_, _ = owner.BorrowMut()
+			if _, err := owner.BorrowMut(); err == nil {
+				b.Fatal("BorrowMut succeeded during a read borrow")
+			}
 		}
 	})
 }

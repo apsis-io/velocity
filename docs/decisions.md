@@ -170,6 +170,35 @@ assertion layer**, and the API was cut to match:
   the last user is gone.
 - The no-wait invariant is untouched. It is the design.
 
+Three follow-ups from the same review:
+
+- **Scoped access allocates nothing.** A lease exists to give an advanced
+  borrow an identity to release later; a scoped call releases right here,
+  so `View`/`Mutate` now bump the cell's counters directly through the same
+  `admitReadLocked`/`admitWriteLocked` checks advanced borrows use, and undo
+  them in a defer. 100 ns / 1 alloc → 47 ns / 0 allocs, roughly 2x a bare
+  `RWMutex`.
+- **Capability interfaces.** `Viewer[T]`/`Mutator[T]` put read-only intent
+  in a signature, checked by the compiler, which extends the one type-level
+  guarantee `Frozen` had to every call boundary. Go 1.27 still rejects
+  generic methods in interfaces, so they name `WithRead`/`WithWrite` and
+  package-level `View`/`Mutate` restore the `(R, error)` shape.
+- **The leak check is static.** `analysis/lostrelease` is a `go/analysis`
+  pass modelled on vet's `lostcancel`: a `Borrow`/`BorrowMut`/`NewLease`/
+  `pool.Get` handle assigned to `_` or not used on every path to a return
+  is reported. "Use" is conservative — any mention discharges it except
+  `Project`/`Update`/`Value`/`Held`/`State` and `_ = h` — and the failure
+  branch of the acquisition's own `err` check is not a path. A blank handle
+  in an `if` init whose condition inspects `err` is a probe of whether
+  acquisition fails, not a discard, which is how tests assert conflicts. It
+  lives in its own module so the library does not depend on `x/tools`, and
+  runs through `go vet -vettool` (`just lint`). Running it over velocity
+  itself found only test code releasing inside loops the analyzer cannot
+  prove ran; those were restructured rather than the rule weakened.
+- **A concurrent model test** now drives one cell from eight goroutines
+  through every access and transfer operation with a deadline, so the
+  no-wait claim is exercised rather than asserted.
+
 ## Opcodes and opruntime (implemented)
 
 - `opcodes` defines plain `Op`/`Instruction` data shapes only. No binary

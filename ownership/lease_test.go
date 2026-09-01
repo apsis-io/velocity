@@ -30,9 +30,12 @@ func TestLeaseHoldsThenReleasesOnce(t *testing.T) {
 		t.Fatal("lease not held")
 	}
 
-	for range 3 {
+	if err := lease.Release(); err != nil {
+		t.Fatalf("Release = %v", err)
+	}
+	for range 2 {
 		if err := lease.Release(); err != nil {
-			t.Fatalf("Release = %v", err)
+			t.Fatalf("repeat Release = %v", err)
 		}
 	}
 	if returned.Load() != 1 {
@@ -67,9 +70,12 @@ func TestLeaseReportsReleaseErrorRepeatedly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for range 3 {
+	if err := lease.Release(); !errors.Is(err, wantErr) {
+		t.Fatalf("Release = %v", err)
+	}
+	for range 2 {
 		if err := lease.Release(); !errors.Is(err, wantErr) {
-			t.Fatalf("Release = %v", err)
+			t.Fatalf("repeat Release = %v", err)
 		}
 	}
 	if calls.Load() != 1 {
@@ -151,6 +157,7 @@ func TestLeaseConcurrentReleaseIsSingular(t *testing.T) {
 		wg.Go(func() { _ = lease.Release() })
 	}
 	wg.Wait()
+	_ = lease.Release() // the analyzer cannot see that the loop ran
 	if returned.Load() != 1 {
 		t.Fatalf("returned %d times, want 1", returned.Load())
 	}

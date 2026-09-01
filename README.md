@@ -177,6 +177,31 @@ returns `ErrConflict` immediately. With `-tags=velocitydebug`, a borrow
 that becomes unreachable while held is logged through `slog.Default()` and
 released; production builds have no such net.
 
+The real net is static. The `analysis` module ships `lostrelease`, a `go vet`
+analyzer that reports a `Borrow`, `BorrowMut`, `NewLease`, or `pool.Get`
+handle discarded or not released on every path — the same check vet's
+`lostcancel` makes for contexts:
+
+```sh
+go -C analysis build -o /tmp/velocityvet ./cmd/velocityvet
+go vet -vettool=/tmp/velocityvet ./...
+```
+
+## Capabilities
+
+`Viewer[T]` and `Mutator[T]` name read and write capability in a signature.
+`Owner` and `Shared` satisfy both; `Frozen` only `Viewer`. A function that
+takes a `Viewer` cannot mutate, checked by the compiler, without freezing
+the value first. Go interfaces cannot carry generic methods, so the
+interfaces name `WithRead`/`WithWrite`; `ownership.View(v, fn)` and
+`ownership.Mutate(m, fn)` project through them:
+
+```go
+func describe(v ownership.Viewer[Config]) (string, error) {
+    return ownership.View(v, func(c Config) (string, error) { return c.Name, nil })
+}
+```
+
 ## Safety boundary
 
 Borrow state is enforced at runtime, on handles, not on data. A map, slice,
@@ -342,6 +367,7 @@ retryable, so a tripped breaker ends the loop instead of burning attempts.
 ```sh
 gofmt -w .
 go vet ./...
+just lint                 # velocity's own analyzers over every module
 go test ./...
 go test -race ./...
 go test -tags=velocitydebug ./...

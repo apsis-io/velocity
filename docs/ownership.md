@@ -86,7 +86,15 @@ can continue. That is a diagnostic: it never decrements handle counts,
 invokes Drop, or runs at a predictable time, and an earlier design that
 registered it unconditionally paid four of an advanced borrow's five
 allocations to turn a deterministic wedge into a GC-timed heisenbug. Scoped
-`View`/`Mutate` remain the default: they cannot leak and allocate once.
+`View`/`Mutate` remain the default: they cannot leak and allocate nothing.
+
+The check that matters runs before the code does. The `analysis` module's
+`lostrelease` analyzer reports a `Borrow`/`BorrowMut`/`NewLease`/`pool.Get`
+handle that is discarded, or has a control-flow path to a return on which it
+is never released — modelled on vet's `lostcancel`. It is conservative:
+passing the handle anywhere counts as a use, only `Project`/`Update`/
+`Value`/`Held`/`State` and `_ = h` do not, and the failure branch of the
+acquisition's own error check is not a leak. It cannot see that a loop ran.
 
 ## Retirement
 
@@ -163,6 +171,16 @@ not outlive the call.
 `Detach` is named for what changes — the caller now owns cleanup, and Drop
 will never run. Reaching for it merely to pass a value through an API that
 wants a bare `T` is how resources leak.
+
+## Capabilities
+
+`Viewer[T]` (`WithRead`) and `Mutator[T]` (`Viewer` plus `WithWrite`) let a
+signature say which access it needs; the compiler then refuses a mutation
+through a `Viewer`. `Frozen` satisfies only `Viewer`, which is the same
+type-level enforcement it already had, now available at every call boundary
+without freezing. Go interfaces cannot include generic methods, so
+`ownership.View`/`ownership.Mutate` are package-level functions that project
+an `R` through the interface.
 
 ## Alias boundary
 
