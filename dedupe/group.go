@@ -26,8 +26,8 @@ type Group[K comparable, V any] struct {
 type Singleflight[K comparable, V any] = Group[K, V]
 
 // NewSingleflight is an exact alias of New.
-func NewSingleflight[K comparable, V any](baseCtx context.Context, opts ...Option[K, V]) (*Group[K, V], error) {
-	return New(baseCtx, opts...)
+func NewSingleflight[K comparable, V any](opts ...Option[K, V]) (*Group[K, V], error) {
+	return New(opts...)
 }
 
 type execution struct {
@@ -81,12 +81,11 @@ type call[V any] struct {
 	panicErr  *PanicError
 }
 
-// New constructs a duplicate-suppressing group.
-func New[K comparable, V any](baseCtx context.Context, opts ...Option[K, V]) (*Group[K, V], error) {
-	if baseCtx == nil {
-		return nil, &ConfigError{Option: "base context", Cause: ErrNilContext}
-	}
-	cfg := config[K, V]{}
+// New constructs a duplicate-suppressing group. Work runs under a context
+// derived from context.Background by default, so it outlives any one
+// caller; WithBaseContext changes the parent.
+func New[K comparable, V any](opts ...Option[K, V]) (*Group[K, V], error) {
+	cfg := config[K, V]{baseCtx: context.Background()}
 	for i, opt := range opts {
 		if opt == nil {
 			return nil, &ConfigError{Option: "option " + formatIndex(i), Cause: ErrNilOption}
@@ -107,7 +106,7 @@ func New[K comparable, V any](baseCtx context.Context, opts ...Option[K, V]) (*G
 		return nil, &ConfigError{Option: "backend", Cause: ErrUnsupportedBackend}
 	}
 	return &Group[K, V]{
-		baseCtx: baseCtx,
+		baseCtx: cfg.baseCtx,
 		backend: b,
 		drop:    cfg.drop,
 		clone:   cfg.clone,

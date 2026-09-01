@@ -13,8 +13,8 @@ import (
 
 func TestDoBorrowedSharesLeaderResultAndLeavesFollowerInputUntouched(t *testing.T) {
 	group := newGroup(t)
-	leaderInput, _ := ownership.New(7)
-	followerInput, _ := ownership.New(99)
+	leaderInput := ownership.Own(7)
+	followerInput := ownership.Own(99)
 	started := make(chan struct{})
 	release := make(chan struct{})
 	leaderResult := make(chan int, 1)
@@ -55,7 +55,7 @@ func TestDoBorrowedSharesLeaderResultAndLeavesFollowerInputUntouched(t *testing.
 
 func TestDoBorrowedCanceledContextDoesNotAcquire(t *testing.T) {
 	group := newGroup(t)
-	input, _ := ownership.New(1)
+	input := ownership.Own(1)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	called := false
@@ -75,13 +75,13 @@ func TestDoBorrowedCanceledContextDoesNotAcquire(t *testing.T) {
 
 func TestDoBorrowedCancellationMayOutliveCaller(t *testing.T) {
 	completed := make(chan struct{}, 1)
-	group, err := dedupe.New[string, int](context.Background(), dedupe.WithHooks[string, int](dedupe.Hooks[string]{
+	group, err := dedupe.New[string, int](dedupe.WithHooks[string, int](dedupe.Hooks[string]{
 		OnComplete: func(string, time.Duration, error) { completed <- struct{}{} },
 	}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	input, _ := ownership.New(1)
+	input := ownership.Own(1)
 	started := make(chan struct{})
 	release := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
@@ -115,7 +115,7 @@ func TestDoBorrowedCancellationMayOutliveCaller(t *testing.T) {
 
 func TestDoBorrowedMutPublishesAfterLoanRelease(t *testing.T) {
 	group := newGroup(t)
-	input, _ := ownership.New(3)
+	input := ownership.Own(3)
 	result, err := group.DoBorrowedMut(context.Background(), "key", input, func(_ context.Context, value *int) (int, error) {
 		*value += 4
 		return *value, nil
@@ -134,7 +134,7 @@ func TestDoBorrowedMutPublishesAfterLoanRelease(t *testing.T) {
 
 func TestDoBorrowedConflictPrecedesRegistration(t *testing.T) {
 	group := newGroup(t)
-	input, _ := ownership.New(1)
+	input := ownership.Own(1)
 	write, err := input.BorrowMut()
 	if err != nil {
 		t.Fatal(err)
@@ -156,7 +156,7 @@ func TestDoBorrowedFiresHooks(t *testing.T) {
 	joins := make([]bool, 0, 2)
 	completes := 0
 	completeSignal := make(chan struct{}, 1)
-	group, err := dedupe.New[string, int](context.Background(), dedupe.WithHooks[string, int](dedupe.Hooks[string]{
+	group, err := dedupe.New[string, int](dedupe.WithHooks[string, int](dedupe.Hooks[string]{
 		OnJoin: func(_ string, leader bool) {
 			mu.Lock()
 			joins = append(joins, leader)
@@ -175,8 +175,8 @@ func TestDoBorrowedFiresHooks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	leaderInput, _ := ownership.New(1)
-	followerInput, _ := ownership.New(2)
+	leaderInput := ownership.Own(1)
+	followerInput := ownership.Own(2)
 	started := make(chan struct{})
 	release := make(chan struct{})
 	done := make(chan struct{}, 2)

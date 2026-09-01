@@ -15,19 +15,22 @@ type Outcome[T any] struct {
 	Err   error
 }
 
-func execute[T any](ctx context.Context, plan Plan[T]) ([]Outcome[T], error) {
-	if err := plan.valid(); err != nil {
+// Gather executes every task and returns outcomes in source-index order,
+// with every error joined. Take and Last are recipes over the returned
+// slice, not separate operations.
+func (r *Runner) Gather[T any](ctx context.Context, tasks ...Task[T]) ([]Outcome[T], error) {
+	if err := validTasks(r, tasks); err != nil {
 		return nil, err
 	}
 	// Unlike race, Gather never cancels early: wg.Wait below guarantees every
 	// task has returned before this does, so a derived cancellable context
 	// would only ever be canceled by its own defer. Passing ctx through keeps
 	// parent cancellation working and avoids allocating one per call.
-	outcomes := make([]Outcome[T], len(plan.tasks))
+	outcomes := make([]Outcome[T], len(tasks))
 	var wg sync.WaitGroup
 	var permits chan struct{}
-	if !plan.limit.unlimited {
-		permits = make(chan struct{}, plan.limit.value)
+	if !r.limit.unlimited {
+		permits = make(chan struct{}, r.limit.value)
 	}
 	// The permit is taken here rather than inside the task goroutine so that a
 	// Limit bounds goroutines, not just running work. Acquiring inside would
@@ -35,7 +38,7 @@ func execute[T any](ctx context.Context, plan Plan[T]) ([]Outcome[T], error) {
 	// which costs a stack each and applies no backpressure to the caller; a
 	// plan over a large collection would then hold thousands of parked
 	// goroutines. Blocking the submitting goroutine is the backpressure.
-	for i, task := range plan.tasks {
+	for i, task := range tasks {
 		var waited time.Duration
 		if permits != nil {
 			waitStart := time.Now()
@@ -44,7 +47,7 @@ func execute[T any](ctx context.Context, plan Plan[T]) ([]Outcome[T], error) {
 				waited = time.Since(waitStart)
 			case <-ctx.Done():
 				// Neither this task nor any after it will start.
-				cancelRemaining(plan, outcomes, i, time.Since(waitStart), context.Cause(ctx))
+				r.cancelRemaining(tasks, outcomes, i, time.Since(waitStart), context.Cause(ctx))
 				wg.Wait()
 				return outcomes, joinedErrors(outcomes)
 			}
@@ -57,7 +60,7 @@ func execute[T any](ctx context.Context, plan Plan[T]) ([]Outcome[T], error) {
 			value, err := task.Run(ctx)
 			duration := time.Since(runStart)
 			outcomes[i] = Outcome[T]{Index: i, Label: task.Label, Value: value, Err: err}
-			if hook := plan.hooks.OnTaskComplete; hook != nil {
+			if hook := r.hooks.OnTaskComplete; hook != nil {
 				hook(i, task.Label, waited, duration, err)
 			}
 		})
@@ -68,11 +71,11 @@ func execute[T any](ctx context.Context, plan Plan[T]) ([]Outcome[T], error) {
 
 // cancelRemaining records tasks from first onward as never started. Only the
 // task at first actually queued for a permit, so the rest report no wait.
-func cancelRemaining[T any](plan Plan[T], outcomes []Outcome[T], first int, waited time.Duration, err error) {
-	for i := first; i < len(plan.tasks); i++ {
-		label := plan.tasks[i].Label
+func (r *Runner) cancelRemaining[T any](tasks []Task[T], outcomes []Outcome[T], first int, waited time.Duration, err error) {
+	for i := first; i < len(tasks); i++ {
+		label := tasks[i].Label
 		outcomes[i] = Outcome[T]{Index: i, Label: label, Err: err}
-		if hook := plan.hooks.OnTaskComplete; hook != nil {
+		if hook := r.hooks.OnTaskComplete; hook != nil {
 			if i > first {
 				waited = 0
 			}
@@ -100,27 +103,20 @@ func joinedErrors[T any](outcomes []Outcome[T]) error {
 	return errors.Join(errs...)
 }
 
-// Gather executes every task and returns outcomes in source-index order.
-// Take and Last are recipes over the returned slice, not separate APIs.
-func Gather[T any](ctx context.Context, plan Plan[T]) ([]Outcome[T], error) {
-	return execute(ctx, plan)
-}
-
-func race[T any](ctx context.Context, plan Plan[T], successOnly bool) (Outcome[T], error) {
-	if err := plan.valid(); err != nil {
+func race[T any](ctx context.Context, r *Runner, tasks []Task[T], successOnly bool) (Outcome[T], error) {
+	if err := validTasks(r, tasks); err != nil {
 		return Outcome[T]{}, err
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	completions := make(chan Outcome[T], len(plan.tasks))
+	completions := make(chan Outcome[T], len(tasks))
 	var wg sync.WaitGroup
 	var permits chan struct{}
-	if !plan.limit.unlimited {
-		permits = make(chan struct{}, plan.limit.value)
+	if !r.limit.unlimited {
+		permits = make(chan struct{}, r.limit.value)
 	}
-	for i, task := range plan.tasks {
-		i, task := i, task
+	for i, task := range tasks {
 		wg.Go(func() {
 			var waited time.Duration
 			if permits != nil {
@@ -133,7 +129,7 @@ func race[T any](ctx context.Context, plan Plan[T], successOnly bool) (Outcome[T
 					err := context.Cause(ctx)
 					outcome := Outcome[T]{Index: i, Label: task.Label, Err: err}
 					completions <- outcome
-					if hook := plan.hooks.OnTaskComplete; hook != nil {
+					if hook := r.hooks.OnTaskComplete; hook != nil {
 						hook(i, task.Label, time.Since(waitStart), 0, err)
 					}
 					return
@@ -143,14 +139,14 @@ func race[T any](ctx context.Context, plan Plan[T], successOnly bool) (Outcome[T
 			value, err := task.Run(ctx)
 			outcome := Outcome[T]{Index: i, Label: task.Label, Value: value, Err: err}
 			completions <- outcome
-			if hook := plan.hooks.OnTaskComplete; hook != nil {
+			if hook := r.hooks.OnTaskComplete; hook != nil {
 				hook(i, task.Label, waited, time.Since(runStart), err)
 			}
 		})
 	}
 
 	var errs []error
-	for range plan.tasks {
+	for range tasks {
 		select {
 		case outcome := <-completions:
 			if !successOnly || outcome.Err == nil {
@@ -175,13 +171,13 @@ func race[T any](ctx context.Context, plan Plan[T], successOnly bool) (Outcome[T
 // completion requires reaching the collector, which blocking the submitting
 // goroutine on a permit would prevent. Prefer Gather when racing a large
 // enough collection for one parked goroutine per task to matter.
-func Race[T any](ctx context.Context, plan Plan[T]) (Outcome[T], error) {
-	return race(ctx, plan, false)
+func (r *Runner) Race[T any](ctx context.Context, tasks ...Task[T]) (Outcome[T], error) {
+	return race(ctx, r, tasks, false)
 }
 
 // FirstSuccess returns the first successful outcome and cancels siblings. If
 // every task fails, it returns all task errors joined in completion order.
 // Non-cooperative siblings may continue running after a success.
-func FirstSuccess[T any](ctx context.Context, plan Plan[T]) (Outcome[T], error) {
-	return race(ctx, plan, true)
+func (r *Runner) FirstSuccess[T any](ctx context.Context, tasks ...Task[T]) (Outcome[T], error) {
+	return race(ctx, r, tasks, true)
 }

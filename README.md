@@ -135,7 +135,7 @@ runs afterwards.
 moved, err := owner.Move()       // old owner becomes moved
 value, err := moved.Detach()     // exits ownership; Drop never runs
 
-owner, _ = ownership.New(value)
+owner = ownership.Own(value)
 shared, err := owner.IntoShared()
 peer, err := shared.Clone()      // explicit counted handle
 _ = peer.Release()
@@ -249,7 +249,7 @@ a bytecode program format. Neither package depends on `ownership`.
 every caller of a round the result:
 
 ```go
-group, err := dedupe.New[string, Report](ctx)
+group, err := dedupe.New[string, Report]()   // WithBaseContext(ctx) to inherit cancellation
 
 report, err := group.Do(ctx, "report-42", func(ctx context.Context) (Report, error) {
     return fetchReport(ctx, 42)
@@ -269,7 +269,7 @@ non-cooperative work continues, the input loan may remain held until the
 callback returns; `WithHooks`/`OnComplete` can signal when it is reusable again:
 
 ```go
-input, err := ownership.New(request)
+input := ownership.Own(request)
 shared, err := group.DoBorrowed(ctx, "report-42", input,
     func(ctx context.Context, request Request) (Report, error) {
         return buildReport(ctx, request)
@@ -294,7 +294,7 @@ a caller can't observe by timing their own function, such as a follower's
 follower's wait:
 
 ```go
-group, err := dedupe.New[string, Report](ctx, dedupe.WithHooks(dedupe.Hooks[string]{
+group, err := dedupe.New[string, Report](dedupe.WithHooks(dedupe.Hooks[string]{
     OnComplete: func(key string, duration time.Duration, err error) {
         reportLatency(key, duration, err)
     },
@@ -303,23 +303,25 @@ group, err := dedupe.New[string, Report](ctx, dedupe.WithHooks(dedupe.Hooks[stri
 
 ## Async and resilience
 
-`async.Gather`/`Race`/`FirstSuccess` run a `Plan[T]` of labeled tasks under
-an explicit `Limit` (`async.Limited(n)` or `async.Unlimited` — no implicit
-"unbounded" default) and an explicit `Hooks` (`async.Hooks{}` for none):
+An `async.Runner` states a concurrency policy once — an explicit `Limit`
+(`async.Limited(n)` or `async.Unlimited`; there is no implicit "unbounded"
+default) and optional `Hooks` — and every operation runs through it:
 
 ```go
-plan, err := async.NewPlan(async.Limited(4), async.Hooks{},
+run, err := async.New(async.Limited(4), async.WithHooks(hooks))
+
+outcomes, err := run.Gather(ctx,                // source-index order, errors.Join'd
     async.Task[int]{Label: "a", Run: fetchA},
     async.Task[int]{Label: "b", Run: fetchB},
 )
-outcomes, err := async.Gather(ctx, plan) // source-index order, errors.Join'd
+first, err := run.Race(ctx, tasks...)           // or FirstSuccess
 ```
 
 `Hooks.OnTaskComplete` reports permit-queue wait time separately from a
 task's own run time — the split isn't visible from outside `Gather`/`Race`.
 
-`async.Map`/`ForEach` run one function over a collection from a fixed pool
-of `Limit` goroutines, rather than one goroutine per item, and return the
+`Map`/`ForEach` run one function over a collection from a fixed pool of
+`Limit` goroutines, rather than one goroutine per item, and return the
 results in input order. Failures travel out of band as one `*ItemError` per
 failed item in the joined error. Run it inside a read to fan out over an
 owned slice; every worker finishes before `Map` returns, so the borrow covers
@@ -327,18 +329,19 @@ them all:
 
 ```go
 results, err := owner.View(func(items []Item) ([]Result, error) {
-    return async.Map(ctx, async.Limited(8), async.Hooks{}, items, process)
+    return run.Map(ctx, items, process)
 })
 ```
 
-`async.Broadcast` fans one `*ownership.Owner[T]` out to concurrent workers
+`Broadcast` fans one `*ownership.Owner[T]` out to concurrent workers
 using `Owner[T].View`'s existing concurrent-read guarantee. `async.Pipeline`
 chains heterogeneously-typed stages via a generic `Then[R any]` method.
 `async.Group` wraps `sync.WaitGroup.Go` with panic recovery and a
 context-aware `Close`.
 
 `resilience.Retry` runs a function under a `Policy` (attempt limit, optional
-error `Classifier`, `Backoff`, injectable `Clock`):
+error `Classifier`, `Backoff`, injectable `Clock` — `ManualClock` makes
+tests of either deterministic):
 
 ```go
 backoff, err := resilience.ExponentialBackoff(100*time.Millisecond, 5*time.Second, 0.2)

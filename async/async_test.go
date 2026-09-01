@@ -14,50 +14,73 @@ import (
 	"github.com/apsis-io/velocity/ownership"
 )
 
-func plan[T any](t *testing.T, limit async.Limit, tasks ...async.Task[T]) async.Plan[T] {
+func runner(t *testing.T, limit async.Limit, opts ...async.Option) *async.Runner {
 	t.Helper()
-	p, err := async.NewPlan(limit, async.Hooks{}, tasks...)
+	run, err := async.New(limit, opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return p
+	return run
 }
 
-func TestNewPlanValidation(t *testing.T) {
-	tests := []struct {
+func TestNewValidation(t *testing.T) {
+	for _, tt := range []struct {
 		name  string
 		limit async.Limit
+		opts  []async.Option
+		want  error
+	}{
+		{"unset limit", async.Limit{}, nil, async.ErrInvalidLimit},
+		{"zero limit", async.Limited(0), nil, async.ErrInvalidLimit},
+		{"nil option", async.Unlimited, []async.Option{nil}, async.ErrNilOption},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := async.New(tt.limit, tt.opts...)
+			var pe *async.PlanError
+			if !errors.Is(err, tt.want) || !errors.As(err, &pe) {
+				t.Fatalf("error = %v, want %v", err, tt.want)
+			}
+		})
+	}
+}
+
+func TestTaskValidation(t *testing.T) {
+	run := runner(t, async.Unlimited)
+	for _, tt := range []struct {
+		name  string
 		tasks []async.Task[int]
 		want  error
 	}{
-		{"unset limit", async.Limit{}, []async.Task[int]{{Run: func(context.Context) (int, error) { return 1, nil }}}, async.ErrInvalidLimit},
-		{"zero limit", async.Limited(0), []async.Task[int]{{Run: func(context.Context) (int, error) { return 1, nil }}}, async.ErrInvalidLimit},
-		{"empty", async.Unlimited, nil, async.ErrNoTasks},
-		{"nil task", async.Unlimited, []async.Task[int]{{}}, async.ErrNilTask},
-	}
-	for _, tt := range tests {
+		{"empty", nil, async.ErrNoTasks},
+		{"nil task", []async.Task[int]{{}}, async.ErrNilTask},
+	} {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := async.NewPlan(tt.limit, async.Hooks{}, tt.tasks...)
-			if !errors.Is(err, tt.want) {
-				t.Fatalf("error = %v, want %v", err, tt.want)
-			}
+			_, err := run.Gather(context.Background(), tt.tasks...)
 			var pe *async.PlanError
-			if !errors.As(err, &pe) {
-				t.Fatalf("error = %T, want PlanError", err)
+			if !errors.Is(err, tt.want) || !errors.As(err, &pe) {
+				t.Fatalf("Gather error = %v, want %v", err, tt.want)
+			}
+			if _, err := run.Race(context.Background(), tt.tasks...); !errors.Is(err, tt.want) {
+				t.Fatalf("Race error = %v, want %v", err, tt.want)
 			}
 		})
+	}
+	var none *async.Runner
+	if _, err := none.Gather(context.Background(), async.Task[int]{Run: func(context.Context) (int, error) { return 1, nil }}); !errors.Is(err, async.ErrNilRunner) {
+		t.Fatalf("nil Runner = %v", err)
 	}
 }
 
 func TestGatherPreservesSourceOrderAndJoinsErrors(t *testing.T) {
 	firstErr := errors.New("first")
 	thirdErr := errors.New("third")
-	p := plan(t, async.Unlimited,
+	run := runner(t, async.Unlimited)
+	tasks := []async.Task[int]{
 		async.Task[int]{Label: "one", Run: func(context.Context) (int, error) { time.Sleep(3 * time.Millisecond); return 1, nil }},
 		async.Task[int]{Label: "two", Run: func(context.Context) (int, error) { time.Sleep(time.Millisecond); return 0, firstErr }},
 		async.Task[int]{Label: "three", Run: func(context.Context) (int, error) { return 3, thirdErr }},
-	)
-	got, err := async.Gather(context.Background(), p)
+	}
+	got, err := run.Gather(context.Background(), tasks...)
 	if !errors.Is(err, firstErr) || !errors.Is(err, thirdErr) {
 		t.Fatalf("error = %v", err)
 	}
@@ -68,7 +91,8 @@ func TestGatherPreservesSourceOrderAndJoinsErrors(t *testing.T) {
 
 func TestGatherRespectsLimit(t *testing.T) {
 	var active, max atomic.Int32
-	p := plan(t, async.Limited(2),
+	run := runner(t, async.Limited(2))
+	tasks := []async.Task[int]{
 		async.Task[int]{Run: func(context.Context) (int, error) {
 			n := active.Add(1)
 			for {
@@ -105,8 +129,8 @@ func TestGatherRespectsLimit(t *testing.T) {
 			active.Add(-1)
 			return 3, nil
 		}},
-	)
-	if _, err := async.Gather(context.Background(), p); err != nil {
+	}
+	if _, err := run.Gather(context.Background(), tasks...); err != nil {
 		t.Fatal(err)
 	}
 	if got := max.Load(); got > 2 {
@@ -115,11 +139,12 @@ func TestGatherRespectsLimit(t *testing.T) {
 }
 
 func TestRaceReturnsFirstCompletion(t *testing.T) {
-	p := plan(t, async.Unlimited,
+	run := runner(t, async.Unlimited)
+	tasks := []async.Task[int]{
 		async.Task[int]{Label: "slow", Run: func(ctx context.Context) (int, error) { <-ctx.Done(); return 0, context.Cause(ctx) }},
 		async.Task[int]{Label: "fast", Run: func(context.Context) (int, error) { return 2, nil }},
-	)
-	got, err := async.Race(context.Background(), p)
+	}
+	got, err := run.Race(context.Background(), tasks...)
 	if err != nil || got.Index != 1 || got.Value != 2 {
 		t.Fatalf("Race = (%+v, %v)", got, err)
 	}
@@ -128,12 +153,13 @@ func TestRaceReturnsFirstCompletion(t *testing.T) {
 func TestFirstSuccessSkipsErrors(t *testing.T) {
 	first := errors.New("first")
 	second := errors.New("second")
-	p := plan(t, async.Unlimited,
+	run := runner(t, async.Unlimited)
+	tasks := []async.Task[int]{
 		async.Task[int]{Run: func(context.Context) (int, error) { return 0, first }},
 		async.Task[int]{Run: func(context.Context) (int, error) { return 2, nil }},
 		async.Task[int]{Run: func(context.Context) (int, error) { return 0, second }},
-	)
-	got, err := async.FirstSuccess(context.Background(), p)
+	}
+	got, err := run.FirstSuccess(context.Background(), tasks...)
 	if err != nil || got.Index != 1 || got.Value != 2 {
 		t.Fatalf("FirstSuccess = (%+v, %v)", got, err)
 	}
@@ -142,11 +168,12 @@ func TestFirstSuccessSkipsErrors(t *testing.T) {
 func TestFirstSuccessJoinsAllErrors(t *testing.T) {
 	one := errors.New("one")
 	two := errors.New("two")
-	p := plan(t, async.Unlimited,
+	run := runner(t, async.Unlimited)
+	tasks := []async.Task[int]{
 		async.Task[int]{Run: func(context.Context) (int, error) { return 0, one }},
 		async.Task[int]{Run: func(context.Context) (int, error) { return 0, two }},
-	)
-	_, err := async.FirstSuccess(context.Background(), p)
+	}
+	_, err := run.FirstSuccess(context.Background(), tasks...)
 	if !errors.Is(err, one) || !errors.Is(err, two) {
 		t.Fatalf("error = %v", err)
 	}
@@ -199,8 +226,9 @@ func TestHooksReportPermitWaitAndRunDuration(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	var blockStart, blockEnd time.Time
-	plan, err := async.NewPlan(async.Limited(1), hooks,
-		async.Task[int]{Run: func(context.Context) (int, error) {
+	run := runner(t, async.Limited(1), async.WithHooks(hooks))
+	tasks := []async.Task[int]{
+		{Run: func(context.Context) (int, error) {
 			if firstIndex.CompareAndSwap(-1, 0) {
 				blockStart = time.Now()
 				close(started)
@@ -209,7 +237,7 @@ func TestHooksReportPermitWaitAndRunDuration(t *testing.T) {
 			}
 			return 1, nil
 		}},
-		async.Task[int]{Run: func(context.Context) (int, error) {
+		{Run: func(context.Context) (int, error) {
 			if firstIndex.CompareAndSwap(-1, 1) {
 				blockStart = time.Now()
 				close(started)
@@ -218,14 +246,11 @@ func TestHooksReportPermitWaitAndRunDuration(t *testing.T) {
 			}
 			return 2, nil
 		}},
-	)
-	if err != nil {
-		t.Fatal(err)
 	}
 	done := make(chan struct{})
 	gatherStart := time.Now()
 	go func() {
-		_, _ = async.Gather(context.Background(), plan)
+		_, _ = run.Gather(context.Background(), tasks...)
 		close(done)
 	}()
 	<-started
@@ -283,28 +308,26 @@ func TestHooksReportCancellationWhileWaitingForPermit(t *testing.T) {
 		}{wait, run, err}
 		mu.Unlock()
 	}}
-	plan, err := async.NewPlan(async.Limited(1), hooks,
-		async.Task[int]{Run: func(context.Context) (int, error) {
+	run := runner(t, async.Limited(1), async.WithHooks(hooks))
+	tasks := []async.Task[int]{
+		{Run: func(context.Context) (int, error) {
 			if firstIndex.CompareAndSwap(-1, 0) {
 				close(started)
 				<-release
 			}
 			return 1, nil
 		}},
-		async.Task[int]{Run: func(context.Context) (int, error) {
+		{Run: func(context.Context) (int, error) {
 			if firstIndex.CompareAndSwap(-1, 1) {
 				close(started)
 				<-release
 			}
 			return 2, nil
 		}},
-	)
-	if err != nil {
-		t.Fatal(err)
 	}
 	done := make(chan struct{})
 	go func() {
-		_, _ = async.Gather(ctx, plan)
+		_, _ = run.Gather(ctx, tasks...)
 		close(done)
 	}()
 	<-started
@@ -322,12 +345,8 @@ func TestHooksReportCancellationWhileWaitingForPermit(t *testing.T) {
 
 func TestHooksAreZeroForUnlimitedPermitWait(t *testing.T) {
 	var wait time.Duration
-	plan, err := async.NewPlan(async.Unlimited, async.Hooks{OnTaskComplete: func(_ int, _ string, waited, _ time.Duration, _ error) { wait = waited }},
-		async.Task[int]{Run: func(context.Context) (int, error) { return 1, nil }})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := async.Gather(context.Background(), plan); err != nil {
+	run := runner(t, async.Unlimited, async.WithHooks(async.Hooks{OnTaskComplete: func(_ int, _ string, waited, _ time.Duration, _ error) { wait = waited }}))
+	if _, err := run.Gather(context.Background(), async.Task[int]{Run: func(context.Context) (int, error) { return 1, nil }}); err != nil {
 		t.Fatal(err)
 	}
 	if wait != 0 {
@@ -341,7 +360,7 @@ func TestBroadcastUsesConcurrentReadAccess(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer owner.Release()
-	got, err := async.Broadcast(context.Background(), owner, async.Limited(2), async.Hooks{},
+	got, err := runner(t, async.Limited(2)).Broadcast(context.Background(), owner,
 		func(context.Context, int) (int, error) { return 2, nil },
 		func(context.Context, int) (int, error) { return 3, nil },
 	)
@@ -400,11 +419,11 @@ func TestGatherLimitBoundsGoroutinesNotJustConcurrency(t *testing.T) {
 			return 1, nil
 		}}
 	}
-	plan := plan(t, async.Limited(limit), list...)
+	run := runner(t, async.Limited(limit))
 
 	before := runtime.NumGoroutine()
 	done := make(chan struct{})
-	go func() { _, _ = async.Gather(context.Background(), plan); close(done) }()
+	go func() { _, _ = run.Gather(context.Background(), list...); close(done) }()
 
 	// Let the first batch reach the barrier and any stragglers settle.
 	time.Sleep(100 * time.Millisecond)
@@ -436,7 +455,7 @@ func TestGatherCancellationDuringSubmissionMarksRemaining(t *testing.T) {
 			return 1, nil
 		}}
 	}
-	plan := plan(t, async.Limited(2), list...)
+	run := runner(t, async.Limited(2))
 
 	type result struct {
 		outcomes []async.Outcome[int]
@@ -444,7 +463,7 @@ func TestGatherCancellationDuringSubmissionMarksRemaining(t *testing.T) {
 	}
 	got := make(chan result, 1)
 	go func() {
-		outcomes, err := async.Gather(ctx, plan)
+		outcomes, err := run.Gather(ctx, list...)
 		got <- result{outcomes, err}
 	}()
 

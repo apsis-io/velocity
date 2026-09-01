@@ -39,11 +39,11 @@ import (
 // escapes the callback.
 //
 //	results, err := owner.View(func(items []Item) ([]Result, error) {
-//	    return async.Map(ctx, async.Limited(8), async.Hooks{}, items, process)
+//	    return run.Map(ctx, items, process)
 //	})
-func Map[T, R any](ctx context.Context, limit Limit, hooks Hooks, items []T, fn func(context.Context, T) (R, error)) ([]R, error) {
-	if err := limit.valid(); err != nil {
-		return nil, err
+func (r *Runner) Map[T, R any](ctx context.Context, items []T, fn func(context.Context, T) (R, error)) ([]R, error) {
+	if r == nil {
+		return nil, &PlanError{Index: -1, Cause: ErrNilRunner}
 	}
 	if fn == nil {
 		return nil, &PlanError{Index: -1, Cause: ErrNilTask}
@@ -55,11 +55,11 @@ func Map[T, R any](ctx context.Context, limit Limit, hooks Hooks, items []T, fn 
 
 	start := time.Now()
 	done := ctx.Done()
-	hook := hooks.OnTaskComplete
+	hook := r.hooks.OnTaskComplete
 	var next atomic.Int64
 	var failures itemErrors
 	var wg sync.WaitGroup
-	for range limit.workers(len(items)) {
+	for range r.limit.workers(len(items)) {
 		wg.Go(func() {
 			for {
 				// A nil done (context.Background) never selects, so falls
@@ -109,11 +109,11 @@ func Map[T, R any](ctx context.Context, limit Limit, hooks Hooks, items []T, fn 
 
 // ForEach is Map for a function that produces only an error. The returned
 // error is the same join of *ItemError values.
-func ForEach[T any](ctx context.Context, limit Limit, hooks Hooks, items []T, fn func(context.Context, T) error) error {
+func (r *Runner) ForEach[T any](ctx context.Context, items []T, fn func(context.Context, T) error) error {
 	if fn == nil {
 		return &PlanError{Index: -1, Cause: ErrNilTask}
 	}
-	_, err := Map(ctx, limit, hooks, items, func(ctx context.Context, item T) (struct{}, error) {
+	_, err := r.Map(ctx, items, func(ctx context.Context, item T) (struct{}, error) {
 		return struct{}{}, fn(ctx, item)
 	})
 	return err

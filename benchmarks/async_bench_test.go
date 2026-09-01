@@ -45,13 +45,13 @@ func BenchmarkAsyncGather(b *testing.B) {
 	}
 
 	b.Run("velocity/unlimited", func(b *testing.B) {
-		plan, err := async.NewPlan(async.Unlimited, async.Hooks{}, velocityTasks...)
+		run, err := async.New(async.Unlimited)
 		if err != nil {
 			b.Fatal(err)
 		}
 		b.ReportAllocs()
 		for b.Loop() {
-			asyncVelocitySink, _ = async.Gather(ctx, plan)
+			asyncVelocitySink, _ = run.Gather(ctx, velocityTasks...)
 		}
 	})
 
@@ -95,9 +95,13 @@ func BenchmarkAsyncMap(b *testing.B) {
 			items[i] = i
 		}
 		b.Run(fmt.Sprintf("velocity/map/%d", size), func(b *testing.B) {
+			run, err := async.New(async.Limited(workers))
+			if err != nil {
+				b.Fatal(err)
+			}
 			b.ReportAllocs()
 			for b.Loop() {
-				asyncErrgroupSink, _ = async.Map(ctx, async.Limited(workers), async.Hooks{}, items, benchmarkTask)
+				asyncErrgroupSink, _ = run.Map(ctx, items, benchmarkTask)
 			}
 		})
 		b.Run(fmt.Sprintf("conc/iter.MapErr/%d", size), func(b *testing.B) {
@@ -142,12 +146,12 @@ func BenchmarkAsyncGatherVelocityLimited(b *testing.B) {
 		value := i
 		tasks[i] = async.Task[int]{Run: func(context.Context) (int, error) { return value, nil }}
 	}
-	plan, err := async.NewPlan(async.Limited(4), async.Hooks{}, tasks...)
+	run, err := async.New(async.Limited(4))
 	if err != nil {
 		b.Fatal(err)
 	}
 	b.ReportAllocs()
 	for b.Loop() {
-		asyncVelocitySink, _ = async.Gather(ctx, plan)
+		asyncVelocitySink, _ = run.Gather(ctx, tasks...)
 	}
 }

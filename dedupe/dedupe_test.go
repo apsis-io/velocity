@@ -14,7 +14,7 @@ import (
 
 func newGroup(t *testing.T, opts ...dedupe.Option[string, int]) *dedupe.Group[string, int] {
 	t.Helper()
-	group, err := dedupe.New[string, int](context.Background(), opts...)
+	group, err := dedupe.New[string, int](opts...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func TestDoSharedOwnedGroupDropsAfterLastRelease(t *testing.T) {
 	if !errors.Is(results["a"].Err, dedupe.ErrOwnedResult) {
 		t.Fatalf("DoBatch on owned group = %v", results["a"].Err)
 	}
-	input, _ := ownership.New(1)
+	input := ownership.Own(1)
 	if _, err := group.DoBorrowed(context.Background(), "key", input, func(context.Context, int) (int, error) { return 0, nil }); !errors.Is(err, dedupe.ErrOwnedResult) {
 		t.Fatalf("DoBorrowed on owned group = %v", err)
 	}

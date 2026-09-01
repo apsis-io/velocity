@@ -14,9 +14,11 @@ var (
 	ErrNilContext   = errors.New("nil async context")
 	ErrNilPipeline  = errors.New("nil async pipeline stage")
 	ErrClosed       = errors.New("async group closed")
+	ErrNilRunner    = errors.New("nil async runner")
+	ErrNilOption    = errors.New("nil async option")
 )
 
-// PlanError identifies plan configuration that cannot execute.
+// PlanError identifies a runner or task set that cannot execute.
 type PlanError struct {
 	Index int
 	Cause error

@@ -225,6 +225,36 @@ and both made because velocity had no consumers yet:
   while the success path touches only the result slot. Within ~8% of conc
   now, and cancellable where conc is not.
 
+## Developer experience pass (implemented)
+
+Four changes from a DX review, all breaking, all free because velocity had
+no consumers:
+
+- **`async.Runner`.** `Map(ctx, limit, hooks, items, fn)` made every call
+  restate configuration, and `NewPlan` then `Gather` was two steps for one
+  operation. `async.New(limit, opts...)` builds a `*Runner` once — an unset
+  `Limit` is still `ErrInvalidLimit`, the explicit-bound rule just moves to
+  the constructor — and `Gather`/`Race`/`FirstSuccess`/`Map`/`ForEach`/
+  `Broadcast` are generic methods on it. `Plan` is gone: it existed to
+  validate eagerly and copy tasks for reuse, and nothing reused one. Task
+  validation happens per call and still reports `PlanError` with the index.
+  A constructor with options was chosen over a struct literal so validation
+  has somewhere to run.
+- **`ownership.Own(v)`.** `New` with no options cannot fail, so its error
+  return was a `_` in every plain use. `Own` is infallible; `New` stays for
+  options and is `Own` when given none.
+- **`dedupe.New[K, V](opts...)`.** The base context was a required
+  positional argument that nearly every caller filled with `Background`. It
+  is now the default and `WithBaseContext` the option.
+- **`resilience.ManualClock`.** Every test of a `Breaker` or `Retry` was
+  going to write the same settable clock; the package's own tests had. It
+  is exported, with `Advance`, `Set`, and a `Sleeps` counter so backoff is
+  asserted by count rather than by timing.
+
+Rejected: a non-error projection such as `owner.Get(func(T) R) R`. It would
+have to swallow `ErrConflict`, which is the one signal the package exists to
+raise.
+
 ## Opcodes and opruntime (implemented)
 
 - `opcodes` defines plain `Op`/`Instruction` data shapes only. No binary

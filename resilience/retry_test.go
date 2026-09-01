@@ -91,3 +91,37 @@ func TestExponentialBackoffCapsAndIsRepeatable(t *testing.T) {
 		t.Fatalf("backoff sequence unexpected")
 	}
 }
+
+func TestManualClockDrivesRetryDeterministically(t *testing.T) {
+	clock := resilience.NewManualClock(time.Unix(0, 0))
+	backoff, err := resilience.ExponentialBackoff(time.Second, 8*time.Second, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attempts := 0
+	_, err = resilience.Retry(context.Background(), resilience.Policy{
+		MaxAttempts: 4,
+		Backoff:     backoff,
+		Clock:       clock,
+	}, func(context.Context) (int, error) {
+		attempts++
+		return 0, errors.New("still failing")
+	})
+	var re *resilience.RetryError
+	if !errors.As(err, &re) || re.Attempts != 4 {
+		t.Fatalf("Retry = %v", err)
+	}
+	// Three backoffs of 1s, 2s, 4s were slept without waiting for any.
+	if clock.Sleeps() != 3 || clock.Now().Sub(time.Unix(0, 0)) != 7*time.Second {
+		t.Fatalf("sleeps = %d, elapsed = %v", clock.Sleeps(), clock.Now().Sub(time.Unix(0, 0)))
+	}
+
+	ctx, cancel := context.WithCancelCause(context.Background())
+	cause := errors.New("gave up")
+	cancel(cause)
+	_, err = resilience.Retry(ctx, resilience.Policy{MaxAttempts: 2, Backoff: backoff, Clock: clock},
+		func(context.Context) (int, error) { return 0, errors.New("fail") })
+	if !errors.Is(err, cause) {
+		t.Fatalf("Retry with done context = %v, want the cause from Sleep", err)
+	}
+}

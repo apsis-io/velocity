@@ -11,6 +11,7 @@ Model and reasoning: [ownership.md](ownership.md) · Project guide: [README.md](
 | shape | use |
 |---|---|
 | an `io.Closer` to own | `NewCloser(c)` |
+| a plain value to hand off or borrow-check | `Own(v)` |
 | a value with custom cleanup | `New(v, WithDrop(...))` |
 | a read-only value to publish | `NewFrozen(v)` / `owner.Freeze()` |
 | a permit, allocation, or reference to hand back | `NewLease(v, release)` |
@@ -25,7 +26,7 @@ a goroutine handoff ambiguous.
 ## Lifecycle at a glance
 
 ```text
-New / NewCloser -> Owner[T]
+Own / New / NewCloser -> Owner[T]
 
 Owner.Move()       -> Owner[T]    // old handle spent (ErrMoved)
 Owner.Detach()     -> T           // leaves ownership; Drop never runs
@@ -44,6 +45,7 @@ final Release() or Close() -> Drop runs once
 ## Construction
 
 ```go
+func Own[T any](value T) *Owner[T]                          // cannot fail
 func New[T any](value T, opts ...Option[T]) (*Owner[T], error)
 func NewCloser[T io.Closer](value T) *Owner[T]              // cannot fail
 func NewShared[T any](value T, opts ...Option[T]) (*Shared[T], error)

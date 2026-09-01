@@ -1,6 +1,7 @@
 package dedupe
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/apsis-io/velocity/traits"
@@ -16,6 +17,7 @@ const (
 )
 
 type config[K comparable, V any] struct {
+	baseCtx     context.Context
 	drop        traits.Drop[V]
 	clone       traits.Clone[V]
 	backendKind backendKind
@@ -33,6 +35,19 @@ type Option[K comparable, V any] interface {
 type optionFunc[K comparable, V any] func(*config[K, V]) error
 
 func (f optionFunc[K, V]) apply(cfg *config[K, V]) error { return f(cfg) }
+
+// WithBaseContext sets the context every round's work context derives from,
+// so cancelling it cancels all in-flight work. The default is
+// context.Background.
+func WithBaseContext[K comparable, V any](ctx context.Context) Option[K, V] {
+	return optionFunc[K, V](func(cfg *config[K, V]) error {
+		if ctx == nil {
+			return &ConfigError{Option: "base context", Cause: ErrNilContext}
+		}
+		cfg.baseCtx = ctx
+		return nil
+	})
+}
 
 // WithResultDrop configures cleanup of a successful round result.
 func WithResultDrop[K comparable, V any](drop traits.Drop[V]) Option[K, V] {

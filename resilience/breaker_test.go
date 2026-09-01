@@ -11,29 +11,6 @@ import (
 	"github.com/apsis-io/velocity/resilience"
 )
 
-// stepClock advances only when told to, so transitions are deterministic.
-type stepClock struct {
-	mu  sync.Mutex
-	now time.Time
-}
-
-func (c *stepClock) Now() time.Time {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.now
-}
-
-func (c *stepClock) Sleep(ctx context.Context, d time.Duration) error {
-	c.Advance(d)
-	return ctx.Err()
-}
-
-func (c *stepClock) Advance(d time.Duration) {
-	c.mu.Lock()
-	c.now = c.now.Add(d)
-	c.mu.Unlock()
-}
-
 var errBoom = errors.New("boom")
 
 func fail(context.Context) (int, error)    { return 0, errBoom }
@@ -63,7 +40,7 @@ func (r *recorder) all() []transition {
 	return append([]transition(nil), r.transitions...)
 }
 
-func newBreaker(t *testing.T, clock *stepClock, rec *recorder, policy resilience.BreakerPolicy) *resilience.Breaker {
+func newBreaker(t *testing.T, clock *resilience.ManualClock, rec *recorder, policy resilience.BreakerPolicy) *resilience.Breaker {
 	t.Helper()
 	policy.Clock = clock
 	if rec != nil {
@@ -99,7 +76,7 @@ func TestNewBreakerValidation(t *testing.T) {
 }
 
 func TestBreakerLifecycle(t *testing.T) {
-	clock := &stepClock{}
+	clock := resilience.NewManualClock(time.Unix(0, 0))
 	var rec recorder
 	b := newBreaker(t, clock, &rec, resilience.BreakerPolicy{
 		Trip:    resilience.ConsecutiveFailures(2),
@@ -176,7 +153,7 @@ func TestBreakerLifecycle(t *testing.T) {
 }
 
 func TestBreakerHalfOpenBoundsProbes(t *testing.T) {
-	clock := &stepClock{}
+	clock := resilience.NewManualClock(time.Unix(0, 0))
 	b := newBreaker(t, clock, nil, resilience.BreakerPolicy{
 		Trip:             resilience.ConsecutiveFailures(1),
 		OpenFor:          time.Second,
@@ -233,7 +210,7 @@ func TestBreakerHalfOpenBoundsProbes(t *testing.T) {
 
 func TestBreakerHalfOpenProbeBoundHoldsUnderContention(t *testing.T) {
 	const probes = 3
-	clock := &stepClock{}
+	clock := resilience.NewManualClock(time.Unix(0, 0))
 	b := newBreaker(t, clock, nil, resilience.BreakerPolicy{
 		Trip:             resilience.ConsecutiveFailures(1),
 		OpenFor:          time.Second,
@@ -290,7 +267,7 @@ func TestBreakerHalfOpenProbeBoundHoldsUnderContention(t *testing.T) {
 }
 
 func TestBreakerIntervalResetsClosedCounts(t *testing.T) {
-	clock := &stepClock{}
+	clock := resilience.NewManualClock(time.Unix(0, 0))
 	b := newBreaker(t, clock, nil, resilience.BreakerPolicy{
 		Trip:     resilience.FailureRatio(0.5, 4),
 		OpenFor:  time.Second,
@@ -322,7 +299,7 @@ func TestBreakerIntervalResetsClosedCounts(t *testing.T) {
 }
 
 func TestBreakerFailureClassifierAndDoneContext(t *testing.T) {
-	clock := &stepClock{}
+	clock := resilience.NewManualClock(time.Unix(0, 0))
 	b := newBreaker(t, clock, nil, resilience.BreakerPolicy{
 		Trip:    resilience.ConsecutiveFailures(1),
 		OpenFor: time.Second,
@@ -350,7 +327,7 @@ func TestBreakerFailureClassifierAndDoneContext(t *testing.T) {
 }
 
 func TestBreakerPanicReleasesProbeSlot(t *testing.T) {
-	clock := &stepClock{}
+	clock := resilience.NewManualClock(time.Unix(0, 0))
 	b := newBreaker(t, clock, nil, resilience.BreakerPolicy{
 		Trip:    resilience.ConsecutiveFailures(1),
 		OpenFor: time.Second,
@@ -374,7 +351,7 @@ func TestBreakerPanicReleasesProbeSlot(t *testing.T) {
 }
 
 func TestBreakerResetClosesAndNotifies(t *testing.T) {
-	clock := &stepClock{}
+	clock := resilience.NewManualClock(time.Unix(0, 0))
 	var rec recorder
 	b := newBreaker(t, clock, &rec, resilience.BreakerPolicy{
 		Trip:    resilience.ConsecutiveFailures(1),
@@ -391,7 +368,7 @@ func TestBreakerResetClosesAndNotifies(t *testing.T) {
 }
 
 func TestBreakerDoValidation(t *testing.T) {
-	b := newBreaker(t, &stepClock{}, nil, resilience.BreakerPolicy{
+	b := newBreaker(t, resilience.NewManualClock(time.Unix(0, 0)), nil, resilience.BreakerPolicy{
 		Trip:    resilience.ConsecutiveFailures(1),
 		OpenFor: time.Second,
 	})
@@ -415,7 +392,7 @@ func TestBreakerStateString(t *testing.T) {
 // Retry and Breaker compose: the breaker's rejection is not worth retrying
 // because it cannot change until the clock does.
 func TestRetryStopsOnOpenBreaker(t *testing.T) {
-	clock := &stepClock{}
+	clock := resilience.NewManualClock(time.Unix(0, 0))
 	b := newBreaker(t, clock, nil, resilience.BreakerPolicy{
 		Trip:    resilience.ConsecutiveFailures(2),
 		OpenFor: time.Minute,

@@ -16,7 +16,7 @@ import (
 
 func TestMapPreservesInputOrderAndReportsFailuresByIndex(t *testing.T) {
 	odd := errors.New("odd")
-	got, err := async.Map(context.Background(), async.Limited(3), async.Hooks{}, []int{1, 2, 3, 4, 5},
+	got, err := runner(t, async.Limited(3)).Map(context.Background(), []int{1, 2, 3, 4, 5},
 		func(_ context.Context, n int) (int, error) {
 			time.Sleep(time.Duration(5-n) * time.Millisecond) // finish in reverse
 			if n%2 == 1 {
@@ -55,26 +55,16 @@ func joined(err error) []error {
 }
 
 func TestMapValidation(t *testing.T) {
-	tests := []struct {
-		name  string
-		limit async.Limit
-		fn    func(context.Context, int) (int, error)
-		want  error
-	}{
-		{"unset limit", async.Limit{}, func(context.Context, int) (int, error) { return 0, nil }, async.ErrInvalidLimit},
-		{"zero limit", async.Limited(0), func(context.Context, int) (int, error) { return 0, nil }, async.ErrInvalidLimit},
-		{"nil fn", async.Unlimited, nil, async.ErrNilTask},
+	run := runner(t, async.Unlimited)
+	if _, err := run.Map[int, int](context.Background(), []int{1}, nil); !errors.Is(err, async.ErrNilTask) {
+		t.Fatalf("Map nil fn = %v", err)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := async.Map(context.Background(), tt.limit, async.Hooks{}, []int{1}, tt.fn)
-			if !errors.Is(err, tt.want) {
-				t.Fatalf("error = %v, want %v", err, tt.want)
-			}
-		})
-	}
-	if err := async.ForEach(context.Background(), async.Unlimited, async.Hooks{}, []int{1}, nil); !errors.Is(err, async.ErrNilTask) {
+	if err := run.ForEach(context.Background(), []int{1}, nil); !errors.Is(err, async.ErrNilTask) {
 		t.Fatalf("ForEach nil fn = %v", err)
+	}
+	var none *async.Runner
+	if _, err := none.Map(context.Background(), []int{1}, func(context.Context, int) (int, error) { return 0, nil }); !errors.Is(err, async.ErrNilRunner) {
+		t.Fatalf("nil Runner Map = %v", err)
 	}
 }
 
@@ -82,12 +72,12 @@ func TestMapValidation(t *testing.T) {
 // error the way an empty Plan is.
 func TestMapEmptyCollectionIsNotAnError(t *testing.T) {
 	called := false
-	got, err := async.Map(context.Background(), async.Limited(1), async.Hooks{}, []int(nil),
+	got, err := runner(t, async.Limited(1)).Map(context.Background(), []int(nil),
 		func(context.Context, int) (int, error) { called = true; return 0, nil })
 	if err != nil || len(got) != 0 || called {
 		t.Fatalf("Map = (%v, %v), called=%t", got, err, called)
 	}
-	if err := async.ForEach(context.Background(), async.Limited(1), async.Hooks{}, []int{}, func(context.Context, int) error { return nil }); err != nil {
+	if err := runner(t, async.Limited(1)).ForEach(context.Background(), []int{}, func(context.Context, int) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -105,7 +95,7 @@ func TestMapLimitBoundsWorkersAndGoroutines(t *testing.T) {
 	before := runtime.NumGoroutine()
 	done := make(chan struct{})
 	go func() {
-		_, _ = async.Map(context.Background(), async.Limited(limit), async.Hooks{}, list, func(context.Context, int) (int, error) {
+		_, _ = runner(t, async.Limited(limit)).Map(context.Background(), list, func(context.Context, int) (int, error) {
 			n := running.Add(1)
 			for {
 				old := peak.Load()
@@ -155,7 +145,7 @@ func TestMapCancellationMarksUnstartedItems(t *testing.T) {
 	}
 	got := make(chan result, 1)
 	go func() {
-		results, err := async.Map(ctx, async.Limited(2), hooks, list, func(context.Context, int) (int, error) {
+		results, err := runner(t, async.Limited(2), async.WithHooks(hooks)).Map(ctx, list, func(context.Context, int) (int, error) {
 			once.Do(func() { close(started) })
 			<-release
 			ran.Add(1)
@@ -224,7 +214,7 @@ func TestMapHooksReportQueueingDelay(t *testing.T) {
 	}}
 	var blockStart, blockEnd time.Time
 	mapStart := time.Now()
-	_, err := async.Map(context.Background(), async.Limited(1), hooks, []int{0, 1}, func(_ context.Context, n int) (int, error) {
+	_, err := runner(t, async.Limited(1), async.WithHooks(hooks)).Map(context.Background(), []int{0, 1}, func(_ context.Context, n int) (int, error) {
 		if n == 0 {
 			blockStart = time.Now()
 			time.Sleep(20 * time.Millisecond)
@@ -253,7 +243,7 @@ func TestMapHooksReportQueueingDelay(t *testing.T) {
 func TestForEachJoinsErrors(t *testing.T) {
 	bad := errors.New("bad")
 	var seen atomic.Int64
-	err := async.ForEach(context.Background(), async.Limited(2), async.Hooks{}, []int{1, 2, 3}, func(_ context.Context, n int) error {
+	err := runner(t, async.Limited(2)).ForEach(context.Background(), []int{1, 2, 3}, func(_ context.Context, n int) error {
 		seen.Add(int64(n))
 		if n == 2 {
 			return bad
@@ -285,7 +275,7 @@ func TestMapInsideViewHoldsTheBorrowAcrossWorkers(t *testing.T) {
 	got := make(chan result, 1)
 	go func() {
 		sum, err := owner.View(func(items []int) (int, error) {
-			squares, err := async.Map(context.Background(), async.Limited(2), async.Hooks{}, items, func(_ context.Context, n int) (int, error) {
+			squares, err := runner(t, async.Limited(2)).Map(context.Background(), items, func(_ context.Context, n int) (int, error) {
 				once.Do(func() { close(inFlight) })
 				<-release
 				return n * n, nil

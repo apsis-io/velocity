@@ -29,10 +29,18 @@ type Owner[T any] struct {
 	h handle
 }
 
-// New creates a unique owner.
+// Own creates a unique owner with no Drop or Clone. It cannot fail, so it
+// returns no error; it is New for the case where there is nothing to
+// configure, which is most of them.
+func Own[T any](value T) *Owner[T] {
+	return &Owner[T]{c: &cell[T]{value: value, mode: modeUnique}}
+}
+
+// New creates a unique owner with options. Without options it is exactly
+// Own, which does not make the caller handle an error that cannot happen.
 func New[T any](value T, opts ...Option[T]) (*Owner[T], error) {
 	if len(opts) == 0 {
-		return &Owner[T]{c: &cell[T]{value: value, mode: modeUnique}}, nil
+		return Own(value), nil
 	}
 	cfg, err := buildConfig(opts)
 	if err != nil {

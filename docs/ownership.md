@@ -162,7 +162,7 @@ readers (`Frozen`).
 | a permit, allocation, or reference to hand back | `NewLease` |
 | a bounded set of reusable resources | `pool.New` (checkouts are leases) |
 | several resources acquired in sequence | `NewScope` |
-| anything else needing borrow enforcement | `New` |
+| anything else needing borrow enforcement | `Own`, or `New` with options |
 
 `View`/`Mutate` read and write under a borrow that lasts exactly as long as
 the call; `WithRead`/`WithWrite` are their error-only forms. The value must

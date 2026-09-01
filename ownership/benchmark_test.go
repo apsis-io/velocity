@@ -13,12 +13,12 @@ func BenchmarkOwner(b *testing.B) {
 	b.Run("new-release", func(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
-			owner, _ := ownership.New(1)
+			owner := ownership.Own(1)
 			_ = owner.Release()
 		}
 	})
 	b.Run("state", func(b *testing.B) {
-		owner, _ := ownership.New(1)
+		owner := ownership.Own(1)
 		defer owner.Release()
 		b.ReportAllocs()
 		for b.Loop() {
@@ -26,7 +26,7 @@ func BenchmarkOwner(b *testing.B) {
 		}
 	})
 	b.Run("scoped-read", func(b *testing.B) {
-		owner, _ := ownership.New(1)
+		owner := ownership.Own(1)
 		defer owner.Release()
 		b.ReportAllocs()
 		for b.Loop() {
@@ -34,7 +34,7 @@ func BenchmarkOwner(b *testing.B) {
 		}
 	})
 	b.Run("advanced-read", func(b *testing.B) {
-		owner, _ := ownership.New(1)
+		owner := ownership.Own(1)
 		defer owner.Release()
 		b.ReportAllocs()
 		for b.Loop() {
@@ -44,7 +44,7 @@ func BenchmarkOwner(b *testing.B) {
 		}
 	})
 	b.Run("scoped-write", func(b *testing.B) {
-		owner, _ := ownership.New(1)
+		owner := ownership.Own(1)
 		defer owner.Release()
 		b.ReportAllocs()
 		for b.Loop() {
@@ -54,13 +54,13 @@ func BenchmarkOwner(b *testing.B) {
 	b.Run("move", func(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
-			owner, _ := ownership.New(1)
+			owner := ownership.Own(1)
 			moved, _ := owner.Move()
 			ownershipSink, _ = moved.Detach()
 		}
 	})
 	b.Run("conflict", func(b *testing.B) {
-		owner, _ := ownership.New(1)
+		owner := ownership.Own(1)
 		borrow, _ := owner.Borrow()
 		defer borrow.Release()
 		b.ReportAllocs()
@@ -82,7 +82,7 @@ func BenchmarkNewShared(b *testing.B) {
 
 func BenchmarkShared(b *testing.B) {
 	b.Run("clone-release", func(b *testing.B) {
-		owner, _ := ownership.New(1)
+		owner := ownership.Own(1)
 		shared, _ := owner.IntoShared()
 		defer shared.Release()
 		b.ReportAllocs()
@@ -92,7 +92,7 @@ func BenchmarkShared(b *testing.B) {
 		}
 	})
 	b.Run("parallel-read", func(b *testing.B) {
-		owner, _ := ownership.New(1)
+		owner := ownership.Own(1)
 		shared, _ := owner.IntoShared()
 		defer shared.Release()
 		b.ReportAllocs()
@@ -107,7 +107,7 @@ func BenchmarkShared(b *testing.B) {
 	b.Run("unwrap", func(b *testing.B) {
 		b.ReportAllocs()
 		for b.Loop() {
-			owner, _ := ownership.New(1)
+			owner := ownership.Own(1)
 			shared, _ := owner.IntoShared()
 			owner, _ = shared.IntoOwner()
 			ownershipSink, _ = owner.Detach()

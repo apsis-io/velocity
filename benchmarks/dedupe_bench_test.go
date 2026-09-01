@@ -29,7 +29,7 @@ var velocityDedupeSink int
 // benchmarkVelocityUncontended measures Do, the plain-value form. DoShared,
 // which hands out an ownership handle per caller, is a separate arm below.
 func benchmarkVelocityUncontended(b *testing.B) {
-	group, err := dedupe.New[string, int](context.Background())
+	group, err := dedupe.New[string, int]()
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func benchmarkXSyncUncontended(b *testing.B) {
 }
 
 func benchmarkVelocitySharedUncontended(b *testing.B) {
-	group, err := dedupe.New[string, int](context.Background())
+	group, err := dedupe.New[string, int]()
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -92,7 +92,7 @@ func benchmarkVelocitySharedUncontended(b *testing.B) {
 }
 
 func benchmarkVelocityContended(b *testing.B) {
-	group, err := dedupe.New[string, int](context.Background())
+	group, err := dedupe.New[string, int]()
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -167,7 +167,7 @@ func benchmarkBackends(b *testing.B, run func(*testing.B, *dedupe.Group[string, 
 	b.Helper()
 	for _, tc := range velocityBackends() {
 		b.Run(tc.name, func(b *testing.B) {
-			group, err := dedupe.New[string, int](context.Background(), tc.opt)
+			group, err := dedupe.New[string, int](tc.opt)
 			if err != nil {
 				b.Fatal(err)
 			}

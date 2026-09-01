@@ -21,19 +21,19 @@ func BenchmarkGather(b *testing.B) {
 		{Run: func(context.Context) (int, error) { return 4, nil }},
 	}
 	b.Run("no hooks", func(b *testing.B) {
-		plan, _ := async.NewPlan(async.Limited(4), async.Hooks{}, tasks...)
+		run, _ := async.New(async.Limited(4))
 		b.ReportAllocs()
 		for b.Loop() {
-			asyncSink, _ = async.Gather(context.Background(), plan)
+			asyncSink, _ = run.Gather(context.Background(), tasks...)
 		}
 	})
 	b.Run("task complete hook", func(b *testing.B) {
-		plan, _ := async.NewPlan(async.Limited(4), async.Hooks{OnTaskComplete: func(_ int, _ string, waited, duration time.Duration, _ error) {
+		run, _ := async.New(async.Limited(4), async.WithHooks(async.Hooks{OnTaskComplete: func(_ int, _ string, waited, duration time.Duration, _ error) {
 			asyncHookSink = waited + duration
-		}}, tasks...)
+		}}))
 		b.ReportAllocs()
 		for b.Loop() {
-			asyncSink, _ = async.Gather(context.Background(), plan)
+			asyncSink, _ = run.Gather(context.Background(), tasks...)
 		}
 	})
 }
@@ -43,6 +43,7 @@ func BenchmarkGather(b *testing.B) {
 // per task.
 func BenchmarkMapVersusGather(b *testing.B) {
 	square := func(_ context.Context, n int) (int, error) { return n * n, nil }
+	run, _ := async.New(async.Limited(8))
 	for _, size := range []int{8, 1024} {
 		items := make([]int, size)
 		for i := range items {
@@ -51,7 +52,7 @@ func BenchmarkMapVersusGather(b *testing.B) {
 		b.Run(fmt.Sprintf("map/%d", size), func(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
-				asyncMapSink, _ = async.Map(context.Background(), async.Limited(8), async.Hooks{}, items, square)
+				asyncMapSink, _ = run.Map(context.Background(), items, square)
 			}
 		})
 		b.Run(fmt.Sprintf("gather/%d", size), func(b *testing.B) {
@@ -59,10 +60,9 @@ func BenchmarkMapVersusGather(b *testing.B) {
 			for i, item := range items {
 				tasks[i] = async.Task[int]{Run: func(ctx context.Context) (int, error) { return square(ctx, item) }}
 			}
-			plan, _ := async.NewPlan(async.Limited(8), async.Hooks{}, tasks...)
 			b.ReportAllocs()
 			for b.Loop() {
-				asyncSink, _ = async.Gather(context.Background(), plan)
+				asyncSink, _ = run.Gather(context.Background(), tasks...)
 			}
 		})
 	}

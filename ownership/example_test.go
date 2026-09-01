@@ -23,7 +23,7 @@ func ExampleOwner_View() {
 }
 
 func ExampleOwner_Mutate() {
-	owner, _ := ownership.New(3)
+	owner := ownership.Own(3)
 	defer owner.Release()
 
 	_ = owner.WithWrite(func(value *int) error {
@@ -36,7 +36,7 @@ func ExampleOwner_Mutate() {
 }
 
 func ExampleOwner_IntoShared() {
-	owner, _ := ownership.New("velocity")
+	owner := ownership.Own("velocity")
 	shared, _ := owner.IntoShared()
 	defer shared.Release()
 	clone, _ := shared.Clone()

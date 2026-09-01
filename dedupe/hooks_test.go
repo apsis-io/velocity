@@ -16,7 +16,7 @@ func TestHooksObserveLeaderAndFollowerJoins(t *testing.T) {
 	}
 	var mu sync.Mutex
 	joins := make([]join, 0, 2)
-	group, err := dedupe.New[string, int](context.Background(), dedupe.WithHooks[string, int](dedupe.Hooks[string]{
+	group, err := dedupe.New[string, int](dedupe.WithHooks[string, int](dedupe.Hooks[string]{
 		OnJoin: func(key string, leader bool) {
 			mu.Lock()
 			joins = append(joins, join{key: key, leader: leader})
@@ -71,7 +71,7 @@ func TestHooksOnCompleteCanReenterSameKey(t *testing.T) {
 		},
 	}
 	var err error
-	group, err = dedupe.New[string, int](context.Background(), dedupe.WithHooks[string, int](hooks))
+	group, err = dedupe.New[string, int](dedupe.WithHooks[string, int](hooks))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,7 +97,7 @@ func TestHooksObserveCallbackDuration(t *testing.T) {
 	const leadTime = 40 * time.Millisecond
 	const tolerance = 20 * time.Millisecond
 	completes := make(chan time.Duration, 1)
-	group, err := dedupe.New[string, int](context.Background(), dedupe.WithHooks[string, int](dedupe.Hooks[string]{
+	group, err := dedupe.New[string, int](dedupe.WithHooks[string, int](dedupe.Hooks[string]{
 		OnComplete: func(_ string, duration time.Duration, _ error) { completes <- duration },
 	}))
 	if err != nil {
