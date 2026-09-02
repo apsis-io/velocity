@@ -365,6 +365,35 @@ Head-to-head numbers against the libraries these packages drew from —
 with fairness rules and an honest account of where velocity is slower and
 why, live in [`benchmarks/README.md`](benchmarks/README.md).
 
+## Field use
+
+One consumer so far, which is the honest scope. Periapsis, a
+virtual-kubelet fork, ported seven call sites to velocity and has tracked
+each release since. It exercises `ownership`, `async` (`Runner.Map`,
+`ErrGroup`, `Mutex`), `dedupe`, and `failsafeown`, and dropped `conc`,
+`x/sync/singleflight` and `x/sync/errgroup` on the way; v0.4.0 is deployed
+on its cluster.
+
+Most of what changed in v0.2.0 and v0.3.0 came from that port, and the
+reports were measured rather than impressionistic:
+
+- **`dedupe` holding an abandoned round's key until its callback returns**
+  took a ping loop from 10 in-flight calls per second to 1, matching what
+  `x/sync/singleflight` does for a callback that ignores its context.
+- **The zero-value `dedupe.Group`** exists because a partial struct literal
+  holding one compiled and then nil-panicked on the first uncached call,
+  where `singleflight.Group` had worked uninitialised for years.
+- **`failsafeown.GetWithExecution`** exists because the module could not
+  express a hedge racing a peer against a registry — the case its own
+  documentation led with.
+- **`async.Mutex`'s benchmark note** is that consumer's measurement,
+  including the part that says the end-to-end difference was below
+  run-to-run variance.
+
+The same port also corrected this repository's claims more than once, and
+[`docs/decisions.md`](docs/decisions.md) records which were wrong and why
+rather than quietly restating them.
+
 ## Development
 
 ```sh
