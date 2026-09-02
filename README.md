@@ -284,11 +284,12 @@ does not try to catch up with it.
 
 What failsafe-go cannot express is that a **result may own something**. Every
 policy that discards a result leaks it when the result is a connection, a
-file, or a lock: a hedge drops N−1 results, a retry with a result predicate
-discards one that arrived perfectly well, a fallback drops the primary's, a
-timeout returns before a result that arrives anyway. That is not a bug in
-failsafe-go — a library that treats the result as opaque cannot know that
-dropping one costs something.
+lock, a file handle, or filesystem artifacts such as a temp directory and
+the blob inside it: a hedge drops N−1 results, a retry with a result
+predicate discards one that arrived perfectly well, a fallback drops the
+primary's, a timeout returns before a result that arrives anyway. That is
+not a bug in failsafe-go — a library that treats the result as opaque cannot
+know that dropping one costs something.
 
 The [`failsafeown`](failsafeown) module supplies the missing half. Make the
 result an `*ownership.Owner[T]`, which carries its own `Drop`, and whatever
@@ -302,6 +303,25 @@ exec := failsafe.With(
 conn, err := failsafeown.Get(ctx, exec, dial, failsafeown.Hooks[*Conn]{})
 // every connection the chain dialled and dropped is closed
 ```
+
+`GetWithExecution` is the same thing for attempts that are **not**
+interchangeable, which for a hedge is the common case since replicas
+usually have addresses — racing a peer against an origin needs to know
+which attempt it is:
+
+```go
+owner, err := failsafeown.GetWithExecution(ctx, exec,
+    func(e failsafe.Execution[*ownership.Owner[*Layer]]) (*ownership.Owner[*Layer], error) {
+        if e.Hedges() == 0 {
+            return fetchFromPeers(e.Context())
+        }
+        return fetchFromRegistry(e.Context())
+    }, hooks)
+```
+
+Counting attempts in the closure instead works only while nothing else in
+the chain also reruns `fn`; add a retry and the counter silently stops
+meaning what it did.
 
 It is a separate module, so the library itself keeps no dependency on
 failsafe-go.

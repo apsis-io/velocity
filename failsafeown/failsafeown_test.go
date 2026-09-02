@@ -3,6 +3,11 @@ package failsafeown_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -246,5 +251,197 @@ func TestContextCancellationReleasesAcquired(t *testing.T) {
 	}
 	if closed := f.waitForClosed(t, 1); len(closed) == 0 {
 		t.Fatal("the acquired connection was leaked")
+	}
+}
+
+// artifact is a temp directory with a blob inside it: the case where a
+// leak is silent and permanent, with no pool or GC to bound it.
+type artifact struct {
+	dir  string
+	blob string
+	from string // which strategy produced it
+}
+
+// fetch creates the artifact on disk and owns it, so Drop is the removal.
+func fetch(root, from string) (*ownership.Owner[*artifact], error) {
+	dir, err := os.MkdirTemp(root, from+"-")
+	if err != nil {
+		return nil, err
+	}
+	blob := filepath.Join(dir, "layer.tar")
+	if err := os.WriteFile(blob, []byte(from), 0o600); err != nil {
+		return nil, err
+	}
+	a := &artifact{dir: dir, blob: blob, from: from}
+	return ownership.New(a, ownership.WithDrop(func(a *artifact) error {
+		return os.RemoveAll(a.dir)
+	}))
+}
+
+func exists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// A hedge whose attempts differ needs to know which one it is. Racing a
+// peer against a registry is the shape the package doc leads with, and it
+// cannot be written at all without the Execution handle: with only Get,
+// every attempt is byte-identical.
+func TestGetWithExecutionDispatchesByAttemptAndDisposesTheLoser(t *testing.T) {
+	root := t.TempDir()
+	slow := make(chan struct{})
+	var dispatched sync.Map // strategy -> struct{}
+
+	policy := hedgepolicy.NewWithDelay[*ownership.Owner[*artifact]](10 * time.Millisecond)
+	result, err := failsafeown.GetWithExecution(context.Background(), failsafe.With(policy),
+		func(e failsafe.Execution[*ownership.Owner[*artifact]]) (*ownership.Owner[*artifact], error) {
+			// Hedges() is 0 for the primary and 1 for the first hedge, so
+			// the two attempts fetch from genuinely different places.
+			if e.Hedges() == 0 {
+				dispatched.Store("peer", struct{}{})
+				owner, ferr := fetch(root, "peer")
+				// The peer accepted, then stalled. Bounded, so that a
+				// dispatch bug — both attempts taking this branch — fails
+				// the assertion below rather than deadlocking the test.
+				select {
+				case <-slow:
+				case <-time.After(2 * time.Second):
+				}
+				return owner, ferr
+			}
+			dispatched.Store("registry", struct{}{})
+			return fetch(root, "registry")
+		}, failsafeown.Hooks[*artifact]{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer result.Release()
+
+	if _, ok := dispatched.Load("peer"); !ok {
+		t.Fatal("the primary never dispatched to the peer")
+	}
+	if _, ok := dispatched.Load("registry"); !ok {
+		t.Fatal("the hedge never dispatched to the registry: attempts were interchangeable")
+	}
+	winner, err := result.View(func(a *artifact) (artifact, error) { return *a, nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if winner.from != "registry" {
+		t.Fatalf("winner came from %q, want the fast registry", winner.from)
+	}
+
+	// The peer's artifact arrives late and must be removed from disk.
+	close(slow)
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		entries, readErr := os.ReadDir(root)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if len(entries) == 1 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !exists(winner.blob) {
+		t.Fatalf("the returned artifact %s was removed", winner.blob)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 || !strings.HasPrefix(entries[0].Name(), "registry-") {
+		names := make([]string, len(entries))
+		for i, e := range entries {
+			names[i] = e.Name()
+		}
+		t.Fatalf("artifact directories remaining = %v, want only the winner's", names)
+	}
+}
+
+// Retries reports failures rather than hedges, so a chain with both still
+// tells fn which branch it is on — the thing a closure counter cannot.
+func TestGetWithExecutionSeesRetriesSeparatelyFromHedges(t *testing.T) {
+	boom := errors.New("boom")
+	var mu sync.Mutex
+	var seen []string
+	policy := retrypolicy.NewBuilder[*ownership.Owner[*conn]]().WithMaxAttempts(3).Build()
+
+	var f factory
+	result, err := failsafeown.GetWithExecution(context.Background(), failsafe.With(policy),
+		func(e failsafe.Execution[*ownership.Owner[*conn]]) (*ownership.Owner[*conn], error) {
+			mu.Lock()
+			seen = append(seen, fmt.Sprintf("retry=%d first=%t", e.Retries(), e.IsFirstAttempt()))
+			retries := e.Retries()
+			mu.Unlock()
+			owner, _ := f.dial(e.Context())
+			if retries < 2 {
+				return owner, boom
+			}
+			return owner, nil
+		}, failsafeown.Hooks[*conn]{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer result.Release()
+
+	mu.Lock()
+	defer mu.Unlock()
+	want := []string{"retry=0 first=true", "retry=1 first=false", "retry=2 first=false"}
+	if !slices.Equal(seen, want) {
+		t.Fatalf("attempts saw %v, want %v", seen, want)
+	}
+	// The two failed attempts each dialled and each must be closed.
+	if closed := f.waitForClosed(t, 2); len(closed) != 2 {
+		t.Fatalf("closed = %v, want the two failed attempts", closed)
+	}
+}
+
+func TestGetWithExecutionValidation(t *testing.T) {
+	exec := failsafe.With(retrypolicy.NewWithDefaults[*ownership.Owner[*conn]]())
+	fn := func(failsafe.Execution[*ownership.Owner[*conn]]) (*ownership.Owner[*conn], error) {
+		return nil, nil
+	}
+	var nilCtx context.Context // a literal nil trips SA1012
+	if _, err := failsafeown.GetWithExecution(nilCtx, exec, fn, failsafeown.Hooks[*conn]{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("nil ctx = %v", err)
+	}
+	if _, err := failsafeown.GetWithExecution(context.Background(), exec, nil, failsafeown.Hooks[*conn]{}); !errors.Is(err, ownership.ErrNilOption) {
+		t.Fatalf("nil fn = %v", err)
+	}
+	if _, err := failsafeown.GetWithExecution(context.Background(), nil, fn, failsafeown.Hooks[*conn]{}); !errors.Is(err, ownership.ErrNilOption) {
+		t.Fatalf("nil executor = %v", err)
+	}
+}
+
+// Get hands fn the execution's context, so a policy that gives up on an
+// attempt stops it rather than letting it run on.
+func TestGetPassesTheExecutionContext(t *testing.T) {
+	var f factory
+	stopped := make(chan struct{})
+	policy := hedgepolicy.NewWithDelay[*ownership.Owner[*conn]](5 * time.Millisecond)
+	var attempts atomic.Int32
+
+	result, err := failsafeown.Get(context.Background(), failsafe.With(policy),
+		func(ctx context.Context) (*ownership.Owner[*conn], error) {
+			owner, dialErr := f.dial(ctx)
+			if attempts.Add(1) == 1 {
+				select {
+				case <-ctx.Done(): // cancelled once the hedge wins
+					close(stopped)
+				case <-time.After(2 * time.Second):
+				}
+			}
+			return owner, dialErr
+		}, failsafeown.Hooks[*conn]{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer result.Release()
+	select {
+	case <-stopped:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the losing attempt's context was never cancelled")
 	}
 }

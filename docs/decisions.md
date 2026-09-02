@@ -262,6 +262,16 @@ Two things survive that comparison, and they are the same thing twice:
   the tests measure the leak rather than describe it. A separate module, so
   the library keeps no dependency on failsafe-go, grpc, or protobuf.
 
+`GetWithExecution` followed from the first consumer trying to use the
+module: `Get` alone hands `fn` no `Execution`, so every attempt is
+byte-identical and a hedge can only mean "do the same thing again". That is
+wrong for the case the package doc *leads with* — a hedge whose replicas
+have addresses, which is most of them. The fix mirrors failsafe-go's own
+pair rather than inventing a shape, and reuses the tracker unchanged. `Get`
+now delegates to it and passes `fn` the execution's context rather than the
+caller's, so a losing attempt is cancelled by the policy chain instead of
+running on.
+
 One idea taken back the other way: **`LatencyDelay`**, after their
 `NewWithDelayQuantile`. A static hedge delay has to be guessed for a
 distribution the caller does not know and that moves under load; hedging at

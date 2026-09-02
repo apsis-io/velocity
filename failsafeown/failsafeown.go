@@ -5,7 +5,10 @@
 // deliberately does not — timeout, fallback, rate limiting, adaptive
 // concurrency — and composes them into one Executor. What it has no way to
 // express is that a result may own something. Every policy that discards a
-// result leaks it when the result is a connection, a file, or a lock:
+// result leaks it when the result is a connection, a lock, a file handle,
+// or filesystem artifacts such as a temp directory and the blob inside it —
+// the last of which leak silently and permanently, with no pool or GC to
+// bound them:
 //
 //   - a hedge returns the first of N results and drops N-1;
 //   - a retry configured with HandleResult discards a result that arrived
@@ -23,7 +26,11 @@
 //	    fallback.WithResult(spare),
 //	    hedgepolicy.NewWithDelay[*ownership.Owner[*Conn]](50*time.Millisecond),
 //	)
-//	conn, err := failsafeown.Get(ctx, exec, dial) // losers are closed
+//	conn, err := failsafeown.Get(ctx, exec, dial, failsafeown.Hooks[*Conn]{})
+//	// every connection the chain dialled and dropped is closed
+//
+// Use GetWithExecution when the attempts are not interchangeable — a hedge
+// that races a peer against an origin has to know which one it is.
 //
 // Import it only if you want failsafe-go's breadth; it is a separate module
 // so the velocity library itself keeps no dependency on it.
@@ -56,10 +63,45 @@ type Hooks[T any] struct {
 // beside an error is still tracked, since a failed attempt may have
 // acquired something before failing.
 //
+// The context fn receives is the execution's, not the one passed here, so
+// it is cancelled when the policy chain gives up on that attempt — a
+// hedge's loser or a timeout's overrun stops rather than running on.
+//
 // Disposal is not confined to the call. A hedge's losing attempt can return
 // after Get has already answered; that owner is released as it arrives, on
 // the goroutine that produced it.
 func Get[T any](ctx context.Context, exec failsafe.Executor[*ownership.Owner[T]], fn func(context.Context) (*ownership.Owner[T], error), hooks Hooks[T]) (*ownership.Owner[T], error) {
+	if fn == nil {
+		return nil, ownership.ErrNilOption
+	}
+	return GetWithExecution(ctx, exec, func(e failsafe.Execution[*ownership.Owner[T]]) (*ownership.Owner[T], error) {
+		return fn(executionContext(ctx, e))
+	}, hooks)
+}
+
+// GetWithExecution is Get for attempts that are not interchangeable. It
+// hands fn failsafe's Execution, so the attempt can tell which one it is —
+// Hedges reports how many speculative attempts preceded it, Retries how
+// many failures did — and dispatch accordingly.
+//
+// A hedge whose attempts differ is the common case rather than the exotic
+// one, since replicas usually have addresses: racing a peer against an
+// origin, or a warm cache against a cold read, needs the index. Deriving it
+// from a counter in the closure works only while nothing else in the chain
+// also reruns fn; add a retry and the counter silently stops meaning what
+// it did.
+//
+//	owner, err := failsafeown.GetWithExecution(ctx, exec,
+//	    func(e failsafe.Execution[*ownership.Owner[*Layer]]) (*ownership.Owner[*Layer], error) {
+//	        if e.Hedges() == 0 {
+//	            return fetchFromPeers(e.Context())
+//	        }
+//	        return fetchFromRegistry(e.Context())
+//	    }, hooks)
+//
+// Disposal is identical to Get's: whichever attempt loses, its owner is
+// released, whenever it arrives.
+func GetWithExecution[T any](ctx context.Context, exec failsafe.Executor[*ownership.Owner[T]], fn func(failsafe.Execution[*ownership.Owner[T]]) (*ownership.Owner[T], error), hooks Hooks[T]) (*ownership.Owner[T], error) {
 	if ctx == nil {
 		return nil, context.Canceled
 	}
@@ -67,13 +109,23 @@ func Get[T any](ctx context.Context, exec failsafe.Executor[*ownership.Owner[T]]
 		return nil, ownership.ErrNilOption
 	}
 	track := &tracker[T]{hooks: hooks}
-	result, err := exec.WithContext(ctx).Get(func() (*ownership.Owner[T], error) {
-		owner, err := fn(ctx)
+	result, err := exec.WithContext(ctx).GetWithExecution(func(e failsafe.Execution[*ownership.Owner[T]]) (*ownership.Owner[T], error) {
+		owner, err := fn(e)
 		track.record(owner)
 		return owner, err
 	})
 	track.settle(result)
 	return result, err
+}
+
+// executionContext prefers the execution's context, which carries the
+// policy chain's cancellation, and falls back to the caller's if a policy
+// ever hands back none.
+func executionContext[T any](ctx context.Context, e failsafe.Execution[*ownership.Owner[T]]) context.Context {
+	if inner := e.Context(); inner != nil {
+		return inner
+	}
+	return ctx
 }
 
 // tracker holds the owners fn produced until the executor says which one
