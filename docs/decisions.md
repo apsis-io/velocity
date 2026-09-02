@@ -391,14 +391,43 @@ send checked afterwards, because a `select` against the group context cost
 
 ## First consumer feedback (implemented)
 
+One note on how the reports in this section were read. Nearly every claim
+in them arrived with an instrument behind it — flight counts, allocation
+counts, mutation runs — and the accuracy was high enough that an
+unmeasured sentence sitting among them inherited the same confidence.
+Exactly one did, and it shaped the *urgency* of a change below before the
+consumer retracted it. A passing test cannot contradict a claim about who
+implements an interface, so a claim of that shape needs asking about
+directly rather than being carried along by the numbers around it.
+
+
 Periapsis ported seven `conc`/`x/sync` sites to v0.1.0 and reported back.
 Three changes came out of it:
 
 - **An abandoned round holds its key until the callback returns.** `leave`
   used to cancel the work and unregister the key in one step, so a callback
-  that ignored its context — a third-party provider wedged on some other
-  context — let every later caller start another one: a 10 ms ping loop
-  stacked 10 flights in a second where `x/sync` ran one. Now cancellation
+  that ignored its context let every later caller start another one: a 10 ms
+  ping loop stacked 10 flights in a second where `x/sync` ran one.
+
+  *Corrected after the fact.* This originally read "a third-party provider
+  wedged on some other context", repeating the consumer's framing. The
+  consumer retracted it: every implementation of that interface is in their
+  own repo and neither production one can block, so the wedged provider is
+  the test's fake and the hazard is inherited from the upstream project the
+  fork came from rather than observed. The measurement stands — it measures
+  velocity, not their providers — but it measures a scenario nobody there is
+  in today, and the reasoning below is what actually carries the change.
+
+  It stands on the library's contract, not on any consumer's exposure.
+  `Singleflight` is an alias that invites a straight swap from
+  `x/sync/singleflight`, which holds a key until `fn` returns; without
+  retention that swap silently changes behaviour for any callback that does
+  not honour cancellation, and such callbacks are ordinary — an HTTP client
+  with no context plumbed through, a cgo call, a sleep loop. A library
+  cannot assume its users' callbacks cooperate. The value-adoption and
+  failure-restart semantics came from a separate soundness argument, that a
+  joiner must never receive another caller's cancellation, and were not
+  motivated by exposure at all. Now cancellation
   is still delivered, but the key stays until `complete`, and a caller
   arriving meanwhile waits under its own context. If the callback then
   succeeded, the caller takes the value (the work was done; it is not
