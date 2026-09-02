@@ -88,11 +88,17 @@ func (p *Permit) Release() {
 //
 // The Permit costs one allocation on every acquire, which x/sync's
 // semaphore.NewWeighted(1) does not pay uncontended — but x/sync allocates
-// a waiter per blocked acquire, which this does not. Measured on one
-// machine: ~4x more expensive uncontended, ~1.3x cheaper and a seventh of
-// the allocations under contention. Choose on the call site, not the
-// microbenchmark; at the sites this replaces, the lock is a few percent of
-// the work it guards.
+// a waiter per blocked acquire, which this does not. Measured as a
+// primitive on one machine, both arms interleaved in one process: ~4x more
+// expensive uncontended, ~1.3x cheaper and a seventh of the allocations
+// under contention.
+//
+// Choose on the call site, not on those numbers. End to end at the sites
+// this replaces, the difference was below run-to-run variance: re-running
+// the unchanged baseline moved more than the change did, and the sign of
+// the delta flipped depending on which baseline it was compared against.
+// The lock is a few percent of the work it guards, so measure your own site
+// or pick on the API.
 type Mutex struct {
 	sem Semaphore
 }
