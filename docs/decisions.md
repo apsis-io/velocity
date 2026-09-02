@@ -238,15 +238,24 @@ used directly?" — and it was right to. It is ~10k lines, actively
 maintained, and covers retry, circuit breaker, hedge, timeout, fallback,
 rate limiter, bulkhead, adaptive limiter, adaptive throttler, budget, cache
 policy, priority, and HTTP/gRPC integrations. velocity's `resilience` is
-2,250 lines covering three of those. It is a **strict subset**, and the
-README now says so rather than implying otherwise: if you want breadth, use
-failsafe-go.
+2,250 lines covering three of those. In **policy coverage** it is a subset
+and the README now says so rather than implying otherwise: if you want
+breadth, use failsafe-go.
+
+*An earlier version of this entry called it a "strict subset" and then
+listed, two paragraphs down, the things that are not in it. The comparison
+behind the phrase was of policy names, which is a narrower population than
+the noun claims; a strict subset has nothing outside it. The scope is now
+in the sentence.*
 
 Two things survive that comparison, and they are the same thing twice:
 
 - **`Hedge.Discard`.** Their `hedgepolicy` cancels losing attempts'
-  contexts but never disposes their *results* — the only cleanup mention in
-  the package is about context references. A hedge over a connection
+  contexts but never disposes their *results*. Read from the executor
+  rather than searched for: a losing result is sent to a `resultChan`
+  buffered at `maxHedges+1`, overwritten by `lastResult`, and dropped with
+  the channel, while the only cleanup is `execution.Cancel`, which its own
+  comment scopes to "their context references". A hedge over a connection
   therefore leaks N-1 of them. That is not a defect in failsafe-go: a
   library that treats the result as opaque cannot know that dropping one
   costs something. velocity can, because `ownership` exists.
@@ -258,8 +267,8 @@ Two things survive that comparison, and they are the same thing twice:
   timeout returning before a result that arrives anyway. It tracks by
   pointer identity rather than hooking failsafe internals, and keeps
   disposing after `Get` returns, since a hedge's loser can arrive later.
-  Deleting the release makes five of its tests fail, which is the check that
-  the tests measure the leak rather than describe it. A separate module, so
+  Deleting the release fails seven of its tests, which is the check that
+  they measure the leak rather than describe it. A separate module, so
   the library keeps no dependency on failsafe-go, grpc, or protobuf.
 
 `GetWithExecution` followed from the first consumer trying to use the
