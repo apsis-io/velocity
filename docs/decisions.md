@@ -272,6 +272,23 @@ now delegates to it and passes `fn` the execution's context rather than the
 caller's, so a losing attempt is cancelled by the policy chain instead of
 running on.
 
+The first use of `GetWithExecution` then found a trap in the API it
+exposes, and the trap was in *velocity's own example*. `failsafe.Execution`
+offers both `Hedges()` and `IsHedge()`, and the one with a number in it
+reads like an attempt index; it is not. `hedges` is a `*atomic.Uint32`
+under "Shared state across instances" and counts hedges that exist,
+in-progress included, while `isHedge` is a plain per-attempt bool. Using
+`Hedges() == 0` as a discriminator sends both arms down one branch, so the
+other never runs — a hang in a pull path, not a wrong answer. It is also
+invisible under a long hedge delay, because then the primary reads the
+counter before the hedge exists, which is exactly why velocity's own test
+passed: it used a 10 ms delay. The test now uses a zero delay, which is
+what a plain race wants anyway, and fails on all three runs if the
+discriminator regresses. Documented on `GetWithExecution` and in the
+README, alongside the other default worth knowing: hedge's `Build`
+installs "cancel on any result", so without `CancelIf(err == nil)` the arm
+that fails fastest ends the race.
+
 One idea taken back the other way: **`LatencyDelay`**, after their
 `NewWithDelayQuantile`. A static hedge delay has to be guessed for a
 distribution the caller does not know and that moves under load; hedging at

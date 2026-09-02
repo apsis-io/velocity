@@ -80,24 +80,38 @@ func Get[T any](ctx context.Context, exec failsafe.Executor[*ownership.Owner[T]]
 }
 
 // GetWithExecution is Get for attempts that are not interchangeable. It
-// hands fn failsafe's Execution, so the attempt can tell which one it is —
-// Hedges reports how many speculative attempts preceded it, Retries how
-// many failures did — and dispatch accordingly.
+// hands fn failsafe's Execution, so the attempt can tell which one it is
+// and dispatch accordingly.
 //
 // A hedge whose attempts differ is the common case rather than the exotic
 // one, since replicas usually have addresses: racing a peer against an
-// origin, or a warm cache against a cold read, needs the index. Deriving it
-// from a counter in the closure works only while nothing else in the chain
-// also reruns fn; add a retry and the counter silently stops meaning what
-// it did.
+// origin, or a warm cache against a cold read, needs to know which arm it
+// is. Deriving that from a counter in the closure works only while nothing
+// else in the chain also reruns fn; add a retry and the counter silently
+// stops meaning what it did.
 //
-//	owner, err := failsafeown.GetWithExecution(ctx, exec,
+//	policy := hedgepolicy.NewBuilderWithDelay[*ownership.Owner[*Layer]](0).
+//	    // Without this, failsafe cancels the race on ANY result, so the arm
+//	    // that fails fastest ends the one that would have succeeded.
+//	    CancelIf(func(_ *ownership.Owner[*Layer], err error) bool { return err == nil }).
+//	    Build()
+//
+//	owner, err := failsafeown.GetWithExecution(ctx, failsafe.With(policy),
 //	    func(e failsafe.Execution[*ownership.Owner[*Layer]]) (*ownership.Owner[*Layer], error) {
-//	        if e.Hedges() == 0 {
-//	            return fetchFromPeers(e.Context())
+//	        if e.IsHedge() {
+//	            return fetchFromRegistry(e.Context())
 //	        }
-//	        return fetchFromRegistry(e.Context())
+//	        return fetchFromPeers(e.Context())
 //	    }, hooks)
+//
+// Use IsHedge to tell the arms apart, not Hedges. Hedges is a count shared
+// by every attempt — "how many hedges exist", including ones in progress —
+// so with a short delay both arms read the same number, both take the same
+// branch, and the branch nobody took simply never runs. That is a hang
+// rather than a wrong answer, and it does not reproduce under a long delay
+// because then the primary reads the counter before the hedge exists.
+// IsHedge is a per-attempt bool and is the only discriminator that holds.
+// Retries and IsRetry are the same distinction for retries.
 //
 // Disposal is identical to Get's: whichever attempt loses, its owner is
 // released, whenever it arrives.

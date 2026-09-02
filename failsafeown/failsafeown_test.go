@@ -292,12 +292,18 @@ func TestGetWithExecutionDispatchesByAttemptAndDisposesTheLoser(t *testing.T) {
 	slow := make(chan struct{})
 	var dispatched sync.Map // strategy -> struct{}
 
-	policy := hedgepolicy.NewWithDelay[*ownership.Owner[*artifact]](10 * time.Millisecond)
+	// A zero delay is a plain race, which is what this shape wants and also
+	// the case that exposes the Hedges() trap: with a long delay the primary
+	// reads the counter before the hedge exists, so a wrong discriminator
+	// would still pass here.
+	policy := hedgepolicy.NewBuilderWithDelay[*ownership.Owner[*artifact]](0).
+		CancelIf(func(_ *ownership.Owner[*artifact], err error) bool { return err == nil }).
+		Build()
 	result, err := failsafeown.GetWithExecution(context.Background(), failsafe.With(policy),
 		func(e failsafe.Execution[*ownership.Owner[*artifact]]) (*ownership.Owner[*artifact], error) {
-			// Hedges() is 0 for the primary and 1 for the first hedge, so
-			// the two attempts fetch from genuinely different places.
-			if e.Hedges() == 0 {
+			// IsHedge is a per-attempt bool. Hedges() is a shared count and
+			// would send both arms down the same branch here.
+			if !e.IsHedge() {
 				dispatched.Store("peer", struct{}{})
 				owner, ferr := fetch(root, "peer")
 				// The peer accepted, then stalled. Bounded, so that a
@@ -443,5 +449,80 @@ func TestGetPassesTheExecutionContext(t *testing.T) {
 	case <-stopped:
 	case <-time.After(3 * time.Second):
 		t.Fatal("the losing attempt's context was never cancelled")
+	}
+}
+
+// Hedges() counts hedges that exist, including in-progress ones, and is
+// shared by every attempt; IsHedge() is per-attempt. Using the former to
+// tell the arms apart sends both down one branch, so the other never runs —
+// a hang rather than a wrong answer. This pins the distinction so the doc's
+// claim is executable rather than remembered.
+func TestHedgesIsSharedAndIsHedgeIsPerAttempt(t *testing.T) {
+	var arrived atomic.Int32
+	var once sync.Once
+	proceed := make(chan struct{})
+	var mu sync.Mutex
+	var hedgeCounts []int
+	var isHedgeFlags []bool
+
+	policy := hedgepolicy.NewBuilderWithDelay[*ownership.Owner[*conn]](0).
+		CancelIf(func(_ *ownership.Owner[*conn], err error) bool { return err == nil }).
+		Build()
+
+	var f factory
+	result, err := failsafeown.GetWithExecution(context.Background(), failsafe.With(policy),
+		func(e failsafe.Execution[*ownership.Owner[*conn]]) (*ownership.Owner[*conn], error) {
+			// Wait until both attempts exist, so the shared counter is read
+			// at a point where its value is settled rather than raced. The
+			// close is guarded: both attempts can reach the threshold check.
+			if arrived.Add(1) == 2 {
+				once.Do(func() { close(proceed) })
+			}
+			select {
+			case <-proceed:
+			case <-time.After(2 * time.Second):
+			}
+			mu.Lock()
+			hedgeCounts = append(hedgeCounts, e.Hedges())
+			isHedgeFlags = append(isHedgeFlags, e.IsHedge())
+			mu.Unlock()
+			return f.dial(e.Context())
+		}, failsafeown.Hooks[*conn]{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer result.Release()
+
+	// The losing attempt outlives the call — that is what hedging means —
+	// so wait for its record rather than reading whatever has landed.
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		mu.Lock()
+		recorded := len(isHedgeFlags)
+		mu.Unlock()
+		if recorded == 2 || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(isHedgeFlags) != 2 {
+		t.Fatalf("attempts = %d, want the primary and one hedge", len(isHedgeFlags))
+	}
+	// Exactly one attempt is the hedge: a usable discriminator.
+	trues := 0
+	for _, isHedge := range isHedgeFlags {
+		if isHedge {
+			trues++
+		}
+	}
+	if trues != 1 {
+		t.Fatalf("IsHedge = %v, want exactly one true", isHedgeFlags)
+	}
+	// Both read the same shared count, which is why it cannot discriminate.
+	if hedgeCounts[0] != hedgeCounts[1] {
+		t.Fatalf("Hedges() = %v; the counter is documented as shared, so both attempts should read alike once both exist", hedgeCounts)
 	}
 }

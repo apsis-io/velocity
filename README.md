@@ -310,18 +310,31 @@ usually have addresses — racing a peer against an origin needs to know
 which attempt it is:
 
 ```go
-owner, err := failsafeown.GetWithExecution(ctx, exec,
+policy := hedgepolicy.NewBuilderWithDelay[*ownership.Owner[*Layer]](0).
+    // Without this, failsafe cancels the race on ANY result, so the arm
+    // that fails fastest ends the one that would have succeeded.
+    CancelIf(func(_ *ownership.Owner[*Layer], err error) bool { return err == nil }).
+    Build()
+
+owner, err := failsafeown.GetWithExecution(ctx, failsafe.With(policy),
     func(e failsafe.Execution[*ownership.Owner[*Layer]]) (*ownership.Owner[*Layer], error) {
-        if e.Hedges() == 0 {
-            return fetchFromPeers(e.Context())
+        if e.IsHedge() {
+            return fetchFromRegistry(e.Context())
         }
-        return fetchFromRegistry(e.Context())
+        return fetchFromPeers(e.Context())
     }, hooks)
 ```
 
 Counting attempts in the closure instead works only while nothing else in
 the chain also reruns `fn`; add a retry and the counter silently stops
 meaning what it did.
+
+Use `IsHedge`, **not** `Hedges`, to tell the arms apart. `Hedges` is a count
+shared by every attempt — "how many hedges exist", in-progress ones
+included — so with a short delay both arms read the same number, both take
+the same branch, and the branch nobody took never runs. That is a hang
+rather than a wrong answer, and it does not reproduce under a long delay,
+because then the primary reads the counter before the hedge exists.
 
 It is a separate module, so the library itself keeps no dependency on
 failsafe-go.
