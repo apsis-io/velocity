@@ -278,6 +278,20 @@ func fetch(root, from string) (*ownership.Owner[*artifact], error) {
 	}))
 }
 
+// waitFor polls until cond holds, for assertions about attempts rather
+// than about the result. A hedge's losing attempt outlives the call by
+// design, so reading straight after Get sees whatever happened to land.
+func waitFor(t *testing.T, what string, cond func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", what)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func exists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
@@ -323,9 +337,11 @@ func TestGetWithExecutionDispatchesByAttemptAndDisposesTheLoser(t *testing.T) {
 	}
 	defer result.Release()
 
-	if _, ok := dispatched.Load("peer"); !ok {
-		t.Fatal("the primary never dispatched to the peer")
-	}
+	waitFor(t, "both arms to dispatch", func() bool {
+		_, peer := dispatched.Load("peer")
+		_, registry := dispatched.Load("registry")
+		return peer && registry
+	})
 	if _, ok := dispatched.Load("registry"); !ok {
 		t.Fatal("the hedge never dispatched to the registry: attempts were interchangeable")
 	}
@@ -493,18 +509,11 @@ func TestHedgesIsSharedAndIsHedgeIsPerAttempt(t *testing.T) {
 	}
 	defer result.Release()
 
-	// The losing attempt outlives the call — that is what hedging means —
-	// so wait for its record rather than reading whatever has landed.
-	deadline := time.Now().Add(3 * time.Second)
-	for {
+	waitFor(t, "both attempts to record", func() bool {
 		mu.Lock()
-		recorded := len(isHedgeFlags)
-		mu.Unlock()
-		if recorded == 2 || time.Now().After(deadline) {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
+		defer mu.Unlock()
+		return len(isHedgeFlags) == 2
+	})
 
 	mu.Lock()
 	defer mu.Unlock()
