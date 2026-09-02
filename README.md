@@ -261,10 +261,12 @@ value, err := resilience.Hedge(ctx, resilience.HedgePolicy[*Response]{
 })
 ```
 
-`Discard` is the part hedging libraries usually leave to the caller to
-notice: N attempts produce N results and one is returned, so the losers leak
-unless something disposes them. When the result is owned, `Discard` is its
-`Drop`. `Budget` is the other half — a dependency slow enough to trigger
+`Discard` disposes the losing results a hedge inherently produces: N
+attempts return one, so the rest leak unless something closes them. Not
+every hedging library omits this — `faustbrian/go-hedge` has a `Disposer`
+and velocity took the idea from it — but failsafe-go does, and where a
+library treats the result as opaque the cleanup has to be written out a
+second time. When the result is owned, `Discard` is simply its `Drop`. `Budget` is the other half — a dependency slow enough to trigger
 hedging is the last one that should receive several times its usual load, so
 each execution credits the budget and each speculative attempt spends a
 credit.

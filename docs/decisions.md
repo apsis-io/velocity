@@ -312,9 +312,21 @@ The premise's second list — `faustbrian/go-{resilience,hedge,fault-injection,c
   p50. Two pieces of it are what make hedging correct rather than merely
   parallel, and both fit velocity better than the library they came from.
   *Disposal*: N attempts produce N results and one is returned, so the
-  losers leak unless something disposes them — and when the result is an
-  owned resource, `Discard` is simply its `Drop`, which no other hedging
-  library is positioned to say. *Budget*: a dependency slow enough to
+  losers leak unless something disposes them. The idea is go-hedge's, not
+  velocity's — it has a `Disposer[T]`, invokes it from six sites, and
+  reports cleanup failures as a counted `CleanupError`. What velocity adds
+  is narrower: because the value is an `ownership.Owner`, `Discard` is the
+  `Drop` already attached to the resource, so there is no second place to
+  state cleanup and no way for the two to disagree.
+
+  *An earlier version of this entry said disposal was something "no other
+  hedging library is positioned to say", in a paragraph that names
+  go-hedge. That was false about the library it credits. failsafe-go is the
+  one that does not dispose, and that claim now rests on reading its hedge
+  executor — losing results land in a buffered channel and are overwritten,
+  and the only cleanup is `execution.Cancel` on contexts — rather than on
+  the keyword grep that first suggested it. A grep for cleanup words cannot
+  see a disposal mechanism that uses different words.* *Budget*: a dependency slow enough to
   trigger hedging is the last one that should get several times its load,
   so each execution credits a token bucket and each speculative attempt
   spends a credit, bounding amplification rather than concurrency. Where
@@ -411,10 +423,14 @@ Three changes came out of it:
 
   *Corrected after the fact.* This originally read "a third-party provider
   wedged on some other context", repeating the consumer's framing. The
-  consumer retracted it: every implementation of that interface is in their
-  own repo and neither production one can block, so the wedged provider is
-  the test's fake and the hazard is inherited from the upstream project the
-  fork came from rather than observed. The measurement stands — it measures
+  consumer retracted it: the implementations all live in their own repo and
+  none of the production ones can block, so the wedged provider is the
+  test's fake and the hazard is inherited from the upstream project the
+  fork came from rather than observed. (Their first retraction enumerated
+  four implementations; a later one found a fifth its census pattern could
+  not match. The count is theirs to hold and is not restated here, because
+  a fact about someone else's tree does not belong in velocity's design
+  record — only the conclusion it supports does.) The measurement stands — it measures
   velocity, not their providers — but it measures a scenario nobody there is
   in today, and the reasoning below is what actually carries the change.
 
