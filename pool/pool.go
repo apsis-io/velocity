@@ -101,6 +101,8 @@ func (c *Checkout[T]) Discard() error {
 // Get checks out a resource, reusing an idle one or constructing a new one
 // when under Max, and otherwise waiting for capacity until ctx is done.
 // The returned Checkout must be released or discarded exactly once.
+//
+//velocity:acquires
 func (p *Pool[T]) Get(ctx context.Context) (*Checkout[T], error) {
 	start := time.Now()
 	checkout, created, err := p.get(ctx)

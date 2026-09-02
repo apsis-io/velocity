@@ -100,6 +100,23 @@ go -C analysis build -o /tmp/velocityvet ./cmd/velocityvet
 go vet -vettool=/tmp/velocityvet ./...
 ```
 
+It learns what to track from the code rather than from a list it carries.
+A function that hands back something the caller must release says so at its
+own declaration:
+
+```go
+// Borrow acquires an advanced shared read borrow.
+//
+//velocity:acquires
+func (o *Owner[T]) Borrow() (*ReadBorrow[T], error)
+```
+
+Go treats that as a directive, so godoc hides it. The analyzer publishes it
+as a package fact, which reaches consumers — who see velocity through
+export data and never its comments. **Any** library can mark its own
+handle-returning functions and get the same checking; nothing about the
+mechanism is velocity-specific.
+
 Production `Borrow` carries no runtime safety net — a leaked borrow blocks
 its cell deterministically rather than being reclaimed at some GC-chosen
 moment. Under `-tags=velocitydebug` a leak is logged through `slog` and

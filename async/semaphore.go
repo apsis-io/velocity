@@ -30,6 +30,8 @@ func NewSemaphore(n int) (*Semaphore, error) {
 // Acquire takes a permit, waiting under ctx for one to be released. A
 // context that is already done fails at once even if a permit is free, so
 // a cancelled caller never proceeds by luck.
+//
+//velocity:acquires
 func (s *Semaphore) Acquire(ctx context.Context) (*Permit, error) {
 	if s == nil {
 		return nil, &PlanError{Index: -1, Cause: ErrNilRunner}
@@ -46,6 +48,8 @@ func (s *Semaphore) Acquire(ctx context.Context) (*Permit, error) {
 }
 
 // TryAcquire takes a permit if one is free, without waiting.
+//
+//velocity:acquires
 func (s *Semaphore) TryAcquire() (*Permit, bool) {
 	if s == nil {
 		return nil, false
@@ -109,6 +113,8 @@ func NewMutex() *Mutex {
 }
 
 // Lock takes the lock, waiting under ctx.
+//
+//velocity:acquires
 func (m *Mutex) Lock(ctx context.Context) (*Permit, error) {
 	if m == nil {
 		return nil, &PlanError{Index: -1, Cause: ErrNilRunner}
@@ -117,6 +123,8 @@ func (m *Mutex) Lock(ctx context.Context) (*Permit, error) {
 }
 
 // TryLock takes the lock if it is free, without waiting.
+//
+//velocity:acquires
 func (m *Mutex) TryLock() (*Permit, bool) {
 	if m == nil {
 		return nil, false

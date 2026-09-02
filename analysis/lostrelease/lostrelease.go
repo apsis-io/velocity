@@ -5,10 +5,18 @@
 //
 // lostrelease: check that acquired velocity handles are released
 //
-// An advanced borrow (ownership.Owner.Borrow, BorrowMut, and the same on
+// A function is an acquirer when its declaration carries the
+// //velocity:acquires directive; velocity marks its own, and any library
+// can mark its own handle-returning functions to get the same checking. The
+// classification travels to consumers as a package fact, so it is written
+// once at the declaration rather than maintained as a list here.
+//
+// A built-in table covers velocity releases that predate the directive —
+// an advanced borrow (ownership.Owner.Borrow, BorrowMut, and the same on
 // Shared and Frozen), a lease (ownership.NewLease), a pool checkout
 // (pool.Pool.Get), or a permit (async.Semaphore.Acquire/TryAcquire,
-// async.Mutex.Lock/TryLock) must be released exactly once. A leaked borrow blocks its
+// async.Mutex.Lock/TryLock). Either way the handle must be released
+// exactly once. A leaked borrow blocks its
 // cell until it is released, and production builds have no runtime net for
 // it, so the check belongs here, before the code runs.
 //
@@ -37,6 +45,7 @@ import (
 	"go/constant"
 	"go/token"
 	"go/types"
+	"strings"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/ctrlflow"
@@ -47,11 +56,62 @@ import (
 )
 
 var Analyzer = &analysis.Analyzer{
-	Name:     "lostrelease",
-	Doc:      "check that acquired velocity handles are released on all paths",
-	URL:      "https://pkg.go.dev/github.com/apsis-io/velocity/analysis/lostrelease",
-	Run:      run,
-	Requires: []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
+	Name:      "lostrelease",
+	Doc:       "check that acquired velocity handles are released on all paths",
+	URL:       "https://pkg.go.dev/github.com/apsis-io/velocity/analysis/lostrelease",
+	Run:       run,
+	Requires:  []*analysis.Analyzer{inspect.Analyzer, ctrlflow.Analyzer},
+	FactTypes: []analysis.Fact{(*acquires)(nil)},
+}
+
+// Marker is the directive that declares a function to hand back something
+// its caller must release. Written in the doc comment of the function
+// itself, it puts the classification where the reader of that function
+// already is, rather than in a table in another module:
+//
+//	// Borrow acquires an advanced shared read borrow.
+//	//
+//	//velocity:acquires
+//	func (o *Owner[T]) Borrow() (*ReadBorrow[T], error) {
+//
+// It is a directive by Go's rules — a lowercase name, a colon, no space —
+// so godoc hides it from rendered documentation.
+//
+// Any package may use it, not only velocity's: a library with its own
+// handle type gets the same checking by marking the function that hands
+// one out.
+const Marker = "//velocity:acquires"
+
+// acquires is exported as a fact about a marked package, so that a package
+// analysed later — a consumer, which sees velocity only through export data
+// and never its comments — learns what to track without the analyzer
+// carrying a list of names.
+//
+// It is a package fact holding qualified names rather than an object fact
+// per function, because most of velocity's acquirers are methods on generic
+// types: a call site yields the method of an instantiation, which is a
+// different object from the declaration a fact would attach to, and no
+// amount of Origin-chasing reliably bridges instantiation back to
+// declaration. A package fact is keyed on the package, which has no
+// instantiations.
+type acquires struct {
+	// Names holds "Recv.Method" for methods and "Func" for functions.
+	// Exported for gob.
+	Names map[string]bool
+}
+
+func (*acquires) AFact() {}
+
+func (a *acquires) String() string {
+	return fmt.Sprintf("acquires %d", len(a.Names))
+}
+
+// factKey is how a declaration is named inside an acquires fact.
+func factKey(recv, name string) string {
+	if recv == "" {
+		return name
+	}
+	return recv + "." + name
 }
 
 const (
@@ -79,7 +139,12 @@ var acquirers = map[string]map[string][]string{
 }
 
 func run(pass *analysis.Pass) (any, error) {
-	if !imports(pass.Pkg, ownershipPath) && !imports(pass.Pkg, poolPath) && !imports(pass.Pkg, asyncPath) {
+	// Always publish facts for this package's own marked functions, even
+	// when it has nothing to check itself: that is how a library declares
+	// its acquirers to everything downstream.
+	marked := exportMarkers(pass)
+
+	if !marked && !imports(pass.Pkg, ownershipPath) && !imports(pass.Pkg, poolPath) && !imports(pass.Pkg, asyncPath) {
 		return nil, nil
 	}
 	insp := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
@@ -87,6 +152,56 @@ func run(pass *analysis.Pass) (any, error) {
 		runFunc(pass, n)
 	})
 	return nil, nil
+}
+
+// exportMarkers publishes one package fact naming every function in this
+// package whose doc comment carries Marker, and reports whether any did.
+func exportMarkers(pass *analysis.Pass) bool {
+	names := map[string]bool{}
+	for _, file := range pass.Files {
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Doc == nil || !hasMarker(fn.Doc) {
+				continue
+			}
+			obj, ok := pass.TypesInfo.Defs[fn.Name].(*types.Func)
+			if !ok {
+				continue
+			}
+			names[factKey(receiverName(obj), obj.Name())] = true
+		}
+	}
+	if len(names) == 0 {
+		return false
+	}
+	pass.ExportPackageFact(&acquires{Names: names})
+	return true
+}
+
+// receiverName is the bare type name a method hangs off, generics stripped,
+// or "" for a plain function.
+func receiverName(fn *types.Func) string {
+	recv := fn.Signature().Recv()
+	if recv == nil {
+		return ""
+	}
+	t := types.Unalias(recv.Type())
+	if ptr, ok := t.(*types.Pointer); ok {
+		t = types.Unalias(ptr.Elem())
+	}
+	if named, ok := t.(*types.Named); ok {
+		return named.Obj().Name()
+	}
+	return ""
+}
+
+func hasMarker(doc *ast.CommentGroup) bool {
+	for _, comment := range doc.List {
+		if strings.TrimSpace(comment.Text) == Marker {
+			return true
+		}
+	}
+	return false
 }
 
 func imports(pkg *types.Package, path string) bool {
@@ -124,7 +239,7 @@ func runFunc(pass *analysis.Pass, node ast.Node) {
 		if !ok {
 			return true
 		}
-		what := acquirerName(pass.TypesInfo, call)
+		what := acquirerName(pass, call)
 		if what == "" || len(stack) == 0 {
 			return true
 		}
@@ -264,11 +379,19 @@ func varOf(info *types.Info, id *ast.Ident) *types.Var {
 
 // acquirerName reports the qualified name of the acquiring function or
 // method a call resolves to, or "" if it is not one.
-func acquirerName(info *types.Info, call *ast.CallExpr) string {
-	fn, ok := typeutil.Callee(info, call).(*types.Func)
+func acquirerName(pass *analysis.Pass, call *ast.CallExpr) string {
+	fn, ok := typeutil.Callee(pass.TypesInfo, call).(*types.Func)
 	if !ok || fn.Pkg() == nil {
 		return ""
 	}
+	// A fact from the declaring package is authoritative: it was written at
+	// the declaration by whoever owns it.
+	var fact acquires
+	if pass.ImportPackageFact(fn.Pkg(), &fact) && fact.Names[factKey(receiverName(fn), fn.Name())] {
+		return qualifiedName(fn)
+	}
+	// Otherwise the built-in table, which covers velocity releases that
+	// predate the marker.
 	byRecv, ok := acquirers[fn.Pkg().Path()]
 	if !ok {
 		return ""
@@ -287,13 +410,19 @@ func acquirerName(info *types.Info, call *ast.CallExpr) string {
 	}
 	for _, name := range byRecv[recvName] {
 		if name == fn.Name() {
-			if recvName == "" {
-				return fn.Pkg().Name() + "." + name
-			}
-			return fn.Pkg().Name() + "." + recvName + "." + name
+			return qualifiedName(fn)
 		}
 	}
 	return ""
+}
+
+// qualifiedName renders pkg.Func or pkg.Type.Method for a diagnostic.
+func qualifiedName(fn *types.Func) string {
+	name := fn.Pkg().Name() + "."
+	if recv := receiverName(fn); recv != "" {
+		name += recv + "."
+	}
+	return name + fn.Name()
 }
 
 // lostPath finds a path through the CFG from the acquisition to a return

@@ -58,6 +58,8 @@ func (o *Owner[T]) State() State {
 }
 
 // Borrow acquires an advanced shared read borrow.
+//
+//velocity:acquires
 func (o *Owner[T]) Borrow() (*ReadBorrow[T], error) {
 	if o == nil || o.c == nil {
 		return nil, &ReleasedError{Operation: OpBorrow}
@@ -70,6 +72,8 @@ func (o *Owner[T]) Borrow() (*ReadBorrow[T], error) {
 }
 
 // BorrowMut acquires an advanced exclusive mutable borrow.
+//
+//velocity:acquires
 func (o *Owner[T]) BorrowMut() (*WriteBorrow[T], error) {
 	if o == nil || o.c == nil {
 		return nil, &ReleasedError{Operation: OpBorrowMut}

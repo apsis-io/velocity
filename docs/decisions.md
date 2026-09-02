@@ -367,6 +367,40 @@ The premise's second list — `faustbrian/go-{resilience,hedge,fault-injection,c
   the static limit is wrong — which no consumer has yet reported. Deferred
   on evidence, not on principle.
 
+## The analyzer learns its acquirers instead of listing them (implemented)
+
+`lostrelease` picked acquirers from a hand-written table of names, which
+could not be searched for something not yet named: a new acquiring method
+in `ownership`, `pool`, or `async` would be silently unchecked, with the
+analyzer and its tests both still passing. A drift test now shouts about
+that, but the classification still lived in another module from the code it
+described.
+
+It is now a directive at the declaration — `//velocity:acquires` — which Go
+hides from godoc by its own rules, published as an `analysis.Fact` so it
+reaches consumers, who see velocity through export data and never its
+comments. The mechanism is not velocity-specific: any library can mark its
+own handle-returning functions, and a test proves that with a package the
+table has never heard of.
+
+Two things had to be measured rather than assumed, and the first guess was
+wrong both times:
+
+- **Does `go vet` analyse dependencies at all?** Yes — instrumenting the
+  analyzer showed it running over the whole build graph, stdlib included,
+  and reporting `marked=true` for velocity's packages.
+- **Do object facts survive generics?** No. A fact exported on
+  `Owner[T].Borrow` is keyed on the declaration; a call site yields the
+  method of an *instantiation*, a different object, and `Func.Origin` does
+  not bridge them — verified by the non-generic `async.Mutex.Lock` working
+  while the generic `ownership.Owner.Borrow` did not, which is what made
+  the cause unambiguous. The fact is therefore a **package** fact holding
+  qualified names; a package has no instantiations. Proven by emptying the
+  table entirely and confirming both are still reported.
+
+The table stays as a fallback, because v0.4.0 and earlier carry no markers
+and consumers are on them.
+
 ## Cancellable locking and what errgroup gave for free (implemented)
 
 The port's last `x/sync` import was `semaphore.NewWeighted(1)`: weight one

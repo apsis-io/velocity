@@ -7,6 +7,7 @@ import (
 	"github.com/apsis-io/velocity/async"
 	"github.com/apsis-io/velocity/ownership"
 	"github.com/apsis-io/velocity/pool"
+	"thirdparty"
 )
 
 var cond bool
@@ -245,4 +246,25 @@ func tryLockBlankIsALeak(mu *async.Mutex) bool {
 		return true
 	}
 	return false
+}
+
+func markedThirdPartyIsChecked() error {
+	ticket, err := thirdparty.Draw() // want "ticket returned by thirdparty.Draw is not released on all paths"
+	if err != nil {
+		return err
+	}
+	if cond {
+		return nil // want "this return statement may be reached without releasing ticket acquired on line [0-9]+"
+	}
+	ticket.Release()
+	return nil
+}
+
+func unmarkedThirdPartyIsNotChecked() error {
+	ticket, err := thirdparty.Peek()
+	if err != nil {
+		return err
+	}
+	_ = ticket
+	return nil
 }

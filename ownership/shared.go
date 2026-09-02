@@ -49,6 +49,8 @@ func (s *Shared[T]) Clone() (*Shared[T], error) {
 }
 
 // Borrow acquires an advanced shared read borrow.
+//
+//velocity:acquires
 func (s *Shared[T]) Borrow() (*ReadBorrow[T], error) {
 	if s == nil || s.c == nil {
 		return nil, &ReleasedError{Operation: OpBorrow}
@@ -61,6 +63,8 @@ func (s *Shared[T]) Borrow() (*ReadBorrow[T], error) {
 }
 
 // BorrowMut acquires an advanced exclusive mutable borrow.
+//
+//velocity:acquires
 func (s *Shared[T]) BorrowMut() (*WriteBorrow[T], error) {
 	if s == nil || s.c == nil {
 		return nil, &ReleasedError{Operation: OpBorrowMut}

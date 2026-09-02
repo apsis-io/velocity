@@ -83,6 +83,8 @@ func (f *Frozen[T]) Clone() (*Frozen[T], error) {
 }
 
 // Borrow acquires an advanced shared read borrow.
+//
+//velocity:acquires
 func (f *Frozen[T]) Borrow() (*ReadBorrow[T], error) {
 	if f == nil || f.c == nil {
 		return nil, &ReleasedError{Operation: OpBorrow}

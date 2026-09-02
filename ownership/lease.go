@@ -31,6 +31,8 @@ type Lease[T any] struct {
 // goroutines may be blocked in Value, and is not passed a context. Add
 // cancellation only if a specific resource genuinely needs it, and only where
 // the semantics are defined.
+//
+//velocity:acquires
 func NewLease[T any](value T, release func(T) error) (*Lease[T], error) {
 	if release == nil {
 		return nil, &ConfigError{Option: "lease release", Reason: ErrNilOption}
