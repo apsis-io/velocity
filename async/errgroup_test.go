@@ -328,7 +328,7 @@ func TestErrGroupHookReportsSubmissionThatNeverRan(t *testing.T) {
 
 func TestErrGroupGoContextValidation(t *testing.T) {
 	eg, _ := runner(t, async.Unlimited).ErrGroup(context.Background())
-	//nolint:staticcheck // a nil context is exactly what is under test.
+	//lint:ignore SA1012 a nil context is exactly what is under test
 	if eg.GoContext(nil, func(context.Context) error { return nil }) {
 		t.Fatal("nil ctx submitted a function")
 	}

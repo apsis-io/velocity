@@ -104,7 +104,7 @@ func TestRetryUntilValidation(t *testing.T) {
 		t.Fatalf("nil probe = %v", err)
 	}
 
-	//nolint:staticcheck // a nil context is what is under test.
+	//lint:ignore SA1012 a nil context is what is under test
 	_, err = resilience.RetryUntil(nil, resilience.UntilPolicy{MaxAttempts: 1},
 		func(context.Context) (int, bool, error) { return 0, true, nil })
 	if !errors.Is(err, context.Canceled) {
