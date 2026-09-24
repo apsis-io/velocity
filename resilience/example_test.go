@@ -107,3 +107,29 @@ func ExampleHedge() {
 	// closed conn-0
 	// closed conn-1
 }
+
+// Polling until a condition holds needs no attempt count: the context is the
+// bound, so there is no integer to derive and no way for the loop to end up
+// short of the budget it was given.
+func ExampleRetryUntil() {
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	attempts := 0
+	_, err := resilience.RetryUntil(ctx, resilience.UntilPolicy{
+		Backoff: func(int) time.Duration { return 10 * time.Millisecond },
+	}, func(context.Context) (int, bool, error) {
+		attempts++
+		return attempts, attempts == 3, nil
+	})
+	fmt.Println("satisfied after", attempts, "probes:", err)
+
+	// A condition that never holds gives up on the deadline, and says so with
+	// one error whatever ended the loop.
+	_, err = resilience.RetryUntil(ctx, resilience.UntilPolicy{},
+		func(context.Context) (int, bool, error) { return 0, false, nil })
+	fmt.Println("gave up:", errors.Is(err, resilience.ErrGaveUp))
+	// Output:
+	// satisfied after 3 probes: <nil>
+	// gave up: true
+}

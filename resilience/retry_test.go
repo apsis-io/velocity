@@ -157,3 +157,84 @@ func TestManualClockAfterFuncOrderAndStop(t *testing.T) {
 		t.Fatal("zero-delay AfterFunc did not run")
 	}
 }
+
+// TestRetryZeroMaxAttemptsIsBoundedByTheContext is the retry-shaped half of
+// the under-wait: a caller with a deadline should be able to say so, rather
+// than derive an attempt count that binds first and ends the loop early.
+func TestRetryZeroMaxAttemptsIsBoundedByTheContext(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Millisecond)
+	defer cancel()
+
+	backoff, err := resilience.ExponentialBackoff(5*time.Millisecond, 5*time.Millisecond, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	attempts := 0
+	_, err = resilience.Retry(ctx, resilience.Policy{Backoff: backoff},
+		func(context.Context) (int, error) {
+			attempts++
+			return 0, errors.New("still failing")
+		})
+	if !errors.Is(err, resilience.ErrGaveUp) {
+		t.Fatalf("Retry = %v, want a give-up", err)
+	}
+	if attempts < 2 {
+		t.Fatalf("attempted %d times; the context should bound it", attempts)
+	}
+}
+
+func TestRetryRejectsAnUnboundedPolicy(t *testing.T) {
+	_, err := resilience.Retry(context.Background(), resilience.Policy{},
+		func(context.Context) (int, error) { return 0, errors.New("failing") })
+	if !errors.Is(err, resilience.ErrNoBound) {
+		t.Fatalf("Retry = %v, want ErrNoBound", err)
+	}
+}
+
+// TestGiveUpIsOneErrorWhicheverBoundBinds is the compatibility property: a
+// caller should not have to handle two unrelated error types for one outcome,
+// and should not have the type it receives depend on arithmetic it did not
+// write. Rounding a derived attempt count up moves the loop from the deadline
+// binding to the count binding; the class of the error must not move with it.
+func TestGiveUpIsOneErrorWhicheverBoundBinds(t *testing.T) {
+	// The attempt count binds first.
+	boom := errors.New("failing")
+	_, byCount := resilience.Retry(context.Background(),
+		resilience.Policy{MaxAttempts: 2},
+		func(context.Context) (int, error) { return 0, boom })
+
+	// The context binds first, with no count to outrun it.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	backoff, err := resilience.ExponentialBackoff(5*time.Millisecond, 5*time.Millisecond, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, byContext := resilience.Retry(ctx, resilience.Policy{Backoff: backoff},
+		func(context.Context) (int, error) { return 0, errors.New("failing") })
+
+	for name, err := range map[string]error{"count": byCount, "context": byContext} {
+		if !errors.Is(err, resilience.ErrGaveUp) {
+			t.Fatalf("%s: %v does not report ErrGaveUp", name, err)
+		}
+		var giveUp *resilience.RetryError
+		if !errors.As(err, &giveUp) {
+			t.Fatalf("%s: %v is not a *RetryError", name, err)
+		}
+		// A give-up never unwraps to nothing, which is what a caller
+		// re-deriving its cause from the context would have found.
+		if giveUp.Last == nil {
+			t.Fatalf("%s: %v gave up with no cause", name, err)
+		}
+	}
+
+	// The detail each reports is still reachable underneath: the last failure
+	// through one, the deadline through the other.
+	if !errors.Is(byCount, boom) {
+		t.Fatalf("count give-up = %v, want the last failure reachable", byCount)
+	}
+	if !errors.Is(byContext, context.DeadlineExceeded) {
+		t.Fatalf("context give-up = %v, want the deadline reachable underneath", byContext)
+	}
+}

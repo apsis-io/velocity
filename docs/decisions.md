@@ -864,3 +864,82 @@ Not taken: changing `Go` itself to select on the context. It is the fast path,
 it is what `x/sync` does, and the reason the bounded form is a separate method
 is precisely that callers who need to stop should say so.
 
+## The integer standing in for a bound, and the condition form (implemented)
+
+A consumer of velocity — breeze, porting four hand-rolled "poll until a
+deadline" loops onto `resilience` — reported that a required `MaxAttempts` was
+not the redundancy it looked like, and three of its arguments were checked
+against the source rather than taken on faith.
+
+- **The attempt count binds first, always.** `Retry` returned `*RetryError` the
+  moment `attempt == MaxAttempts`, with no final sleep and no consultation of
+  the context, while the `ctx.Err()` check sat at the top of the next attempt.
+  So the only derivation available to a caller — `attempts =
+  budget/interval + 1` — ended the poll *up to one interval short of its own
+  budget, silently*, and their ratio matrix had 5 of 6 cases ending on the
+  count rather than the deadline. At breeze's ratios (20–100 ms against 15–20 s
+  budgets) the bias is harmless, and it is a bias rather than a bug in their
+  code. Structurally it is exactly the failure worth removing: the loop stops,
+  and the reason it stopped is a number somebody derived rather than a bound
+  anybody stated.
+- **Unwrapping the give-up as `context.Cause(ctx)` reports success.** At the
+  give-up point the context is still alive, so `Cause` returns nil, and a
+  wrapper that re-derives the cause that way returns a zero value with a nil
+  error. It escaped notice because a test asserted the invariant across the
+  ratio matrix and every ratio hit it; a keyword reading of the package would
+  not have found it.
+- **An error-shaped predicate inverts a condition.** "Retry until the lock is
+  held" is not "retry until the operation succeeds", and forcing it through
+  `Retry` needs a sentinel error for "not yet", a classifier recognising that
+  sentinel, and a `struct{}{}` invented to satisfy `T` in the three loops with
+  nothing to return.
+
+All three are one cause, which is the part worth recording: a required integer
+standing in for a bound. The fix is not to relax the house rule but to say
+where the bound may be stated.
+
+- **`Policy.MaxAttempts == 0` means the caller's context is the bound.** A
+  positive value is still the attempt count, so `Retry` keeps its existing
+  shape, and a policy that bounds *nothing* — zero attempts against a context
+  with no deadline — is `ErrInvalidPolicy` wrapping `ErrNoBound`. The rule is
+  preserved rather than bent: a caller still says what it is bounded by, and
+  saying "my context" is now one of the ways to say it.
+- **One give-up error, so the answer does not depend on arithmetic.** Every
+  give-up in the package is a `*RetryError` satisfying
+  `errors.Is(err, ErrGaveUp)`: the attempts exhausted, the context ending the
+  loop at the top of an attempt, and a backoff sleep the context interrupted.
+  The last of those used to return the bare context cause, so *which* type a
+  caller received depended on whether the count or the deadline happened to
+  bind first — and the obvious remedy for the under-wait, rounding a derived
+  count up, moves the loop from one bind to the other and so changed the error
+  type every downstream caller received, without touching a line of theirs.
+  A rounding fix reading as a performance tweak and landing as a compatibility
+  break is the whole argument for `ErrGaveUp`. The detail stays reachable:
+  `Unwrap` yields both `ErrGaveUp` and `Last`, so `errors.Is(err,
+  context.DeadlineExceeded)` still works, and `Last` is never nil on a give-up,
+  which is what makes the `context.Cause` trap unrepresentable rather than
+  merely discouraged.
+- **`RetryUntil[T]` for "until this is true".** `probe func(context.Context)
+  (T, bool, error)`: satisfied returns the value, a non-nil error is a failure
+  and ends the loop unchanged (a probe that wants an error retried returns
+  satisfied false with a nil error), and otherwise the bound applies exactly as
+  in `Retry`. There is no sentinel to invert and no classifier to recognise it.
+  `UntilPolicy` is a separate type from `Policy` rather than a reuse with a
+  field ignored: a `Retryable` on a condition form would be set in good faith
+  and obeyed by nobody.
+
+The late validation is a real inconsistency, and worth naming rather than
+hiding. `validBound` cannot run at construction, because the context is an
+argument and `Policy` does not carry one, so a policy that bounds nothing fails
+at first use. That is against the eager-validation style the rest of the
+package follows. It is kept because it is the moment the information is
+actionable — it is when a caller discovers their bound never bounded anything
+— and because the alternative is forcing every deadline-bounded caller to
+compute the integer whose cost this section is about.
+
+Not benchmarked: `RetryUntil` against a hand-rolled poll. It is the same loop
+as `Retry` with one more return value from the probe, and the consumer's own
+numbers were the ones worth having.
+
+The consumer is re-porting against this shape, which is the point of recording
+it here rather than only in review.
