@@ -19,14 +19,25 @@ type Policy struct {
 	Clock       Clock
 }
 
-// Retry runs fn until success, a non-retryable error, the attempt limit, or
-// context cancellation.
+// Retry runs fn until it succeeds, a non-retryable error, the attempt limit,
+// or context cancellation.
 //
-// Every one of those last three is a give-up, and all of them report a
-// *RetryError satisfying errors.Is(err, ErrGaveUp) — including the case where
-// the context ended the loop, which used to return the bare cause and made the
-// error a caller received depend on whether the attempt count or the deadline
-// happened to bind first.
+// Two of those are decisions and the rest are give-ups, and the distinction is
+// the error a caller receives:
+//
+//   - A non-retryable error is returned unchanged. The policy chose to stop, so
+//     it is an answer rather than running out of options, and it does not
+//     satisfy ErrGaveUp.
+//   - The attempt limit, a context that ended before an attempt could start,
+//     and a backoff sleep a context interrupted are all give-ups: the policy ran
+//     out of bound rather than out of reasons. Each reports a *RetryError
+//     satisfying errors.Is(err, ErrGaveUp), so the one question a caller has —
+//     did my bound stop this — has one answer whichever bound ended the loop.
+//
+// The last two used to return the bare context cause, which meant the error type
+// a caller received depended on whether the attempt count or the deadline
+// happened to bind first — and therefore on arithmetic the caller wrote rather
+// than on the situation.
 func Retry[T any](ctx context.Context, policy Policy, fn func(context.Context) (T, error)) (T, error) {
 	var zero T
 	if ctx == nil {
