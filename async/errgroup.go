@@ -76,21 +76,16 @@ func (r *Runner) ErrGroup(ctx context.Context) (*ErrGroup, context.Context) {
 // is Limited so that the Limit bounds goroutines, not just running work. A
 // function that obtains its permit after the group context is already
 // cancelled is not run: the group is failing and its result could not
-// change that. Go blocks for the permit regardless, as x/sync does; only
-// WaitContext bounds a wait on functions that ignore their cancellation.
+// change that. Go blocks for the permit regardless, as x/sync does; GoContext
+// is Go for a submitter that must be able to give up on that wait.
 //
 // Because a function may not run, cleanup it was meant to perform for
 // state set up before Go is not performed either. Register such cleanup in
-// the Runner's Hooks.OnTaskComplete, which does not fire for a function
-// that never ran, or perform it after Wait for every submission.
+// the Runner's Hooks.OnTaskComplete, which fires for a submission that never
+// ran with the cancellation cause, or perform it after Wait for every
+// submission.
 func (g *ErrGroup) Go(fn func(context.Context) error) {
-	if g.run == nil {
-		g.record(-1, &PlanError{Index: -1, Cause: ErrNilRunner})
-		return
-	}
-	if fn == nil {
-		index := g.next()
-		g.record(index, &PlanError{Index: index, Cause: ErrNilTask})
+	if !g.admissible(fn) {
 		return
 	}
 	var waited time.Duration
@@ -110,10 +105,101 @@ func (g *ErrGroup) Go(fn func(context.Context) error) {
 		}
 		if g.ctx.Err() != nil {
 			<-g.permits
+			g.skipped(waited)
 			return
 		}
 	}
 	g.start(fn, waited)
+}
+
+// GoContext is Go with the permit wait bounded by ctx, and it reports whether
+// fn was submitted. False means the group was already finished, or finished
+// while the submitter waited, and fn never ran.
+//
+// This is the difference between a group and a stream. Go's permit wait is an
+// unbounded send, which is the right trade for a submitter that has work it
+// must run and no reason to stop: the ~250 ns it saves per contended permit is
+// paid by every caller, while an earlier return is wanted by some. A consumer
+// reading from a channel is the other case — it is the other end of a
+// producer that may still be publishing, it holds a shutdown context, and it
+// must be able to stop reading. With every permit held by a function that
+// ignores its own cancellation, a Go loop cannot reach its cancellation branch
+// at all, and so never reaches WaitContext either: the documented way to bound
+// exactly this wait is unreachable from the shape that needs it.
+//
+// ctx bounds the wait for a permit and nothing else. fn still receives the
+// group context, which is the one Wait and cancellation speak about.
+func (g *ErrGroup) GoContext(ctx context.Context, fn func(context.Context) error) bool {
+	if ctx == nil {
+		if g.run == nil {
+			g.record(-1, &PlanError{Index: -1, Cause: ErrNilRunner})
+			return false
+		}
+		index := g.next()
+		g.record(index, &PlanError{Index: index, Cause: ErrNilContext})
+		return false
+	}
+	if !g.admissible(fn) {
+		return false
+	}
+	if err := ctx.Err(); err != nil {
+		g.skipped(0)
+		return false
+	}
+
+	var waited time.Duration
+	if g.permits != nil {
+		var start time.Time
+		if g.run.hooks.OnTaskComplete != nil {
+			start = time.Now()
+		}
+		select {
+		case g.permits <- struct{}{}:
+		case <-ctx.Done():
+			if !start.IsZero() {
+				waited = time.Since(start)
+			}
+			g.skipped(waited)
+			return false
+		}
+		if !start.IsZero() {
+			waited = time.Since(start)
+		}
+		if g.ctx.Err() != nil {
+			<-g.permits
+			g.skipped(waited)
+			return false
+		}
+	}
+	g.start(fn, waited)
+	return true
+}
+
+// admissible reports whether a submission is well formed, recording the
+// error for one that is not. Both Go and GoContext start here, so a malformed
+// submission is reported the same way whichever was called.
+func (g *ErrGroup) admissible(fn func(context.Context) error) bool {
+	if g.run == nil {
+		g.record(-1, &PlanError{Index: -1, Cause: ErrNilRunner})
+		return false
+	}
+	if fn == nil {
+		index := g.next()
+		g.record(index, &PlanError{Index: index, Cause: ErrNilTask})
+		return false
+	}
+	return true
+}
+
+// skipped reports a submission that will not run. Map already reports the
+// items its workers never claimed, with the cancellation cause; a group that
+// discarded a submission silently would leave a consumer draining a stream
+// unable to account for what it read, with Wait returning nil.
+func (g *ErrGroup) skipped(waited time.Duration) {
+	index := g.next()
+	if hook := g.run.hooks.OnTaskComplete; hook != nil {
+		hook(index, "", waited, 0, context.Cause(g.ctx))
+	}
 }
 
 // TryGo is Go that does not wait for a permit: it reports false, and runs
@@ -124,12 +210,16 @@ func (g *ErrGroup) TryGo(fn func(context.Context) error) bool {
 		return false
 	}
 	if g.ctx.Err() != nil {
+		g.skipped(0)
 		return false
 	}
 	if g.permits != nil {
 		select {
 		case g.permits <- struct{}{}:
 		default:
+			// Refused for want of a permit, not for cancellation: the caller
+			// asked not to wait and is told so by this return, and a
+			// submission it chose not to make is not work that went missing.
 			return false
 		}
 	}

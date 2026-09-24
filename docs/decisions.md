@@ -793,3 +793,74 @@ Rewrites the best of `AaronJan/Hunch` and `sourcegraph/conc` as `async` +
   broken, and says so with `Discard`.
 - Root `Task`/`Outcome`/`ID` registry defaults remain future benchmark
   decisions, not committed API, per the original brief.
+
+## ErrGroup's stream shape, found by asking whether `routing` needed a primitive (implemented)
+
+The question was whether velocity needed a stream-shaped primitive at all. A
+bounded message consumer reads a channel and submits each item under a fixed
+in-flight bound; `async` is collection-shaped (`Map`, `ForEach`, `Gather` over a
+known slice), and the first prototype of a consumer hand-wrote an
+`async.Semaphore` loop because nothing in the package appeared to fit.
+
+`async.ErrGroup` does fit, and the prototype had not read it closely enough.
+`Go` takes a permit so the `Limit` bounds goroutines rather than only running
+work, and `WaitContext` bounds the drain for functions that ignore their
+cancellation. A consumer is four lines, and it inherits panic recovery, sibling
+cancellation on first error, and every error in submission order. **There is no
+missing primitive, so no package was added to hold one.** A separate evaluation
+of watermill measured the same loop and the same shape, which is the outcome:
+the advantage is in composing, not in a new category.
+
+Measuring it anyway turned up two gaps, both in the stream shape and both
+contained:
+
+- **A stream consumer could not be shut down in bounded time.** `Go` takes its
+  permit with a plain blocking send, chosen deliberately over a `select`
+  against the group context because the `select` costs ~250 ns per contended
+  permit. For a submitter with work it must run and no reason to stop, that is
+  the right trade. For a consumer reading from a channel it is the other end
+  of a producer that may still be publishing, holding a shutdown context, and
+  required to be able to stop: with every permit held by a function that
+  ignores its own cancellation, the loop cannot reach its cancellation branch,
+  and so never reaches `WaitContext` — the documented way to bound exactly that
+  wait is unreachable from the shape that needs it. Measured over three handler
+  regimes, both `ErrGroup` and the hand-written `Semaphore` loop were still
+  running past 8 s against a handler that never returns; the loop does not fix
+  it either, since it substitutes a bare `wg.Wait` for the same unbounded
+  drain, so the gap belongs to the shape rather than to either arm.
+  `GoContext(ctx, fn) bool` is the addition: it selects on ctx for the permit
+  and reports whether the function was submitted. `Go` is unchanged, because
+  its cost is the reason the method is not the default — measured at a free
+  permit, which is the common case, `GoContext` costs ~35 ns more of 1145
+  (1177 vs 1145, 3 runs, 985k–1M iterations, same 480 B and 6 allocs), and the
+  contended case is where the documented ~250 ns applies. That case does not
+  isolate in a benchmark, since holding a permit needs a holder and releasing
+  it needs a timer, so the measurement would be of the holder.
+- **Items were dropped silently.** A function that obtained its permit after
+  the group was cancelled is not run, which is documented and correct in
+  itself; but `Hooks.OnTaskComplete` did not fire for it, so a consumer that
+  read an item from a channel and did not run it had no way to find out, and
+  `Wait` returned nil. In every measured regime both arms completed fewer items
+  than were fed and reported nothing — 56 of 200, in the regime where permits
+  cycle fast enough that nothing can wedge. The `Hooks` contract already said a
+  task that never starts is "reported from the caller's", and `Map` honoured
+  that; the group did not, so this was a divergence from the package's own
+  documented behaviour rather than a new feature. All three submission paths
+  now report a submission that will not run, with the group's cancellation
+  cause and zero duration.
+
+One consequence worth stating, because it looks like a bug and is not: a
+submission that never ran reports the group's cancellation *cause*, so a group
+whose first failure was `boom` reports `boom` for the submissions that follow
+it. That is what the cause is, and it is why the regression test cancels through
+the parent context instead — a test that classified by error value would count
+the skipped submissions as failures and pass for the wrong reason.
+
+Not taken: a counter of skipped submissions alongside the hook. The hook already
+reports each one, and two places to state the same thing is how they come to
+disagree.
+
+Not taken: changing `Go` itself to select on the context. It is the fast path,
+it is what `x/sync` does, and the reason the bounded form is a separate method
+is precisely that callers who need to stop should say so.
+

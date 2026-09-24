@@ -217,3 +217,130 @@ func TestErrGroupHooksSeeEachFunction(t *testing.T) {
 		t.Fatalf("hooks = %v", seen)
 	}
 }
+
+// TestErrGroupGoContextGivesUpOnAHeldPermit is the regression for the
+// measured gap: a stream consumer's permit wait has to be bounded, because a
+// function that ignores its own cancellation can hold every permit for as long
+// as it likes. With Go, a submitter behind one of those cannot reach its own
+// cancellation branch, and so never reaches WaitContext either.
+func TestErrGroupGoContextGivesUpOnAHeldPermit(t *testing.T) {
+	eg, _ := runner(t, async.Limited(1)).ErrGroup(context.Background())
+	held := make(chan struct{})
+	defer close(held)
+	eg.Go(func(context.Context) error { <-held; return nil })
+	// The single permit is now held by a function that will not return.
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+
+	ran := false
+	done := make(chan bool, 1)
+	go func() {
+		done <- eg.GoContext(ctx, func(context.Context) error { ran = true; return nil })
+	}()
+
+	select {
+	case submitted := <-done:
+		if submitted {
+			t.Fatal("GoContext submitted a function with no permit free")
+		}
+		if ran {
+			t.Fatal("the function ran")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("GoContext did not return; the permit wait is unbounded")
+	}
+}
+
+// TestErrGroupGoContextSubmitsWhenAPermitArrives is the other half: bounding
+// the wait must not cost a submission that would have run.
+func TestErrGroupGoContextSubmitsWhenAPermitArrives(t *testing.T) {
+	// Two permits, one of them held, so one is free to be taken.
+	eg, _ := runner(t, async.Limited(2)).ErrGroup(context.Background())
+	release := make(chan struct{})
+	eg.Go(func(context.Context) error { <-release; return nil })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	submitted := eg.GoContext(ctx, func(context.Context) error { return nil })
+	if !submitted {
+		t.Fatal("GoContext = false, want a submission while a permit was free")
+	}
+	close(release)
+	if err := eg.Wait(); err != nil {
+		t.Fatalf("Wait = %v", err)
+	}
+}
+
+// TestErrGroupHookReportsSubmissionThatNeverRan is the regression for silent
+// loss. A consumer that read an item from a channel and did not run it has to
+// be able to find out, and the Hooks contract already says a task that never
+// starts is reported from the caller's side — Map honoured that, the group did
+// not.
+//
+// The group is cancelled by its parent rather than by a failing function, so
+// the cause it reports is context.Canceled and a skipped submission cannot be
+// confused with one that ran and failed. A group whose first failure set the
+// cause reports that failure for later submissions too, which is correct and
+// is why this test does not use one.
+func TestErrGroupHookReportsSubmissionThatNeverRan(t *testing.T) {
+	var mu sync.Mutex
+	var reported []error
+	hooks := async.Hooks{OnTaskComplete: func(_ int, _ string, _, _ time.Duration, err error) {
+		mu.Lock()
+		reported = append(reported, err)
+		mu.Unlock()
+	}}
+
+	parent, cancelParent := context.WithCancel(context.Background())
+	eg, _ := runner(t, async.Limited(1), async.WithHooks(hooks)).ErrGroup(parent)
+	eg.Go(func(context.Context) error { return nil })
+	if err := eg.Wait(); err != nil {
+		t.Fatalf("Wait = %v", err)
+	}
+	cancelParent()
+
+	ran := false
+	never := func(context.Context) error { ran = true; return nil }
+	eg.Go(never)
+	eg.GoContext(context.Background(), never)
+	if eg.TryGo(never) {
+		t.Fatal("TryGo submitted a function to a finished group")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if ran {
+		t.Fatal("a submission ran after the group was cancelled")
+	}
+	skipped := 0
+	for _, err := range reported {
+		if errors.Is(err, context.Canceled) {
+			skipped++
+		}
+	}
+	// One from the function that ran, three from the submissions that did not.
+	if len(reported) != 4 || skipped != 3 {
+		t.Fatalf("reported %d submissions, %d of them skipped: %v", len(reported), skipped, reported)
+	}
+}
+
+func TestErrGroupGoContextValidation(t *testing.T) {
+	eg, _ := runner(t, async.Unlimited).ErrGroup(context.Background())
+	//nolint:staticcheck // a nil context is exactly what is under test.
+	if eg.GoContext(nil, func(context.Context) error { return nil }) {
+		t.Fatal("nil ctx submitted a function")
+	}
+	if err := eg.Wait(); !errors.Is(err, async.ErrNilContext) {
+		t.Fatalf("nil ctx = %v", err)
+	}
+
+	eg, _ = runner(t, async.Unlimited).ErrGroup(context.Background())
+	if eg.GoContext(context.Background(), nil) {
+		t.Fatal("nil fn submitted a function")
+	}
+	if err := eg.Wait(); !errors.Is(err, async.ErrNilTask) {
+		t.Fatalf("nil fn = %v", err)
+	}
+}
