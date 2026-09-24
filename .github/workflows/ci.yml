@@ -99,12 +99,19 @@ jobs:
       # randomized pass, kept short enough for every push.
       - name: fuzz the ownership model
         run: go test ./ownership -run '^$' -fuzz '^FuzzOwnershipModel$' -fuzztime 60s
+      # async is the package consumers actually use, and until this target
+      # existed it was the one concurrency package here with no randomized
+      # coverage at all.
+      - name: fuzz the errgroup model
+        run: go test ./async -run '^$' -fuzz '^FuzzErrGroupModel$' -fuzztime 60s
       - name: upload crashers
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: fuzz-corpus
-          path: ownership/testdata/fuzz/
+          path: |
+            ownership/testdata/fuzz/
+            async/testdata/fuzz/
 
   benchmarks:
     # Comparison benchmarks are a separate module and are not run for their
