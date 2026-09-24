@@ -533,3 +533,66 @@ func TestGatherCancellationDuringSubmissionMarksRemaining(t *testing.T) {
 		t.Fatal("no task reported cancellation")
 	}
 }
+
+// ForEachFuncs is the error-only sibling of GatherFuncs, and this is the shape
+// that motivated it: waiting for a set of signals to close under a budget. The
+// alternative was func(context.Context) (struct{}, error) in a loop, plus
+// discarding a slice of outcomes nobody wanted.
+func TestForEachFuncsWaitsUnderABudget(t *testing.T) {
+	run := runner(t, async.Limited(4))
+	release := make(chan struct{})
+	// The budget reaches the work through the context each function is given,
+	// which is the whole reason a function list beats a WaitGroup here: the
+	// bound is the caller's, and every function sees it.
+	wait := func(c context.Context) error {
+		select {
+		case <-release:
+			return nil
+		case <-c.Done():
+			return context.Cause(c)
+		}
+	}
+
+	// One function never releases, so the join must give up on the budget
+	// rather than wait forever — and the others must still have run.
+	// Ignores its context entirely, which is the case the budget cannot reach.
+	// Gather waits for it rather than abandoning it, so the test costs what this
+	// costs — kept short, because that is the price of the assertion.
+	slow := func(context.Context) error {
+		<-time.After(100 * time.Millisecond)
+		return nil
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	err := run.ForEachFuncs(ctx, wait, slow, wait)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("ForEachFuncs = %v, want the budget to end it", err)
+	}
+	close(release)
+}
+
+// The error is the join GatherFuncs returns: the functions' own errors in
+// submission order. Not *ItemError values — Failures is for Map and ForEach,
+// which have an index to report and a function list does not.
+func TestForEachFuncsJoinsErrorsInSubmissionOrder(t *testing.T) {
+	run := runner(t, async.Unlimited)
+	first := errors.New("first")
+	third := errors.New("third")
+
+	err := run.ForEachFuncs(context.Background(),
+		func(context.Context) error { return nil },
+		func(context.Context) error { return first },
+		func(context.Context) error { return nil },
+		func(context.Context) error { return third },
+	)
+	if !errors.Is(err, first) || !errors.Is(err, third) {
+		t.Fatalf("ForEachFuncs = %v, want both failures", err)
+	}
+	if got := async.Failures(err); got != nil {
+		t.Fatalf("Failures = %v, want nil: a function list has no indices to report", got)
+	}
+	if err.Error() != "first\nthird" {
+		t.Fatalf("ForEachFuncs = %q, want submission order", err.Error())
+	}
+}

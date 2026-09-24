@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/apsis-io/velocity/async"
 	"github.com/apsis-io/velocity/ownership"
@@ -91,4 +92,40 @@ func ExampleRunner_ErrGroup() {
 	}
 	fmt.Println(eg.Wait(), context.Cause(ctx))
 	// Output: two failed two failed
+}
+
+// Waiting for a set of things to finish under a budget. Before ForEachFuncs
+// this was a WaitGroup, a forwarding goroutine per signal, a joined channel and
+// a select; without ForEachFuncs but with GatherFuncs it is still a slice of
+// func(context.Context) (struct{}, error) and an outcome slice nobody wanted.
+//
+// The budget reaches the work through the context each function is given, which
+// is the part a WaitGroup cannot do: every function sees the caller's bound
+// without any of them having to be told about a deadline.
+func ExampleRunner_ForEachFuncs() {
+	run, _ := async.New(async.Limited(4))
+
+	signals := []chan struct{}{make(chan struct{}), make(chan struct{})}
+	// One closes now; the other never does, so the budget is what ends the join.
+	close(signals[0])
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	waits := make([]func(context.Context) error, 0, len(signals))
+	for _, s := range signals {
+		waits = append(waits, func(ctx context.Context) error {
+			select {
+			case <-s:
+				return nil
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			}
+		})
+	}
+
+	err := run.ForEachFuncs(ctx, waits...)
+	fmt.Println("gave up on the budget:", errors.Is(err, context.DeadlineExceeded))
+	// Output:
+	// gave up on the budget: true
 }

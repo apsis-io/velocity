@@ -108,6 +108,36 @@ func (r *Runner) GatherFuncs[T any](ctx context.Context, fns ...func(context.Con
 	return r.Gather(ctx, tasks(fns)...)
 }
 
+// ForEachFuncs is GatherFuncs for functions that produce only an error, and is
+// to GatherFuncs what ForEach is to Map. The error-only form is the common one:
+// most work either has no result worth collecting, or collects it somewhere
+// else — into a store, onto a channel, into an owned value the caller already
+// holds. Without it, such a caller writes func(context.Context) (struct{},
+// error) and discards a slice of outcomes it never wanted, or routes through
+// Map over a single-item collection, which is a worse version of the same idea.
+//
+// The returned error is the same join GatherFuncs returns: every function's own
+// error, in submission order, or nil if none failed. It is not a join of
+// *ItemError values — those come from Map and ForEach, which have an index to
+// report, where a function list does not. So Failures does not apply here; a
+// caller that needs to know which function failed is already holding them in a
+// slice it wrote.
+func (r *Runner) ForEachFuncs(ctx context.Context, fns ...func(context.Context) error) error {
+	_, err := r.Gather(ctx, funcsToOutcomes(fns)...)
+	return err
+}
+
+// funcsToOutcomes adapts the error-only functions to Gather's shape with a zero
+// value, rather than teaching Gather two signatures. The zero R is never
+// observed: ForEachFuncs drops the outcomes it did not come for.
+func funcsToOutcomes(fns []func(context.Context) error) []Task[struct{}] {
+	out := make([]Task[struct{}], len(fns))
+	for i, fn := range fns {
+		out[i].Run = func(ctx context.Context) (struct{}, error) { return struct{}{}, fn(ctx) }
+	}
+	return out
+}
+
 // RaceFuncs is Race for unlabeled functions.
 func (r *Runner) RaceFuncs[T any](ctx context.Context, fns ...func(context.Context) (T, error)) (Outcome[T], error) {
 	return r.Race(ctx, tasks(fns)...)
