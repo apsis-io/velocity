@@ -135,6 +135,7 @@ var acquirers = map[string]map[string][]string{
 	asyncPath: {
 		"Semaphore": {"Acquire", "TryAcquire"},
 		"Mutex":     {"Lock", "TryLock"},
+		"RWMutex":   {"Lock", "TryLock", "RLock", "TryRLock"},
 	},
 }
 
