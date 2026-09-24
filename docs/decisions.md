@@ -1020,3 +1020,50 @@ The test asserts the thing that matters rather than the thing that is easy to
 assert: no goroutine counting, since that is timing-dependent and would flake
 under load. It waits for every responder to return and then asserts the registry
 is empty. Twenty-five abandoned calls, zero left behind.
+
+## ownership is kept deliberately, with no call site to point at (decided)
+
+`ownership` is 4,559 lines, the largest package here by a wide margin, and as
+of this entry it has **zero sites across both projects consuming velocity**:
+Periapsis looked for one and did not find it, and reported that the pawn
+lifecycle and the image manager are both plain shared state with channels. The
+package was raised as a question — whether it is carrying weight it has not
+earned — and the answer is that it is kept on purpose, for two reasons that
+stand without a current call site.
+
+**It encodes a discipline whose failure mode is forgetting.** A team using
+`x/sync` plus good habits gets the primitives and the intention. What it does
+not get is the forgetting caught: a conflicting access reported as `ErrConflict`
+at once rather than waited out, a `Detach` whose name says that cleanup will
+never run, a `Scope` that releases in reverse order and joins the failures, a
+`Lease` that refuses use after release, and `analysis/lostrelease`, which
+reports a handle assigned to `_` and now learns its acquirers from a
+`//velocity:acquires` directive at the declaration rather than a hand-written
+table. The claim is about the class of bug, not a site: a leak that is detected
+when it happens is worth more than one that is documented against.
+
+**It is the differentiator.** Everything else in this repository is reachable by
+a careful team from the standard library and `x/sync`. This is the part that is
+not, and a library whose pitch is "the primitives, arranged well" has no reason
+to exist at all.
+
+**What this costs, stated plainly.** With no call site, the package is exercised
+only by its own tests. That is a real risk and it is not hypothetical: a
+discipline encoded in a type that nothing calls tends to drift toward whatever
+the tests happen to check, and the tests are written by the same person who
+wrote the type. The record is the only thing that will notice, which is part of
+why the entry exists.
+
+**What would reopen it.** A call site settles the question in one direction — the
+friction argument from the earlier repositioning ("callers already have `defer`,
+`Close` and scoped cleanup, so wrapping a value in `Owner[T]` could cost more
+than the problem it solved") has been answered by whoever writes it. Continued
+absence across further projects argues the other way, and at that point the
+honest options are to shrink the package to the parts with sites or to say
+plainly that it is a bet being paid for on a schedule rather than on evidence.
+Either is defensible; leaving it unremarked is not, because an unremarked
+absence reads as an unanswered accusation rather than a decision taken.
+
+Note the difference from the entries above: those were changed *because* a
+consumer reported a failure. This one is kept *despite* the absence of one, and
+that asymmetry is the whole content of it.
