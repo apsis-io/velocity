@@ -2,6 +2,36 @@
 
 This records current selections, not superseded planning alternatives.
 
+## What the evidence in this record is, and is not
+
+Several entries below cite a report from a project using velocity: a port that
+hit a wall, a migration that got awkward, a shape that turned out to leak. Those
+reports are the strongest evidence this library has, and they are all real
+workloads with real failures behind them.
+
+They come from the author's own projects. That does not weaken them as evidence
+of a **defect** — a poll that under-waits its budget is wrong whoever reports it,
+and every claim in those entries was checked against the source or a benchmark
+rather than taken on trust. But it makes them worth nothing as evidence of
+**demand**, and the distinction is easy to blur because "a consumer reported
+this" sounds like the two at once.
+
+So, read the record with this in mind:
+
+- A report justifies **fixing or working around a failure**. It is a
+  measurement of something that already went wrong.
+- A report never justifies **adding an API**. Nobody outside this arrangement
+  has asked for anything, and a closed set of consumers cannot produce evidence
+  of absence either — "no one has asked for it" carries no information when the
+  only possible askers are reachable from here. Features are justified by the
+  author's judgement or by a measurement, not by a hypothetical request.
+- Where an entry says a decision is "deferred on evidence, not on principle,"
+  the evidence means a measured failure of an existing shape, not a demand for a
+  replacement.
+- The one place this bites hardest is a comparison against another library: a
+  defect found in a third-party library is evidence about *that* library and says
+  nothing about whether velocity should grow to cover it.
+
 ## Repository and traits
 
 - Module: `github.com/apsis-io/velocity`, Go 1.27 only, MIT license held by

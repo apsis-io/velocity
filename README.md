@@ -13,9 +13,12 @@ leaked handles before the code runs.
 go get github.com/apsis-io/velocity@v0.4.0
 ```
 
-**Status: v0.** Requires Go 1.27. The API is deliberate but young — there
-are no external consumers yet, and it will change where real use says it
-should. Every design decision and its reasoning is recorded in
+**Status: v0.** Requires Go 1.27. The API is deliberate but young — it has no
+consumers outside the author's own projects, and it will change where real use
+says it should. That is a weaker statement than it looks: reports from those
+projects are good evidence that a shape causes a real failure, and no evidence
+at all that anyone wants a new API, so nothing here should be read as a request
+for features. Every design decision and its reasoning is recorded in
 [`docs/decisions.md`](docs/decisions.md).
 
 ## Which package
@@ -367,14 +370,23 @@ why, live in [`benchmarks/README.md`](benchmarks/README.md).
 
 ## Field use
 
-One consumer so far, which is the honest scope. Periapsis, a
-virtual-kubelet fork, ported seven call sites to velocity and has tracked
-each release since. It exercises `ownership`, `async` (`Runner.Map`,
+Both consumers are the author's own projects, which is the honest scope and a
+weaker one than independent adoption would be. What they establish is that the
+shapes work against real workloads and fail legibly when they do not — not that
+anyone outside would want them.
+
+**Periapsis**, a virtual-kubelet fork, ported seven call sites to velocity and
+has tracked each release since. It exercises `ownership`, `async` (`Runner.Map`,
 `ErrGroup`, `Mutex`), `dedupe`, and `failsafeown`, and dropped `conc`,
 `x/sync/singleflight` and `x/sync/errgroup` on the way; v0.4.0 is deployed
 on its cluster.
 
-Most of what changed in v0.2.0 and v0.3.0 came from that port, and the
+**breeze**, a Go daemon, took `resilience` first: four hand-rolled poll loops
+became one `pollUntil` on `RetryUntil`, and the report that prompted
+`RetryUntil` is recorded below. It is on `v0.5.0-rc.1`; `v0.5.0` supersedes
+that and is the first tag with a passing CI record.
+
+Most of what changed in v0.2.0 and v0.3.0 came from the Periapsis port, and the
 reports were measured rather than impressionistic:
 
 - **`dedupe` holding an abandoned round's key until its callback returns**
