@@ -943,3 +943,50 @@ numbers were the ones worth having.
 
 The consumer is re-porting against this shape, which is the point of recording
 it here rather than only in review.
+
+## Request/reply, as a shape and a test rather than a package (implemented)
+
+The `routing` evaluation measured the sharpest single result in the whole
+exercise: 25 callers that each read one reply of two and then abandoned it left
+**50 goroutines behind** in watermill's `requestreply`, against +3 for the same
+loop with the caller cancelling and **+0** when the responder owns the cleanup.
+Nothing in velocity's `async` leaks there, and nothing in it stops a caller
+leaking there either — the property was a property of a shape nobody had written
+down, which is the worst place for one to live.
+
+It is now written down, as `Example_requestReply` and a test beside it, with the
+registry in the test file rather than the package. That placement is the
+decision: the measurement says what the shape must be, and no consumer has asked
+for a request/reply API, so a type would be a category invented on the strength
+of a benchmark. An example is godoc-visible and commits to no surface. If someone
+wants the type, the measurement is already here to justify it.
+
+Three things the shape has to get right, each of which is a way to strand a
+goroutine:
+
+- **The removal belongs to the responder.** The caller creates the entry and
+  then hands the removal away, so the caller's own exit path — including
+  forgetting, which is the whole case — is not on the critical path. A `defer`
+  runs; a cancel nobody calls does not.
+- **Delivery never blocks the responder.** A second reply to a caller that has
+  read one is dropped rather than parked on a full channel, because that blocked
+  send is precisely what stops the responder reaching the `defer` that would
+  have cleaned up. The leak and the fix are the same line of code.
+- **A submitter that must stop uses `GoContext`, not `Go`.** A loop calling `Go`
+  blocks on the permit with a plain send, so with every permit held it cannot
+  reach its own cancellation branch — and a loop that cannot reach its cancel
+  can never shut down.
+
+The third is worth reading twice, because writing the example tripped it. The
+first version submitted three responders from the example's own goroutine with
+the limit at two, so the third `GoContext` blocked and the loop never reached
+the `cancel()` two lines below it: the example hung until the test timeout, and
+the responders were still parked on a context nothing had cancelled. A hazard
+documented in a package is not thereby avoided by the package's own example. The
+blocked submission now happens on its own goroutine, which is what a real
+consumer's submit loop is anyway, and cancelling from elsewhere releases it.
+
+The test asserts the thing that matters rather than the thing that is easy to
+assert: no goroutine counting, since that is timing-dependent and would flake
+under load. It waits for every responder to return and then asserts the registry
+is empty. Twenty-five abandoned calls, zero left behind.
