@@ -62,11 +62,21 @@ func (s *Semaphore) TryAcquire() (*Permit, bool) {
 	}
 }
 
-// Permit is one held unit of a Semaphore or the lock of a Mutex. Release
-// hands it back exactly once; later calls do nothing.
+// Permit is one held unit of a Semaphore, the lock of a Mutex, or a read or
+// write lock of an RWMutex. Release hands it back exactly once; later calls do
+// nothing.
 type Permit struct {
 	permits chan struct{}
 	once    sync.Once
+	// rw is set only by RWMutex, whose read and write locks are not tokens in a
+	// channel. It is nil on the Semaphore path, which is the hot one, and
+	// Release's nil check is the whole cost of sharing the type.
+	//
+	// This started as a func() hook, which cost a second allocation per lock
+	// acquire because the closure escapes. Two fields are a larger struct and
+	// one allocation rather than a smaller struct and two.
+	rw    *RWMutex
+	write bool
 }
 
 // Release hands the permit back. It is idempotent, so a deferred Release
@@ -75,7 +85,17 @@ func (p *Permit) Release() {
 	if p == nil {
 		return
 	}
-	p.once.Do(func() { <-p.permits })
+	p.once.Do(func() {
+		if p.rw != nil {
+			if p.write {
+				p.rw.unlockWrite()
+			} else {
+				p.rw.unlockRead()
+			}
+			return
+		}
+		<-p.permits
+	})
 }
 
 // Mutex is an exclusive lock whose Lock waits under the caller's context —

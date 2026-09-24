@@ -1067,3 +1067,69 @@ absence reads as an unanswered accusation rather than a decision taken.
 Note the difference from the entries above: those were changed *because* a
 consumer reported a failure. This one is kept *despite* the absence of one, and
 that asymmetry is the whole content of it.
+
+## async.RWMutex, on judgement rather than evidence (implemented)
+
+`RWMutex` is a read/write lock whose `RLock` and `Lock` both wait under the
+caller's context, which `sync.RWMutex` cannot do. Added because a consumer was
+about to guard a read-mostly structure with `sync.RWMutex` and wanted the
+velocity equivalent.
+
+**This is the author's-judgement path, and it is the weaker one.** The entry at
+the top of this record says a report never justifies adding an API. This is a
+report, and it is being acted on anyway because the author asked for it — which
+the same entry permits ("justified by the author's judgement or by a
+measurement"), but the distinction is worth stating rather than blurring. The
+honest position is that nobody has measured a site this wants.
+
+**Measured against `sync.RWMutex`, it loses in every regime tested** (Xeon
+E5-2690 v4, Go 1.27, both arms interleaved in one process):
+
+| | async | sync |
+|---|---|---|
+| uncontended read | 95 ns, 1 alloc | **12 ns, 0 allocs** |
+| uncontended write | 82 ns, 1 alloc | **28 ns, 0 allocs** |
+| contended read x8 | 3860 ns, 33 allocs | **2560 ns, 9 allocs** |
+| contended write x8 | 4250 ns, 33 allocs | **2790 ns, 9 allocs** |
+
+This is a worse result than `async.Mutex` has, and the difference matters: the
+Mutex is ~4x worse uncontended and ~1.3x *better* under contention, so there is
+a regime where it wins. RWMutex has none. The cancellability is what is being
+bought, and it costs between 1.5x and 9x depending on the shape.
+
+**The cost falls on the existing hot path.** `Permit` grew two fields so
+`Release` can tell a read lock from a write lock without a closure:
+
+| | before | after |
+|---|---|---|
+| `Semaphore.Acquire` | 117 ns, **24 B**, 1 alloc | 118 ns, **48 B**, 1 alloc |
+| `Mutex.Lock` | 121-134 ns, **24 B**, 1 alloc | 121 ns, **48 B**, 1 alloc |
+
+No measurable time change — the deltas are inside run-to-run variance — but the
+allocation doubles on every `Semaphore` and `Mutex` acquire, to serve a type that
+loses its benchmark. An earlier version used a `func()` release hook and cost two
+allocations per lock acquire instead of one; two fields beat a closure because
+the closure escapes. A separate lock handle type would avoid the `Permit` growth
+entirely at the cost of a second release type, and was not chosen because
+one release type with release-exactly-once is worth more than 24 bytes.
+
+**What the tests hold.** Mutual exclusion both ways, readers not excluding
+readers, writer priority over new readers, the caller's context bounding both
+waits, `TryRLock`/`TryLock` refusal, idempotent `Release`, and exclusion under
+load. Two of those were mutation-tested rather than trusted: removing the
+`waiting--` on a writer's context-bail path, and letting `RLock` admit a reader
+past a waiting writer. Both are caught — the first by
+`TestRWMutexAbandonedWriterDoesNotBlockReaders`, which is the test that matters
+most because that accounting is what the whole type turns on.
+
+The abandoned-writer test took three revisions. Its first version asserted with
+`context.Background()`, so the mutation made it **hang** until the package
+timeout instead of failing: a test that catches a bug by wedging is a worse
+failure mode than one that reports it, and the fixture now carries a deadline
+so the same mutation fails in five seconds with a message.
+
+`analysis/lostrelease` found unreleased `TryLock`/`TryRLock` permits in the new
+test file within a minute of the `//velocity:acquires` directives going in, on
+branches where `t.Fatal` means the release never runs. That is the analyzer
+working as intended on a package it had never seen, and the fix — release before
+failing — is the right shape anyway.
