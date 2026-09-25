@@ -63,7 +63,7 @@ func ComposeClones[T any](clones ...Clone[T]) (Clone[T], error) {
 // value is also dropped and the operation stops.
 func (d Drop[T]) Clone(clones ...Clone[T]) (Clone[T], error) {
 	if d == nil {
-		return nil, &ConfigError{Trait: "clones with drop", Index: 0, Cause: ErrNilTrait}
+		return nil, &TraitError{Trait: "clones with drop", Index: 0, Cause: ErrNilTrait}
 	}
 
 	if err := validate("clones", clones, func(clone Clone[T]) bool { return clone == nil }); err != nil {

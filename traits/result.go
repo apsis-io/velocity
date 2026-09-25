@@ -161,3 +161,29 @@ func (f *Future[R]) Await(ctx context.Context) (Result[R], error) {
 		return Result[R]{}, context.Cause(ctx)
 	}
 }
+
+// ErrInvalidConfig is the shared cause for a rejected option. Packages alias
+// it — `ownership.ErrInvalidConfig`, `dedupe.ErrInvalidConfig` — so a caller
+// writes `errors.Is(err, <their package>.ErrInvalidConfig)` and gets the same
+// value either way, which is what lets one error type serve three packages
+// without a per-package wrapper to undo it.
+var ErrInvalidConfig = errors.New("invalid configuration")
+
+// ConfigError reports a rejected option. One definition serves every package
+// whose options are named, so "which option was refused" is answered the same
+// way everywhere.
+//
+// It is deliberately not the same type as TraitError, which describes a
+// composition failure rather than an option: they have different fields and
+// different readers, and merging them would mean a type with an Index that is
+// always -1 in one use and the trait position in the other.
+type ConfigError struct {
+	Option string
+	Reason error
+}
+
+func (e *ConfigError) Error() string {
+	return fmt.Sprintf("option %q: %v", e.Option, e.Reason)
+}
+
+func (e *ConfigError) Unwrap() []error { return []error{ErrInvalidConfig, e.Reason} }

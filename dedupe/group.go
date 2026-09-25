@@ -132,7 +132,7 @@ func build[K comparable, V any](opts []Option[K, V]) (*Group[K, V], error) {
 
 	for i, opt := range opts {
 		if opt == nil {
-			return nil, &ConfigError{Option: "option " + formatIndex(i), Cause: ErrNilOption}
+			return nil, &ConfigError{Option: "option " + formatIndex(i), Reason: ErrNilOption}
 		}
 
 		if err := opt.apply(&cfg); err != nil {
@@ -150,7 +150,7 @@ func build[K comparable, V any](opts []Option[K, V]) (*Group[K, V], error) {
 	case backendXsync:
 		b = newXsyncBackend[K, V]()
 	default:
-		return nil, &ConfigError{Option: "backend", Cause: ErrUnsupportedBackend}
+		return nil, &ConfigError{Option: "backend", Reason: ErrUnsupportedBackend}
 	}
 
 	return &Group[K, V]{

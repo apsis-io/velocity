@@ -1,11 +1,16 @@
 package dedupe
 
-import "errors"
-import "fmt"
+import (
+	"errors"
+
+	"github.com/apsis-io/velocity/traits"
+)
 
 var (
-	ErrMissingResult      = errors.New("dedupe: key missing from batch result")
-	ErrInvalidConfig      = errors.New("dedupe: invalid configuration")
+	ErrMissingResult = errors.New("dedupe: key missing from batch result")
+	// ErrInvalidConfig is the shared cause behind a rejected option; see
+	// traits.ErrInvalidConfig.
+	ErrInvalidConfig      = traits.ErrInvalidConfig
 	ErrNilContext         = errors.New("dedupe: nil context")
 	ErrNilFunction        = errors.New("dedupe: nil function")
 	ErrNilOwner           = errors.New("dedupe: nil owner")
@@ -17,10 +22,7 @@ var (
 	ErrOwnedResult = errors.New("dedupe: owned results are served only through DoShared")
 )
 
-type ConfigError struct {
-	Option string
-	Cause  error
-}
-
-func (e *ConfigError) Error() string   { return fmt.Sprintf("dedupe option %q: %v", e.Option, e.Cause) }
-func (e *ConfigError) Unwrap() []error { return []error{ErrInvalidConfig, e.Cause} }
+// ConfigError reports a rejected option. It is the shared type, so a caller
+// matching on it does the same thing in every package with named options; the
+// name stays here so existing errors.As calls keep compiling.
+type ConfigError = traits.ConfigError

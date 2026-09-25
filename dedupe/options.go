@@ -42,7 +42,7 @@ func (f optionFunc[K, V]) apply(cfg *config[K, V]) error { return f(cfg) }
 func WithBaseContext[K comparable, V any](ctx context.Context) Option[K, V] {
 	return optionFunc[K, V](func(cfg *config[K, V]) error {
 		if ctx == nil {
-			return &ConfigError{Option: "base context", Cause: ErrNilContext}
+			return &ConfigError{Option: "base context", Reason: ErrNilContext}
 		}
 
 		cfg.baseCtx = ctx
@@ -55,11 +55,11 @@ func WithBaseContext[K comparable, V any](ctx context.Context) Option[K, V] {
 func WithResultDrop[K comparable, V any](drop traits.Drop[V]) Option[K, V] {
 	return optionFunc[K, V](func(cfg *config[K, V]) error {
 		if drop == nil {
-			return &ConfigError{Option: "result drop", Cause: ErrNilOption}
+			return &ConfigError{Option: "result drop", Reason: ErrNilOption}
 		}
 
 		if cfg.drop != nil {
-			return &ConfigError{Option: "result drop", Cause: ErrDuplicateOption}
+			return &ConfigError{Option: "result drop", Reason: ErrDuplicateOption}
 		}
 
 		cfg.drop = drop
@@ -72,11 +72,11 @@ func WithResultDrop[K comparable, V any](drop traits.Drop[V]) Option[K, V] {
 func WithResultClone[K comparable, V any](clone traits.Clone[V]) Option[K, V] {
 	return optionFunc[K, V](func(cfg *config[K, V]) error {
 		if clone == nil {
-			return &ConfigError{Option: "result clone", Cause: ErrNilOption}
+			return &ConfigError{Option: "result clone", Reason: ErrNilOption}
 		}
 
 		if cfg.clone != nil {
-			return &ConfigError{Option: "result clone", Cause: ErrDuplicateOption}
+			return &ConfigError{Option: "result clone", Reason: ErrDuplicateOption}
 		}
 
 		cfg.clone = clone
@@ -89,7 +89,7 @@ func WithResultClone[K comparable, V any](clone traits.Clone[V]) Option[K, V] {
 func WithHooks[K comparable, V any](hooks Hooks[K]) Option[K, V] {
 	return optionFunc[K, V](func(cfg *config[K, V]) error {
 		if cfg.hooksSet {
-			return &ConfigError{Option: "hooks", Cause: ErrDuplicateOption}
+			return &ConfigError{Option: "hooks", Reason: ErrDuplicateOption}
 		}
 
 		cfg.hooks = hooks
@@ -118,7 +118,7 @@ func WithXsyncBackend[K comparable, V any]() Option[K, V] {
 func WithSharded[K comparable, V any](shards int) Option[K, V] {
 	return optionFunc[K, V](func(cfg *config[K, V]) error {
 		if shards <= 0 {
-			return &ConfigError{Option: "sharded backend", Cause: fmt.Errorf("shards must be positive: %d", shards)}
+			return &ConfigError{Option: "sharded backend", Reason: fmt.Errorf("shards must be positive: %d", shards)}
 		}
 
 		return setBackend(cfg, backendSharded, shards)
@@ -131,7 +131,7 @@ func backendOption[K comparable, V any](kind backendKind, shards int) Option[K, 
 
 func setBackend[K comparable, V any](cfg *config[K, V], kind backendKind, shards int) error {
 	if cfg.backendSet {
-		return &ConfigError{Option: "backend", Cause: ErrDuplicateOption}
+		return &ConfigError{Option: "backend", Reason: ErrDuplicateOption}
 	}
 
 	cfg.backendKind = kind

@@ -189,13 +189,13 @@ func TestCompositionValidation(t *testing.T) {
 				t.Fatalf("error = %v, want ErrInvalidComposition", err)
 			}
 
-			var configErr *traits.ConfigError
-			if !errors.As(err, &configErr) {
-				t.Fatalf("error = %T, want ConfigError", err)
+			var traitErr *traits.TraitError
+			if !errors.As(err, &traitErr) {
+				t.Fatalf("error = %T, want TraitError", err)
 			}
 
-			if configErr.Index != tt.idx {
-				t.Fatalf("index = %d, want %d", configErr.Index, tt.idx)
+			if traitErr.Index != tt.idx {
+				t.Fatalf("index = %d, want %d", traitErr.Index, tt.idx)
 			}
 
 			if tt.idx >= 0 && !errors.Is(err, traits.ErrNilTrait) {

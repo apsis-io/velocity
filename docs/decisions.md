@@ -2100,19 +2100,31 @@ types *and* a migration someone might repeat, and the third copy is the one a
 reader of `dedupe` finds first. `dedupe`'s internal `call.panicErr` is now
 `*traits.Panic`, and the type is gone.
 
-**Not consolidated, and deliberately: the three `ConfigError` types.** Two of
-them are near-identical — `ownership.ConfigError{Option, Reason}` and
+**The three `ConfigError` types, and the objection to consolidating them was
+wrong.** Two were near-identical — `ownership.ConfigError{Option, Reason}` and
 `dedupe.ConfigError{Option, Cause}`, same shape, differing in a field name. The
-third, `traits.ConfigError{Trait, Index, Cause}`, is genuinely a different thing
-and describes a trait rather than an option.
+third, `traits.ConfigError{Trait, Index, Cause}`, is a different thing and
+describes a trait rather than an option.
 
-The two near-identical ones are left alone, and the reason is the part that
-`Panic` did not have to contend with: **each unwraps to its own package's
-sentinel**, so a caller writes `errors.Is(err, dedupe.ErrInvalidConfig)`. A
-shared type would have to carry the sentinel with it to keep that working, and
-then the field-name mismatch is the least of what has been given up. Two types
-that differ in a field name and answer to their own package are ordinary Go;
-three copies of one struct with nothing to distinguish them is the thing worth
-removing. The field names could be made consistent — `Reason` in both, or
-`Cause` in both — and that is a smaller change than it looks, but it is churn on
-an API nobody is asking for, so it is not taken here.
+They were left alone on the argument that **each unwraps to its own package's
+sentinel**, so a caller writes `errors.Is(err, dedupe.ErrInvalidConfig)`, and that
+a shared type would have to carry the sentinel to preserve that. The argument
+presumes a shared type cannot *be* the sentinel, which is backwards: the shared
+type carries the shared sentinel, and each package's name **aliases** it. So
+`errors.Is(err, dedupe.ErrInvalidConfig)` and `errors.Is(err,
+ownership.ErrInvalidConfig)` are the same comparison, and callers change nothing.
+
+    traits.ErrInvalidConfig            the shared cause
+    ownership.ErrInvalidConfig         = traits.ErrInvalidConfig
+    dedupe.ErrInvalidConfig            = traits.ErrInvalidConfig
+    traits.ConfigError{Option, Reason} one definition
+    ownership.ConfigError              = traits.ConfigError
+    dedupe.ConfigError                 = traits.ConfigError
+
+`Reason` won the field name over `Cause` because it is the one that reads as a
+reason rather than a wrapper, and `dedupe`'s three call sites moved to it.
+
+The trait-shaped one is now `traits.TraitError`, and that is a rename rather
+than a merge: it has an `Index` and names a trait, and folding it into a type
+whose `Index` is always -1 would mean a field that lies in one of its two uses.
+The distinction is now in the names, which is where a reader looks.

@@ -3,14 +3,19 @@ package ownership
 import (
 	"errors"
 	"fmt"
+
+	"github.com/apsis-io/velocity/traits"
 )
 
 var (
-	ErrConflict        = errors.New("ownership conflict")
-	ErrMoved           = errors.New("ownership moved")
-	ErrReleased        = errors.New("ownership released")
-	ErrNoClone         = errors.New("clone trait is not configured")
-	ErrInvalidConfig   = errors.New("invalid ownership configuration")
+	ErrConflict = errors.New("ownership conflict")
+	ErrMoved    = errors.New("ownership moved")
+	ErrReleased = errors.New("ownership released")
+	ErrNoClone  = errors.New("clone trait is not configured")
+	// ErrInvalidConfig is the shared cause behind a rejected option; see
+	// traits.ErrInvalidConfig. Aliased so a caller matching on this package's name
+	// gets the same value as one matching on the shared one.
+	ErrInvalidConfig   = traits.ErrInvalidConfig
 	ErrProjection      = errors.New("invalid ownership projection")
 	ErrDuplicateOption = errors.New("duplicate ownership option")
 	ErrNilOption       = errors.New("nil ownership option")
@@ -81,16 +86,10 @@ type NoCloneError struct{ Operation Operation }
 func (e *NoCloneError) Error() string { return fmt.Sprintf("%s: %v", e.Operation, ErrNoClone) }
 func (e *NoCloneError) Unwrap() error { return ErrNoClone }
 
-// ConfigError describes an invalid constructor option.
-type ConfigError struct {
-	Option string
-	Reason error
-}
-
-func (e *ConfigError) Error() string {
-	return fmt.Sprintf("ownership option %q: %v", e.Option, e.Reason)
-}
-func (e *ConfigError) Unwrap() []error { return []error{ErrInvalidConfig, e.Reason} }
+// ConfigError reports a rejected option. It is the shared type, so a caller
+// matching on it does the same thing in every package with named options; the
+// name stays here so existing errors.As calls keep compiling.
+type ConfigError = traits.ConfigError
 
 // SealedError identifies a borrow refused because the value is being retired.
 type SealedError struct{ Operation Operation }
