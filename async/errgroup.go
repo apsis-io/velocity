@@ -84,6 +84,13 @@ func (r *Runner) ErrGroup(ctx context.Context) (*ErrGroup, context.Context) {
 // the Runner's Hooks.OnTaskComplete, which fires for a submission that never
 // ran with the cancellation cause, or perform it after Wait for every
 // submission.
+//
+// This is the opposite of what dedupe.Do does with the same situation, and the
+// difference is deliberate. A group function is an independent work item: one
+// that would run against a dead context is work nobody asked for, so Go
+// refuses it. A dedupe callback is *shared* — one execution serving every
+// caller on a key — and skipping it would strand each caller arriving
+// afterwards on a round that can never produce a value. See the note on Do.
 func (g *ErrGroup) Go(fn func(context.Context) error) {
 	if !g.admissible(fn) {
 		return

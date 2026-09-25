@@ -177,6 +177,23 @@ func formatIndex(i int) string {
 // the context — must therefore not be built from fn's context; derive it
 // from the caller's, or from the group's base context, instead. Binding it
 // to the round's context fails silently until the first later use.
+//
+// **A round whose callers have all abandoned still runs fn, against a
+// cancelled context.** Do refuses to *start* a round on a finished context, so
+// this only arises once a round is under way: every caller leaves, the
+// execution is cancelled, and the callback already launched is called anyway.
+// That is deliberate, and it is the opposite of what async.ErrGroup.Go does
+// with the same situation. The difference is what the work is for. Here fn is
+// *shared* — one execution serving every caller on the key — so skipping it
+// would strand each caller that arrives afterwards: they join the existing
+// call, find no value and no error but ErrCallbackExit, and retry a key that
+// can now never succeed. Running it means the work happens once and a late
+// caller takes the result, which is the rule this package is built on: a
+// callback that ignored its cancellation did the work, so it is not repeated.
+// A function submitted to an ErrGroup is an independent work item, so a group
+// that would run one against a dead context is doing work nobody asked for,
+// and refuses it — reporting it, which is why its OnTaskComplete fires for a
+// submission that never ran.
 func (g *Group[K, V]) Do(ctx context.Context, key K, fn func(context.Context) (V, error)) (V, error) {
 	var zero V
 	if err := g.checkPlain(ctx, fn); err != nil {

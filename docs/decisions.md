@@ -1175,3 +1175,43 @@ had a hole in exactly the place a refcount makes forgetting expensive, and the
 hole was documented with a rationale that reads like a considered trade. That is
 the kind of entry that only gets written down if it is written down: a green
 suite is evidence about the checks that exist, not about the checks that do not.
+
+## Two cancellation rules that look contradictory and are not (documented)
+
+Checking whether the `OnComplete` gap in `ErrGroup` — a submission that never
+ran reporting nothing — also repeated in its sibling `dedupe`. It does not, and
+the reason is worth more than the check.
+
+`dedupe`'s `OnComplete` fires from a `defer` inside `run`, and `run` is
+launched unconditionally by whichever caller becomes the leader, so a round
+always executes its callback and always reports. `ErrGroup` needed the fix
+because it has a submission that is accepted and then not run. The difference
+is structural: a group has a path between "submitted" and "running", and
+`dedupe` does not.
+
+That raised the question the check was meant to settle, and the answer is that
+the two packages make **opposite decisions on the same situation**, on purpose:
+
+- `ErrGroup.Go` **refuses** to run a function after the group is cancelled.
+- `dedupe.Do` **runs** its callback even when the round's context is cancelled.
+
+It is worth being precise about the case, because it is narrower than it first
+looks: `dedupe` refuses to *start* a round on a finished context — `check`
+returns `ctx.Err()` — so the divergence only arises once a round is under way
+and every caller has abandoned it, which cancels the execution under an
+already-launched callback.
+
+The reason is what the work is for. A group function is an **independent work
+item**: one that would run against a dead context produces a result nobody
+asked for, so refusing it is free. A `dedupe` callback is **shared work** — one
+execution serving every caller on the key. Skipping it strands every caller
+that arrives afterwards: they join the existing call, find no value and no
+error but `ErrCallbackExit`, and retry a key that can now never succeed. That
+is the rule the package is built on — *a callback that ignored its cancellation
+did the work, so it is not repeated* — and skipping would invert it.
+
+So neither was changed. What was missing is that a reader who knows one package
+would reasonably assume the other matches, and the two behaviours are
+indistinguishable from their names. Both sites now say so, and point at the
+other. A guard for it is unnecessary: both behaviours are now pinned by tests,
+this one by the argument above and the package's existing abandonment tests.
