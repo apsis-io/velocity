@@ -1487,8 +1487,10 @@ quietly on their behalf.
 
 ## MutateAsync, and where the context went instead of onto the call (implemented)
 
-`Owner.MutateAsync(fn) *Future[R]` is `Mutate` with the callback moved to its
-own goroutine. The Future is pending, or carries the callback's `(R, error)`.
+`Owner.MutateAsync(ctx, fn) *traits.Future[R]` is `Mutate` with the callback
+moved to its own goroutine and **admission queued rather than refused**. The
+Future is pending, or carries the callback's outcome. *(The first version of
+this took no context and refused on conflict; both are corrected below.)*
 
 **Admission queues rather than refusing — corrected, and the original reasoning
 for refusing was wrong in a way that decided the design.** The first version
@@ -1776,3 +1778,33 @@ that is the division of labour between the two, and the test has to honour it.
 allocation is real and is worth nothing at the one measured workload: a registry
 taking 19 reads a minute pays about a microsecond a minute. Removing the guard
 from that path would trade a load-bearing safety property for a rounding error.
+
+## The README was a day behind, and a table row pointed at a section that did not exist
+
+Found while checking whether `main` and the latest tag disagree — which they do,
+about `MutateAsync` — and looking for the same kind of staleness elsewhere.
+
+Four things, and three of them are the failure this record keeps finding in
+another form: **a claim about a thing, written from a reading rather than from a
+check.**
+
+- `go get github.com/apsis-io/velocity@v0.4.0`, two minor versions stale.
+- The field-use section put Periapsis on `v0.4.0` and breeze on
+  `v0.5.0-rc.1`. Both pin `v0.5.1`. It also claimed a version was *deployed*,
+  which is a fact this repository cannot check — the pin is visible in a go.mod,
+  what runs on a cluster is not — so that claim is now stated as the pin, with
+  the rest marked as not-knowable-from-here.
+- The `ownership` section said a conflicting access is "never waited out, so
+  nothing in the package can deadlock", which stopped being true when
+  `MutateAsync` started queueing. It now says what is true: `View` and `Mutate`
+  never wait.
+- A table row added during that same pass linked to `#traits`, and **no `traits`
+  section existed** — a new anchor pointing at nothing, added while fixing the
+  other stale claims.
+
+None of this would fail a test, a build, or a linter, which is the point. The
+public face of the library described a library that had stopped being accurate
+somewhere around `ErrGaveUp`, and the only way it was found was by looking for
+the one thing already known to be wrong and asking what else was in the same
+category. **A grep for the known-stale claim is a search for its siblings**, and
+the first sibling found was a broken link introduced in the fixing.
