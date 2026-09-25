@@ -10,7 +10,7 @@ built on Go 1.27 generic methods, with a `go vet` analyzer that catches
 leaked handles before the code runs.
 
 ```sh
-go get github.com/apsis-io/velocity@v0.7.0
+go get github.com/apsis-io/velocity@v0.8.2
 ```
 
 **Status: v0.** Requires Go 1.27. The API is deliberate but young — it has no
@@ -30,7 +30,7 @@ for features. Every design decision and its reasoning is recorded in
 | N tasks or a collection to run concurrently, bounded | [`async`](#async) |
 | many concurrent callers wanting the same expensive result | [`dedupe`](#dedupe) |
 | a flaky dependency to retry or stop calling | [`resilience`](#resilience) |
-| work to start now and be told about later, not waited on | [`traits.Future`](#traits), or `Owner.MutateAsync` |
+| work to start now and be told about later, not waited on | `Runner.Submit`, [`traits.Future`](#traits), or `Owner.MutateAsync` |
 | a condition to poll until it holds, bounded by a context | `resilience.RetryUntil` |
 | a lock whose wait has to be cancellable | `async.Mutex`, `async.RWMutex` |
 | fan-out where the result does not matter | `async.ForEachFuncs` |
@@ -106,6 +106,21 @@ The shapes that pay for themselves:
   `Await`s, which waits for a borrow the callback itself holds. That is a
   caller waiting inside a critical section it owns, and a deadline turns it into
   an error where the caller is already looking.
+
+  A submitted mutation is counted separately from a borrow, and `Release` and
+  `Move` **refuse with `ErrConflict` while one is outstanding**. A submission is
+  not a borrow — no address is exposed and nothing is excluded by it — so
+  without a count of its own, ending a handle was a race the caller could not
+  see: the `Drop` could run while the mutation it exists to clean up after was
+  still queued, surfacing later as a file descriptor that outlives its owner.
+  Ending a handle is therefore a choice — await the mutation and release, or
+  `Seal` to discard it deliberately and have the submission report `ErrSealed`:
+
+  ```go
+  mutation := owner.MutateAsync(ctx, mutate)
+  result, err := mutation.Await(ctx)     // drain, then:
+  err = owner.Release()                  // or owner.Seal() to drop it on purpose
+  ```
 
 Model, invariants, and the "when not to use this" list:
 [`docs/ownership.md`](docs/ownership.md). Full API:
@@ -192,12 +207,32 @@ mirrors the `Map`/`ForEach` pair a collection already has — the common case is
 work whose result is collected somewhere else, and the alternative is writing
 `func(context.Context) (struct{}, error)` and discarding a slice of outcomes.
 
-`ErrGroup.GoCtx` is `Go` with the permit wait bounded by a context, returning
-whether the function was submitted. `Go` blocks for a permit with a plain send,
-which is the right trade for a submitter that has work it must run; a consumer
-reading from a channel is the other case, and with every permit held by a
-function ignoring its own cancellation, a `Go` loop cannot reach its own
-cancellation branch and so never reaches `WaitContext` either.
+`ErrGroup.GoContext` is `Go` with the permit wait bounded by a context, and it
+reports whether the function was submitted. `Go` blocks for a permit with a
+plain send, which is the right trade for a submitter that has work it must run;
+a consumer reading from a channel is the other case, and with every permit held
+by a function ignoring its own cancellation, a `Go` loop cannot reach its own
+cancellation branch and so never reaches `WaitContext` either. False means the
+group was already finished, or finished while the submitter waited — and either
+way the function never ran, so cleanup it was meant to perform belongs in
+`Hooks.OnTaskComplete` rather than inside the function.
+
+`Runner.Submit` is the same idea without the group: start one task, get a
+`*traits.Future[R]` back, ask whenever.
+
+```go
+f := run.Submit(ctx, fetch)      // *traits.Future[Response]
+// ... elsewhere, whenever:
+result, err := f.Await(ctx)      // the work's outcome, or the wait's
+```
+
+Dropping the handle is safe — the work runs and resolves it for anyone watching
+— and a panic or a `runtime.Goexit` in the function arrives as a failed `Result`
+rather than as a dead process, because a submitted task panics somewhere its
+submitter has already left. It is for a handful of tasks written out by hand; a
+collection wants `Map` or `Gather`. Note the Limit does not bound it: a limit
+applies to the tasks of one operation, and a one-task operation has none to
+bound, so `Submit` starts a goroutine per call.
 
 `async.Mutex` and `async.RWMutex` are locks whose acquire waits under the
 caller's context, which `sync.Mutex` and `sync.RWMutex` cannot do. `RWMutex`
@@ -317,6 +352,20 @@ property of the handle, not of the outcome**, so an unresolved `Future` has no
 Giving up on the wait does not give up on the work. It still completes, the
 handle still resolves for anyone watching, and nothing needs cleaning up by
 whoever let go — which is what makes a `Future` droppable without thought.
+
+Two more types are shared for the same reason. `Panic` is what a recovered
+panic becomes — the value and the stack, as an `error` — so a panic in one
+callback of a fan-out is a failed item rather than a dead process, and
+`errors.As` finds it from any package. `ErrCallbackExit` is the neighbouring
+case: a callback that ended without returning (`runtime.Goexit`) reported
+success by every other signal, because the deferred release ran and the
+goroutine simply stopped. `ConfigError` names the option a constructor refused,
+and one definition serves every package, so "which option was refused" reads
+the same everywhere.
+
+`Future` earns its place here by having more than one producer —
+`Owner.MutateAsync` and `Runner.Submit` — which is the bar `Result` cleared
+with `dedupe.DoBatch`.
 
 ## resilience
 
@@ -486,14 +535,17 @@ has tracked each release since, and uses `ownership.Owner` to carry a `Drop`
 through a `failsafeown` chain. It exercises `ownership`, `async` (`Runner.Map`,
 `ErrGroup`, `Mutex`, and now `RWMutex` — deployed to its cluster and measured
 there), `dedupe`, and `failsafeown`, and dropped `conc`, `x/sync/singleflight`
-and `x/sync/errgroup` on the way. It is on `v0.5.1`. What is *running* on its
-cluster may lag the pin; the pin is what this repository can see.
+and `x/sync/errgroup` on the way. It is on `v0.8.2`, the current tag, so it has
+the fix that made a queued mutation visible to `Release`. What is *running* on
+its cluster may lag the pin; the pin is what this repository can see.
 
 **breeze**, a Go daemon, took `resilience` first: four hand-rolled poll loops
 became one `pollUntil` on `RetryUntil`, and the report that prompted
 `RetryUntil` is recorded below. It then adopted `ownership.Scope` for a
 four-branch unwind in `tryBindDaemon`, and measured the cost of that choice. It
-is on `v0.5.1`.
+is on `v0.5.1`, and it takes `velocity/analysis` v0.1.0 as a tool dependency —
+it runs `velocityvet` over its own tree, which is the point of the analyzer
+being a separate module.
 
 Most of what changed in v0.2.0 and v0.3.0 came from the Periapsis port, and the
 reports were measured rather than impressionistic:
@@ -518,7 +570,7 @@ rather than quietly restating them.
 ## Development
 
 ```sh
-just check      # fmt, vet + staticcheck, lint (lostrelease), test, race, velocitydebug
+just check      # fmt, vet + staticcheck, wsl, lint (lostrelease), test, race, velocitydebug, examples
 just fuzz       # ownership state-machine model, 30s
 just bench      # in-module benchmarks
 just bench-compare

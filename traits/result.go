@@ -162,16 +162,25 @@ func (f *Future[R]) Await(ctx context.Context) (Result[R], error) {
 	}
 }
 
-// ErrInvalidConfig is the shared cause for a rejected option. Packages alias
-// it — `ownership.ErrInvalidConfig`, `dedupe.ErrInvalidConfig` — so a caller
-// writes `errors.Is(err, <their package>.ErrInvalidConfig)` and gets the same
-// value either way, which is what lets one error type serve three packages
-// without a per-package wrapper to undo it.
+// ErrInvalidConfig is the shared cause for a rejected option. Every package
+// that takes one aliases it — `ownership.ErrInvalidConfig`,
+// `dedupe.ErrInvalidConfig`, `pool.ErrInvalidConfig` — so a caller writes
+// `errors.Is(err, <their package>.ErrInvalidConfig)` and gets the same value
+// either way, and a caller matching this one directly gets one answer across
+// all of them.
+//
+// The aliasing is the point, so a package that grows an option-taking
+// constructor has to alias rather than declare: a second sentinel for the same
+// condition is invisible to every check written against the first, and it fails
+// only where nobody was looking. pool did exactly that, and the check that
+// caught it is in pool's own test.
 var ErrInvalidConfig = errors.New("invalid configuration")
 
 // ConfigError reports a rejected option. One definition serves every package
 // whose options are named, so "which option was refused" is answered the same
-// way everywhere.
+// way everywhere — including pool, where what is refused is a Config field
+// rather than an element of an option list, and which is the same thing under
+// a different spelling.
 //
 // It is deliberately not the same type as TraitError, which describes a
 // composition failure rather than an option: they have different fields and

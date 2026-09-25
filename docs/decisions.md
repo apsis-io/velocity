@@ -1425,25 +1425,66 @@ speculation. If the models are unified onto it, that entry can be rewritten with
 the migration in it; if a third model arrives and still hand-rolls its
 encoding, this was the wrong answer and the reckoning above should be reopened.
 
-## ErrGroup.GoContext is GoCtx (decided)
+## ErrGroup.GoContext, with GoCtx kept as a deprecated alias (decided)
 
-Renamed. `GoContext` is `GoCtx` across the API, the tests, the benchmarks, the
-fuzz model and this record.
+Renamed, in the direction the first rename went backwards. `GoContext` is the
+name across the API, the tests, the benchmarks, the fuzz model, the README and
+this record; `GoCtx` stays as a three-line method that forwards to it, marked
+`Deprecated:`.
 
-The name is shorter and the doc comment that justifies it reads better with the
-shorter name in it, which is the whole of the case. It is a pre-v1 rename on a
-method two consumers have read and one is about to build against, so it was
-done while that consumer had not started rather than after.
+**The inconsistency, which is why this was reversed.** The rest of the package
+spells the suffix out: `WaitContext`, `Semaphore.Acquire(ctx)`,
+`RWMutex.Lock(ctx)`, `dedupe.WithBaseContext`, `traits.Future.Await(ctx)`. So
+`GoCtx` sat beside `WaitContext`, and the doc comment for one named the other in
+the same sentence — *"`Go` blocks for the permit … and so never reaches
+`WaitContext` either"* — so the package had two spellings for one idea in the
+one place a reader is most likely to see both. The first rename's own case, that
+the name is shorter, was not worth that. Shortening `WaitContext` instead was
+the other consistent ending and remains available; it is a larger break for a
+method with more call sites, and the direction that puts the odd name on the
+older method was the wrong one to take while the newer one is the one under
+discussion.
 
-**The cost, which is a naming inconsistency this record should not pretend is
-absent.** The rest of the package spells the suffix: `WaitContext`,
-`Semaphore.Acquire(ctx)`, `RWMutex.Lock(ctx)`, `dedupe.WithBaseContext`. So
-`GoCtx` now sits beside `WaitContext`, and the doc comment for one names the
-other in the same sentence — the package has both spellings for the same idea.
-Renaming `WaitContext` to `WaitCtx` would make the pair consistent and is a
-larger break for a method with more call sites; leaving it makes `GoCtx` the
-odd one. Neither is free, and the choice is the author's. Recorded here so the
-next reader is not left to infer that one of the two is a typo.
+**Why an alias rather than a break.** `GoCtx` shipped in v0.7.0 and in every
+v0.8.x tag, so removing it breaks a caller over a word count — and the pre-v1
+argument for the first rename ("do it before the second consumer starts")
+turns out to be the argument for the alias, not for the break: that consumer
+now builds against `GoContext`, so the old spelling costs it nothing while
+keeping the rename non-breaking for anyone who has not been renamed yet. This is
+the same shape as `dedupe.Singleflight`, which is an exact alias of `Group` for
+readers who know the pattern by its other name, and the same rule the repo
+follows for `NewSingleflight`: an alias is for the name, not a second
+implementation.
+
+**What the alias costs, stated rather than assumed.** A deprecated name is still
+a name, and a forwarding method is a second thing a future edit can touch. So
+the cost is not zero and the mitigation is structural rather than a promise:
+`GoCtx` has no body of its own, so it cannot drift from `GoContext` unless
+someone reimplements it, which is a larger edit than the rename it would be
+undoing. And the docs name only the canonical spelling — `GoCtx` is not
+mentioned in the README or in the `Go` doc, so a reader arriving fresh never
+sees two names and never has to guess which is current. That is the difference
+between an alias and an inconsistency: the inconsistency was visible in the
+documentation, and this is not.
+
+**The guard, because a promise about an alias needs one.** `GoCtx` delegating
+is checkable, and the check is a parity table rather than a set of behaviour
+tests: each case runs on two identical groups, one called through each name,
+and the two must agree on the boolean, on how many times the hook fired, and on
+what `Wait` collected. Every case in it already passes against `GoContext`
+alone, which is the point — a behaviour test would pass whether or not the alias
+existed. What parity catches is the plausible future edit, an "optimisation"
+that answers `true` for a submission it did not make or forwards the boolean
+while dropping the report of a submission that never ran, either of which breaks
+a contract no single-name test is watching. It was checked by mutation: making
+the alias return `true` for a context that was already done fails it, with the
+two outcomes printed side by side.
+
+The rule this leaves behind, which is the generalisation and not just the case:
+**a rename goes the way the package already spells things, and a name that has
+shipped gets an alias rather than a break unless the break is the point.** The
+first half is what caught this; the second is why it cost three lines instead of
+a major-version bump.
 
 ## ownership is not a mutex, and a consumer found that the hard way (documented)
 
@@ -1730,6 +1771,32 @@ fifteen-odd `Close` sites, declined the rest with reasons, and explicitly
 reported the migration as clean on the strength of their lock test rather than
 on the strength of `lostrelease` — which proved nothing about it. A migration
 reported clean by a checker that never looked is a claim about nothing.
+
+**Added later, after a consumer asked whether the exclusion was stale: the case
+they most wanted covered is not this analyzer's to cover either.** They had hit
+three discarded `OnRelease` calls where a *failed enrolment* means the resource
+is never released at all — the scope was closed and the enrolment was not, so
+checking `Close` would never have found it. That failure is real and it is worth
+naming precisely, because it is not the shape `//velocity:acquires` describes.
+The directive means *this call returns a handle the caller must release exactly
+once*. `Scope.Own`, `OwnCloser` and `OnRelease` return an `error` and no handle:
+they transfer a resource into the scope, and the thing that leaks when their
+error is discarded is the **value**, not a handle. There is nothing for the
+analyzer to track and nothing for it to report at the acquisition, because
+nothing was acquired — the call failed.
+
+So the check that catches it is an unchecked-error check, which is what
+`errcheck` with a scoped rule set is, and which that consumer had already built
+for their own tree by the time they asked. The division of labour is the right
+one and worth stating as such: this repository marks its own handle-returning
+functions, and a **consumer** configures which of its own calls must be checked.
+A library cannot enforce that on a caller's behalf, and a second analyzer here
+would be solving a problem the consumer had already solved with the right tool.
+
+The honest limitation, stated once so the next reader does not have to derive it:
+**velocity cannot mark these functions for anything**, so a discarded enrolment
+error is caught only if that consumer has put `Scope.OnRelease` in its
+must-check set. Nothing in this repository will ever catch it for them.
 
 ## The //lint:ignore directives in this repository suppress nothing (corrected)
 
@@ -2128,3 +2195,336 @@ The trait-shaped one is now `traits.TraitError`, and that is a rename rather
 than a merge: it has an `Index` and names a trait, and folding it into a type
 whose `Index` is always -1 would mean a field that lies in one of its two uses.
 The distinction is now in the names, which is where a reader looks.
+
+## The ConfigError consolidation covered three packages, and there were four (implemented)
+
+`pool` had its own `ConfigError{Field, Reason}` and its own `ErrInvalidConfig`
+sentinel, formatting as `pool config Max: pool max must be positive`. It is the
+same concept under a different noun, and it survived because the entry above
+reasoned about the three types it could see in `ownership`, `dedupe` and
+`traits` rather than about every package in the repository that takes an
+option.
+
+**Why it is a defect rather than a style difference.** That entry's whole
+argument was that a caller can write one check:
+
+    errors.Is(err, traits.ErrInvalidConfig)
+
+For `ownership` and `dedupe` that was true. For `pool` it was **false**, against
+a sentinel with the same name and the same meaning. So the check was right in
+three places and wrong in one, and the wrong one is the place a caller writes
+once and runs everywhere. A duplicate sentinel is not a duplicate type: it is a
+check that fails silently, in exactly the direction the consolidation existed
+to remove — and it failed *open*, since a caller seeing a false negative adds a
+special case rather than suspecting the library.
+
+**`Field` became `Option`, and the message lost its prefix.** The field rename
+is the real cost, because a `Config` field is not an element of an option list.
+The thing being refused is the same in both cases — a named thing the caller set
+and the package would not accept — so one name for it is right, and the
+alternative is a `Kind` field that is empty for three of four users, which is
+the "a field that lies in one of its uses" that `TraitError` was renamed to
+avoid. The message is now `option "Max": pool max must be positive`; the
+package is still named in every `Reason`, so a log line keeps its attribution
+without carrying the prefix.
+
+**This is the second time a consolidation was reasoned about per type in the
+packages under discussion rather than per package in the repository.** The
+panic consolidation left a third copy behind; this left a whole package out.
+The completion criterion is a command rather than an argument, and it is now
+in the `ErrInvalidConfig` doc so the next package to add an option-taking
+constructor runs it:
+
+    rg -n 'ErrInvalidConfig' --glob '!*_test.go' .
+    # one declaration, three aliases — anything else is a second sentinel
+
+**No consumer is affected, which is the only reason this was a rename rather
+than an addition.** Census by import path across every local tree: `pool` is
+imported by none of them. Periapsis uses `async`, `dedupe`, `ownership` and
+`failsafeown`; breeze uses `resilience` and `ownership`; the evaluation harness
+uses `async` and `resilience`. So `ce.Field` stops compiling for nobody, and
+that is a fact about today's trees rather than a licence — the same reasoning
+the v0.8.2 tag entry used, and it cuts the same way.
+
+## traits.Future had one producer, so the second one is Runner.Submit (implemented)
+
+Asked why `Future` was in `traits` when the census said it had one producer, the
+answer was checked rather than assumed: `Owner.MutateAsync` was the only thing
+in the repository that constructed one, and no consumer named the type. `Result`
+had two producers in two packages. So `Result` cleared the bar this repository
+sets for keeping an abstraction — *"a named use case with a visible second
+instance, rather than a speculation"*, from the `failsafeown` entry — and
+`Future` sat beside it in `traits` without clearing it, which is a claim about
+shared vocabulary that the code did not support.
+
+The second instance was not hard to name, because **every other work-starting
+operation in the repository blocks**: `dedupe.Do`, `DoShared` and `DoBorrowed`,
+`Gather`, `Map`, `ForEach`, `Retry`, `Hedge`, `pool.Get`. `async` is the package
+whose job is starting work, and the vocabulary for started-but-unfinished
+existed, but there was no way to submit one thing and get a handle:
+`GoContext` and `TryGo` return a `bool` that says *whether it was submitted* and
+nothing about what it produced, so a caller wanting one result out of four had
+to block for four or hand-roll the channel. `Submit` closes that:
+
+    run.Submit(ctx, fn) *traits.Future[R]
+
+**A limit does not apply to it, and that is a property of the Runner this entry
+did not expect to have to state.** A `Limit` bounds the tasks of a *single
+operation*: `Gather` and `race` each build their own permit channel, so two
+concurrent calls on one Runner each get the full limit rather than sharing one.
+A one-task operation therefore has nothing to bound, and `Submit` starts a
+goroutine per call. Giving it a permit of its own would have cost an allocation
+and communicated a bound that does not exist.
+
+The alternative — a Runner that owns its permits, so a limit means the same
+thing across operations — was rejected, and the reason is the deadlock it
+creates rather than its size. A `Gather` called from inside a task of another
+`Gather` on the same Runner at a limit of one would deadlock: the inner call
+would wait for a permit the outer call is holding. Today that cannot happen,
+which is the same no-reentrancy property `ownership` gets from refusing a
+conflicting borrow instead of queueing. Making the limit global would trade a
+documented non-property for a convenient one, and a package that argues for
+refusal over waiting everywhere else does not get to buy deadlock with a
+spelling change.
+
+**Submit recovers where Gather does not, and the asymmetry is the asynchrony.**
+A Gather task that panics takes the process down at the call site, where the
+submitter and the stack are both present. A Submit task panics later, in a
+goroutine the submitter has already left, so it is recovered into a
+`*traits.Panic` — and a `runtime.Goexit` becomes `traits.ErrCallbackExit`. A
+handle that never resolves is the failure this avoids, and it is a bad one:
+every awaiter's timeout would be reported as the work's failure, which is the
+one thing `Await` promises not to do. Checked by mutation rather than asserted:
+removing the recover does not merely fail the test, it prints `panic: boom` and
+takes the test binary with it, which is the failure the doc describes.
+
+**The hook fires before the handle resolves.** `Gather` gives the stronger order
+already — a returned slice means every hook has run — and matching it is what
+makes `await` then read what the hook recorded something other than a race. The
+cost is that a hook which panics leaves the handle unresolved, which is
+unreachable: a panic on this goroutine has nothing above it that could recover.
+The counting test awaits rather than sleeping, for the same reason.
+
+**A duplicate of the permit wait was removed rather than added.** `Gather` and
+`ErrGroup.GoContext` each had their own `select` over a permit channel with a
+conditional clock read, and `Submit` wanted the same thing. Rather than write a
+third, the two became `Runner.acquire` and a `since` helper beside it, and both
+callers now go through it. The completion criterion is the same one the
+`ConfigError` entry adopted: a consolidation is finished when a search for the
+concept returns one definition.
+
+    rg -n 'permits <- struct' async/
+    async/runner.go:173    acquire — the blocking, ctx-bounded wait
+    async/errgroup.go:115  Go's bare send, with no context to bound it
+    async/errgroup.go:249  TryGo's non-blocking form
+    async/gather.go:195    race, taken inside the task's own goroutine
+    async/semaphore.go:46  Semaphore.Acquire — a different type's permits
+    async/semaphore.go:62  Semaphore's Try form
+
+Six sites, and the argument is that only two of them were ever the same
+operation. `acquire` is the one place a Runner's permit is waited for under a
+caller's context, and both of its callers now go through it. The other four are
+different operations rather than duplicates: a send with no context to bound it,
+a send that must not block, a send from inside the goroutine that is waiting for
+a completion, and a channel belonging to a type that is not a Runner.
+
+**Measured, and the measurement says less than it looks.** `Submit` end to end
+is ~1.3 µs and 224 B in 3 allocations, dominated by the goroutine and the
+cross-goroutine handoff. The hook variant is indistinguishable from the plain
+one across ten runs — 1231–1327 ns against 1134–1381 ns, identical allocations
+— so the conditional clock read that `Map` and `ErrGroup` both bother with is
+**not measurable at this granularity**. It is kept because the pattern is right
+and the cost is provably zero when nobody is listening, not because it showed up
+in a benchmark. Recorded because a future reader finding no difference here
+should not conclude the guard is unnecessary.
+
+## A task that ended without returning was reported as a success, in three places at once (implemented)
+
+Found by a reviewer reading a diff, whose stated premise was wrong and whose
+correction of that premise is what found this. It is recorded here in that order
+because the wrong premise is the interesting half.
+
+**The reasoning that was wrong.** I justified `Submit` recovering panics by
+saying a `Gather` task panics "at the call site, where the submitter and the
+stack are both present", and a `Submit` task panics later, somewhere its
+submitter has left. `Gather` runs every task in a spawned goroutine, so a
+panicking `Gather` task is an unrecovered panic in a foreign goroutine that
+kills the process exactly where `Submit`'s would. Call-site presence explained
+nothing.
+
+**The ground that actually holds**, and which I had already written two
+sentences later: a Future promises to resolve, so every exit path must resolve
+it. `Gather` makes no such promise, so it may let a panic escape. The asymmetry
+is real; the argument for it was not.
+
+**And the wrong premise hid a live defect.** `runtime.Goexit` unwinds a
+goroutine without returning, so anything written *after* the call is skipped.
+All three collection operations recorded their outcome that way. Measured, not
+argued:
+
+    Gather   a Goexit task's slot kept the zero Outcome — Err nil, Value zero,
+             and Index zero, since the whole struct was never written. So a task
+             that never came back was indistinguishable from a successful
+             task 0. Gather returned a nil error.
+    Map      the item's slot kept a zero value with no error, and a worker that
+             stopped took every item it would have claimed next with it. Those
+             stranded items were filed with context.Cause(ctx), which is nil for
+             a context nobody cancelled. The result was
+
+                 got=[10 0 0 0]  err=item 2: <nil>
+                                         item 3: <nil>
+
+             which is the worst of the three: a non-nil error wrapping nothing,
+             where errors.Is, errors.As and the log message all say nothing
+             while `if err != nil` insists something failed.
+    Race     the completion was never sent, so the collector waited on something
+             no amount of waiting produces — still blocked after 500ms with no
+             context done. Bounded, because the caller's context ends it, and
+             then it reports the CONTEXT's cause. A refusal reported as
+             somebody else's reason, which is the same defect the queued
+             ownership mutation had, one package over.
+
+**Reachable from ordinary test code.** `t.Fatal` and `t.FailNow` call
+`runtime.Goexit`, so a task that asserts and stops takes its whole worker with
+it. This is a common Go mistake, and here it was silent: a test suite could
+report a passing fan-out for a task that never ran.
+
+**The fix is the same shape in all three** — record the outcome in a `defer` so
+it happens on every exit, and mark a task that did not return as
+`traits.ErrCallbackExit`. The defers deliberately **do not call `recover`**.
+Calling it would swallow the panic and change `Gather`'s documented behaviour;
+not calling it means a panicking task still takes the process down, and whatever
+the defer writes on the way out is unobservable. `Map` needed more than a defer:
+its per-item work became a method, because a `defer` inside the dispatch loop
+would run once per *worker* rather than once per item, and it is the worker that
+a Goexit takes.
+
+**Cost, measured, and it is not nothing.** `Map`'s hot path gained a deferred
+recording per item. Six runs each, before and after, with `Gather` as an
+unchanged control to show the machine was steady:
+
+    Map    8 items   3730 ns -> 3960 ns    +6.2%    1464 B -> 1592 B
+    Map 1024 items  33800 ns -> 41750 ns   +23.5%    9592 B -> 9720 B
+    Gather (control) 5318 ns -> 5360 ns     flat
+
+That is about **7.8 ns per item**, which is the price of a deferred closure, and
+it buys the difference between a reported failure and a fabricated success. The
+allocation count is unchanged in both cases; the extra bytes are a fixed
+per-call frame, not a per-item one. Recorded because a 23% figure on a
+published benchmark deserves to be on the record next to the reason for it, and
+because the alternative — leaving a task that never ran reported as a task that
+ran — is not a trade anyone would accept at any price.
+
+`Gather` took the same defer and moved **−0.9%** at 1024 tasks, which is noise:
+a goroutine spawn per task is three orders of magnitude more than 8 ns, so the
+defer disappears inside it. That asymmetry is the argument for the trade in one
+line — the cost lands on the operation that does not spawn, and vanishes on the
+one that does.
+
+**Every published figure that moved was re-measured, not patched.** The
+comparison tables in `benchmarks/README.md` quote `Map` and `Gather` against
+`conc` and `errgroup`, and two prose claims were resting on them: that `Map` was
+"within ~8% of conc at 1024 items" (now ~31%, and the whole of that difference
+is this defer), and that it was "~25x faster than `Gather`" (that was never
+reproducible — the benchmarks module's gather arm is fixed at 8 tasks, so the
+figure came from the root module's, where it measures ~20x before the change and
+~16x after). Re-running the comparison rather than editing one row is the whole
+reason the `Limited(4)` overhead claim moved from ~50% to ~38% as well, which
+is a number nobody had touched today and which turned out to be stale.
+
+**Each fix was mutation-checked**, because a test that cannot fail is worse than
+no test:
+
+    Gather no longer marks the exit      Gather = <nil>, want ErrCallbackExit
+    Map's stranded items wrap nil        item 2 carries <nil>, want ErrCallbackExit
+    Race only sends when it returned     Race is still waiting for a completion
+
+**The rule this leaves behind.** An operation that reports an outcome must
+report it on **every** exit path, and `runtime.Goexit` is an exit path that no
+compiler warns about and no `err` ever mentions. It is the third instance of the
+same shape in this repository — after the queued mutation that reported its
+context's cause, and the `Goexit` callback in `MutateAsync` that reported
+success. The common factor is a goroutine this package owns whose work ends
+without a value arriving, and the cost of getting it wrong is that the package
+reports a *reason* rather than a *fact*, which is the one thing an error channel
+exists to avoid.
+
+## A reviewer's premise correction, and three things it changed (implemented)
+
+The `Goexit` entry above was found by a peer reviewing the `Submit` diff, and
+the sentence that found it was a correction to my own reasoning rather than a
+report. Three things came out of the round, and the first is the one worth
+keeping.
+
+**The argument for not recovering in `Gather` is better than the one I gave.**
+I said a panic there is fatal because that is `Gather`'s documented behaviour.
+The stronger form: a task panic unwinds through the **caller's own frame**,
+because the caller is joined at `Wait`, so it *is* at the call site in the one
+sense that was ever true — and a crash there is more useful than a stack filed
+in a slice the caller may never read. Calling `recover` would convert a
+programmer error into a value in a slot nobody will ever observe, and move the
+package from failing at the join to failing eventually, which is the one
+direction this package does not trade toward. So `Gather` records a `Goexit`
+and still crashes on a panic, and the difference is the point rather than an
+inconsistency: **a `Goexit` is cooperative** — a test framework calls it on
+purpose, and the goroutine still runs its defers, so its outcome is knowable —
+**and a panic is a bug**, which gets the crash.
+
+**The cheaper fix, named and rejected, because it is the one a future
+optimisation would find.** `Map` needs a defer per item, and per-item defers
+cost ~8 ns. There is a way to avoid all of them: notice the dead worker from the
+claimed counter alone, which the stranded block already does, and record only
+the items that were never claimed. It is cheaper and it is wrong twice — the
+dying item is the one whose failure a caller most needs named, and its slot
+would sit at zero while its neighbours got honest errors. Recorded so the next
+reader optimising this finds the reasoning rather than re-deriving it and
+getting it wrong.
+
+**Two sentinels, because one of them was a lie.** A reviewer's point, and it is
+the naming rule this repository already wrote down for `ConfigError` — *the name
+says which is which* — applied to a place I had not checked. `traits.ErrCallbackExit`
+asserts that **a callback ran and then ended without returning**. An item that
+no worker ever claimed asserts the opposite: no callback was entered at all.
+Reporting it as `ErrCallbackExit` said a worker that died had run a callback
+which then vanished, and it made the joined error unable to distinguish the two
+things that end a dispatch loop:
+
+    traits.ErrCallbackExit  a callback ended through runtime.Goexit — a test
+                            asserting inside a task, which is cooperative, and
+                            the item's own outcome is known
+    async.ErrWorkerExit     a worker stopped before claiming this item, so the
+                            item never ran; there is no outcome because there
+                            was no attempt
+
+`errors.Is` is the only channel that reaches the caller, so the distinction has
+to be in the sentinels. This is an added export at v0, and it earns one by the
+same standard `Future` did: the first caller of `Map`'s failure path is the
+consumer, and it cannot choose a response to an infrastructure failure if both
+arrive wearing the same name.
+
+**And the reviewer's own test gap, which was mine by inheritance.** The hooks
+test asserted that a task that exited *fired* the hook, and not *what it heard
+about it* — so a hook reporting a nil error for a failed task passed. That is a
+real defect shape, not a theoretical one: an `OnTaskComplete` bucketed by
+outcome would file a task failure under success. The assertion is in, and it is
+mutation-checked by breaking only the hook's argument, which the outcome
+assertion does not catch:
+
+    the report for task 1 is {index:1 label:exited err:<nil>}, want ErrCallbackExit
+
+It also had to stop assuming report order, since the hook runs in each task's
+own goroutine and the exited task is the one most likely to arrive first.
+
+**Cooperation, recorded because it changed the outcome.** Two peer reviews this
+session each found something I had not, one of them a live three-function
+defect. The second review's own delivered artefact — a drift check for the
+published benchmark table — found two errors in its first draft rather than
+reporting them as passing, which is the behaviour that makes a check worth
+having. And the review recommended wiring it CI-only on the grounds that a guard
+which false-positives on a developer's `just check` gets bypassed once and takes
+its real refusal with it. That reasoning is sound and **it does not transfer to
+this repository's CI**, which is the reason it is not wired in: the benchmarks
+job already says it does not take numbers from CI machines because they are too
+noisy. A 15% band on a GitHub-hosted runner is a coin flip. The check stays
+opt-in, and the next question for that job is whether a scheduled, quieter
+window is worth more than a wider band on every push.

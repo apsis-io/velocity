@@ -80,8 +80,8 @@ func (r *Runner) ErrGroup(ctx context.Context) (*ErrGroup, context.Context) {
 // is Limited so that the Limit bounds goroutines, not just running work. A
 // function that obtains its permit after the group context is already
 // cancelled is not run: the group is failing and its result could not
-// change that. Go blocks for the permit regardless, as x/sync does; GoCtx
-// is Go for a submitter that must be able to give up on that wait.
+// change that. Go blocks for the permit regardless, as x/sync does;
+// GoContext is Go for a submitter that must be able to give up on that wait.
 //
 // Because a function may not run, cleanup it was meant to perform for
 // state set up before Go is not performed either. Register such cleanup in
@@ -129,7 +129,7 @@ func (g *ErrGroup) Go(fn func(context.Context) error) {
 	g.start(fn, waited)
 }
 
-// GoCtx is Go with the permit wait bounded by ctx, and it reports whether
+// GoContext is Go with the permit wait bounded by ctx, and it reports whether
 // fn was submitted. False means the group was already finished, or finished
 // while the submitter waited, and fn never ran.
 //
@@ -146,7 +146,7 @@ func (g *ErrGroup) Go(fn func(context.Context) error) {
 //
 // ctx bounds the wait for a permit and nothing else. fn still receives the
 // group context, which is the one Wait and cancellation speak about.
-func (g *ErrGroup) GoCtx(ctx context.Context, fn func(context.Context) error) bool {
+func (g *ErrGroup) GoContext(ctx context.Context, fn func(context.Context) error) bool {
 	if ctx == nil {
 		if g.run == nil {
 			g.record(-1, &TaskError{Index: -1, Cause: ErrNilReceiver})
@@ -168,36 +168,21 @@ func (g *ErrGroup) GoCtx(ctx context.Context, fn func(context.Context) error) bo
 		return false
 	}
 
-	var waited time.Duration
+	waited, ok := g.run.acquire(ctx, g.permits)
+	if !ok {
+		g.skipped(waited)
 
-	if g.permits != nil {
-		var start time.Time
-		if g.run.hooks.OnTaskComplete != nil {
-			start = time.Now()
-		}
+		return false
+	}
 
-		select {
-		case g.permits <- struct{}{}:
-		case <-ctx.Done():
-			if !start.IsZero() {
-				waited = time.Since(start)
-			}
+	// A permit taken is not yet a permit kept: the group can finish while the
+	// submitter was parked on it, and a function that starts after that would
+	// run against a dead context.
+	if g.permits != nil && g.ctx.Err() != nil {
+		<-g.permits
+		g.skipped(waited)
 
-			g.skipped(waited)
-
-			return false
-		}
-
-		if !start.IsZero() {
-			waited = time.Since(start)
-		}
-
-		if g.ctx.Err() != nil {
-			<-g.permits
-			g.skipped(waited)
-
-			return false
-		}
+		return false
 	}
 
 	g.start(fn, waited)
@@ -205,8 +190,19 @@ func (g *ErrGroup) GoCtx(ctx context.Context, fn func(context.Context) error) bo
 	return true
 }
 
+// GoCtx is GoContext under its earlier name.
+//
+// Deprecated: use [ErrGroup.GoContext]. The package spells the suffix
+// consistently — Semaphore.Acquire, RWMutex.Lock, WithBaseContext, Future.Await —
+// and the short form left GoCtx beside WaitContext in the same sentence. Kept
+// because it shipped in v0.7.0 and v0.8.x, and because a rename that breaks a
+// caller for a word count is not worth it.
+func (g *ErrGroup) GoCtx(ctx context.Context, fn func(context.Context) error) bool {
+	return g.GoContext(ctx, fn)
+}
+
 // admissible reports whether a submission is well formed, recording the
-// error for one that is not. Both Go and GoCtx start here, so a malformed
+// error for one that is not. Both Go and GoContext start here, so a malformed
 // submission is reported the same way whichever was called.
 func (g *ErrGroup) admissible(fn func(context.Context) error) bool {
 	if g.run == nil {

@@ -16,6 +16,27 @@ var (
 	ErrClosed       = errors.New("async group closed")
 	ErrNilReceiver  = errors.New("nil async receiver")
 	ErrNilOption    = errors.New("nil async option")
+
+	// ErrWorkerExit reports an item no worker ever claimed, because the worker
+	// that would have claimed it stopped first. It is deliberately NOT
+	// traits.ErrCallbackExit, which asserts the opposite: that a callback ran
+	// and then ended without returning. Two things end a dispatch loop, and a
+	// caller responds to them differently.
+	//
+	//	traits.ErrCallbackExit  a callback ended through runtime.Goexit — a
+	//	                        test asserting inside a task, which is
+	//	                        cooperative and leaves a goroutine that still
+	//	                        ran its defers. The item's own outcome is known.
+	//	ErrWorkerExit           a worker stopped, so the item was never claimed
+	//	                        and its function never ran at all. There is no
+	//	                        outcome, because there was no attempt.
+	//
+	// Reporting both as ErrCallbackExit said a worker that died had run a
+	// callback which then vanished, which is the part that is simply untrue —
+	// and it made the joined error unable to distinguish an infrastructure
+	// failure from a test's own t.Fatal. errors.Is is the only channel that
+	// survives to the caller, so the distinction has to be in the sentinels.
+	ErrWorkerExit = errors.New("async worker exited before claiming the item")
 )
 
 // TaskError identifies a runner or a task that cannot execute. It is

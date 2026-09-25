@@ -7,6 +7,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/apsis-io/velocity/traits"
 )
 
 // Map applies fn to every item concurrently and returns the results in input
@@ -84,24 +86,7 @@ func (r *Runner) Map[T, R any](ctx context.Context, items []T, fn func(context.C
 					return
 				}
 
-				var err error
-				if hook == nil {
-					// Per-item clock reads are most of the dispatch cost, so
-					// they are paid only when someone is listening.
-					results[i], err = fn(ctx, items[i])
-				} else {
-					waited := time.Since(start)
-					runStart := time.Now()
-					results[i], err = fn(ctx, items[i])
-					hook(i, "", waited, time.Since(runStart), err)
-				}
-
-				if err != nil {
-					var zero R
-
-					results[i] = zero
-					failures.add(i, err)
-				}
+				r.mapItem(ctx, results, &failures, i, items[i], fn, start, hook)
 			}
 		})
 	}
@@ -111,7 +96,19 @@ func (r *Runner) Map[T, R any](ctx context.Context, items []T, fn func(context.C
 	// Every index below next was claimed and therefore ran; the counter can
 	// overshoot by one per worker that raced past the end.
 	if claimed := min(int(next.Load()), len(items)); claimed < len(items) {
+		// Two things strand items, and they are not the same answer. A
+		// cancelled context has a cause worth reporting. A worker that stopped
+		// does not — and context.Cause is nil for a context nobody cancelled,
+		// so taking it unconditionally files an ItemError whose Err field is
+		// nil: a non-nil error that wraps nothing, where errors.Is, errors.As
+		// and the log message all say nothing while `if err != nil` insists
+		// something failed. ErrWorkerExit rather than ErrCallbackExit, because
+		// these items never ran: no callback was entered, let alone exited.
 		cause := context.Cause(ctx)
+		if cause == nil {
+			cause = ErrWorkerExit
+		}
+
 		waited := time.Since(start)
 
 		for i := claimed; i < len(items); i++ {
@@ -124,6 +121,72 @@ func (r *Runner) Map[T, R any](ctx context.Context, items []T, fn func(context.C
 	}
 
 	return results, failures.join()
+}
+
+// mapItem runs fn for one item and records the outcome.
+//
+// It is a method rather than a block so that each item gets its own defer:
+// a defer inside the dispatch loop would run once per *worker* rather than
+// once per item, and a runtime.Goexit takes the whole worker with it.
+//
+// The recording happens in that defer, so an item whose function ends without
+// returning is recorded as ErrCallbackExit rather than left as a zero result
+// with no error beside it. The defer does not call recover, so a panicking
+// item still takes the process down — deliberate, and the same rule Gather
+// follows.
+func (r *Runner) mapItem[T, R any](
+	ctx context.Context,
+	results []R,
+	failures *itemErrors,
+	i int,
+	item T,
+	fn func(context.Context, T) (R, error),
+	start time.Time,
+	hook func(int, string, time.Duration, time.Duration, error),
+) {
+	var (
+		value    R
+		err      error
+		waited   time.Duration
+		duration time.Duration
+		returned bool
+	)
+
+	defer func() {
+		if !returned {
+			var zero R
+
+			value, err = zero, traits.ErrCallbackExit
+		}
+
+		results[i] = value
+
+		if err != nil {
+			var zero R
+
+			results[i] = zero
+			failures.add(i, err)
+		}
+
+		if hook != nil {
+			hook(i, "", waited, duration, err)
+		}
+	}()
+
+	if hook == nil {
+		// Per-item clock reads are most of the dispatch cost, so they are paid
+		// only when someone is listening.
+		value, err = fn(ctx, item)
+		returned = true
+
+		return
+	}
+
+	waited = time.Since(start)
+	runStart := time.Now()
+	value, err = fn(ctx, item)
+	duration = time.Since(runStart)
+	returned = true
 }
 
 // ForEach is Map for a function that produces only an error. The returned

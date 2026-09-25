@@ -1,6 +1,9 @@
 package async
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Limit makes bounded versus unbounded execution explicit.
 type Limit struct {
@@ -142,4 +145,44 @@ func (r *Runner) validTasks(n int, run func(int) bool) error {
 
 func validTasks[T any](r *Runner, tasks []Task[T]) error {
 	return r.validTasks(len(tasks), func(i int) bool { return tasks[i].Run != nil })
+}
+
+// acquire takes one permit, waiting no longer than ctx. It reports how long the
+// wait was and whether a permit was taken; a false means ctx ended first, and
+// the caller must not run anything.
+//
+// permits is nil for an Unlimited runner, which admits without waiting, so the
+// unlimited case costs a nil check rather than a send.
+//
+// The clock is read only when a hook is installed to receive the answer, since
+// the reads are otherwise cost with no reader. Map makes the same trade for the
+// same reason, and this is the shared form of it: Gather and ErrGroup.GoContext
+// both waited for a permit this way, and a third copy for a third caller is how
+// two of them drift apart.
+func (r *Runner) acquire(ctx context.Context, permits chan struct{}) (waited time.Duration, ok bool) {
+	if permits == nil {
+		return 0, true
+	}
+
+	var start time.Time
+	if r.hooks.OnTaskComplete != nil {
+		start = time.Now()
+	}
+
+	select {
+	case permits <- struct{}{}:
+		return since(start), true
+	case <-ctx.Done():
+		return since(start), false
+	}
+}
+
+// since is the time from a start, or zero when the clock was never read because
+// nothing was listening for the answer.
+func since(start time.Time) time.Duration {
+	if start.IsZero() {
+		return 0
+	}
+
+	return time.Since(start)
 }

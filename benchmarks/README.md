@@ -83,10 +83,10 @@ median of -count=5
 
 | | ns/op | B/op | allocs/op |
 |---|---|---|---|
-| errgroup | 3689 | 856 | 35 |
-| velocity `Unlimited` | 4723 | 1880 | 19 |
-| velocity `Limited(4)` | 6995 | 1992 | 20 |
-| hunch | 8451 | 1960 | 34 |
+| errgroup | 3467 | 856 | 35 |
+| velocity `Unlimited` | 4443 | 1496 | 19 |
+| velocity `Limited(4)` | 6123 | 1608 | 20 |
+| hunch | 8343 | 1960 | 34 |
 
 **ErrGroup** (8 functions, first-error semantics)
 
@@ -99,9 +99,9 @@ median of -count=5
 
 | | 8 items ns/op | 1024 items ns/op | B/op at 1024 | allocs/op |
 |---|---|---|---|---|
-| errgroup pool | 3304 | 28863 | 8992 | 20 |
-| conc `MapErr` | 3257 | 33614 | 8592 | 16 |
-| velocity `Map` | 4026 | 35502 | 9592 | 20 |
+| errgroup pool | 3226 | 28439 | 8992 | 20 |
+| conc `MapErr` | 3232 | 32748 | 8592 | 16 |
+| velocity `Map` | 3991 | 42872 | 9720 | 20 |
 
 **dedupe backends**, all three workloads (ns/op, median of 5)
 
@@ -157,19 +157,36 @@ context, which cost ~250 ns per contended permit and bought only an earlier
 return for a submitter stuck behind functions that ignore cancellation —
 which x/sync does not offer either.
 
-**`Map` is within ~8% of conc at 1024 items, and cancellable where conc is
+**`Map` trails conc by ~31% at 1024 items, and is cancellable where conc is
 not.** All three arms dispatch the same way — a fixed pool pulling indices from
 an atomic counter — and all three now write a bare `R` per item. An earlier
 `Map` wrote a 48-byte `Outcome` per item so a caller could learn which items
 failed, and trailed conc by 1.6x for it; failures are the rare case, so they
 now travel out of band as one `*ItemError` per failure in the joined error,
 and the success path touches only the result slot. Per-item clock reads for
-`Hooks` are skipped when no hook is set. Against `Gather` over the same
-collection the comparison is not close: `Map` is ~25x faster at 1024 items with
-constant allocations, because `Gather` spawns one goroutine per task and `Map`
-does not.
+`Hooks` are skipped when no hook is set.
 
-**`Limited(4)` costs ~50% over `Unlimited`** for 8 trivial tasks. The permit
+**That 31% is not all design, and ~8% of it is a bug fix.** `Map` used to
+record an item's outcome by writing it after the call, which silently skipped
+any item whose function ended through `runtime.Goexit` — so a task that never
+ran was reported as a task that returned a zero value, and a worker that stopped
+took the items it would have claimed next with it. Recording happens in a
+`defer` now, once per item, which measures at about **7.8 ns per item**:
+33.3 µs → 42.9 µs at 1024 items on this machine, with `Gather` unchanged as a
+control. Before the fix `Map` was within ~8% of conc; it is the defer, and
+nothing else, that moved it to ~31%. Paying 8 ns an item to stop the package
+reporting a success that did not happen is the right side of that trade, and the
+number is here so the trade is visible rather than assumed. See the entry in
+[`docs/decisions.md`](../docs/decisions.md).
+
+Against `Gather` over the same collection the comparison is not close: `Map` is
+~16x faster at 1024 items with constant allocations, because `Gather` spawns
+one goroutine per task and `Map` does not. (That ratio was ~20x before the same
+defer landed in `Gather`, where it is absorbed by a goroutine spawn and is
+invisible at −0.9%. The comparison above is from the root module's
+`BenchmarkMapVersusGather`, which is the only one that runs both at 1024.)
+
+**`Limited(4)` costs ~38% over `Unlimited`** for 8 trivial tasks. The permit
 channel is not free. With real task bodies that overhead is amortized away, but
 bounding concurrency is not a no-op and should be a deliberate choice.
 

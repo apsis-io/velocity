@@ -77,13 +77,13 @@ func BenchmarkMapVersusGather(b *testing.B) {
 	}
 }
 
-// BenchmarkErrGroupGoVersusGoCtx measures what bounding the permit wait
+// BenchmarkErrGroupGoVersusGoContext measures what bounding the permit wait
 // costs a submitter whose permit is free, which is the case most submissions
 // are. The contended case is where the documented ~250 ns applies, but it does
 // not isolate in a benchmark: holding a permit needs a holder, and releasing it
 // needs a timer, so the measurement is dominated by the holder rather than by
 // the select.
-func BenchmarkErrGroupGoVersusGoCtx(b *testing.B) {
+func BenchmarkErrGroupGoVersusGoContext(b *testing.B) {
 	work := func(context.Context) error { return nil }
 
 	b.Run("Go", func(b *testing.B) {
@@ -97,7 +97,7 @@ func BenchmarkErrGroupGoVersusGoCtx(b *testing.B) {
 			_ = eg.Wait()
 		}
 	})
-	b.Run("GoCtx", func(b *testing.B) {
+	b.Run("GoContext", func(b *testing.B) {
 		run, _ := async.New(async.Limited(8))
 		ctx := context.Background()
 
@@ -105,8 +105,48 @@ func BenchmarkErrGroupGoVersusGoCtx(b *testing.B) {
 
 		for b.Loop() {
 			eg, _ := run.ErrGroup(ctx)
-			eg.GoCtx(ctx, work)
+			eg.GoContext(ctx, work)
 			_ = eg.Wait()
+		}
+	})
+}
+
+// BenchmarkSubmit measures the whole life of a submitted task — submit, run,
+// resolve, and the Await that collects it — rather than the submission alone.
+// A benchmark that stopped at Submit would be measuring a function whose
+// result nobody uses, and Submit is only worth its cost if the handle is cheap
+// enough to hand back.
+//
+// The hook variant is the interesting half: the timing around fn is paid only
+// when a hook is installed, and a task that is asynchronous has no caller
+// waiting at the return to absorb that cost.
+func BenchmarkSubmit(b *testing.B) {
+	work := func(context.Context) (int, error) { return 1, nil }
+
+	b.Run("no hooks", func(b *testing.B) {
+		run, _ := async.New(async.Limited(8))
+		ctx := context.Background()
+
+		b.ReportAllocs()
+
+		for b.Loop() {
+			f := run.Submit(ctx, work)
+			_, _ = f.Await(ctx)
+		}
+	})
+	b.Run("task complete hook", func(b *testing.B) {
+		run, _ := async.New(async.Limited(8), async.WithHooks(async.Hooks{
+			OnTaskComplete: func(_ int, _ string, waited, duration time.Duration, _ error) {
+				asyncHookSink = waited + duration
+			},
+		}))
+		ctx := context.Background()
+
+		b.ReportAllocs()
+
+		for b.Loop() {
+			f := run.Submit(ctx, work)
+			_, _ = f.Await(ctx)
 		}
 	})
 }

@@ -3,6 +3,7 @@ package async_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -273,12 +274,12 @@ func TestErrGroupHooksSeeEachFunction(t *testing.T) {
 	}
 }
 
-// TestErrGroupGoCtxGivesUpOnAHeldPermit is the regression for the
+// TestErrGroupGoContextGivesUpOnAHeldPermit is the regression for the
 // measured gap: a stream consumer's permit wait has to be bounded, because a
 // function that ignores its own cancellation can hold every permit for as long
 // as it likes. With Go, a submitter behind one of those cannot reach its own
 // cancellation branch, and so never reaches WaitContext either.
-func TestErrGroupGoCtxGivesUpOnAHeldPermit(t *testing.T) {
+func TestErrGroupGoContextGivesUpOnAHeldPermit(t *testing.T) {
 	eg, _ := runner(t, async.Limited(1)).ErrGroup(context.Background())
 
 	held := make(chan struct{})
@@ -294,26 +295,26 @@ func TestErrGroupGoCtxGivesUpOnAHeldPermit(t *testing.T) {
 
 	done := make(chan bool, 1)
 	go func() {
-		done <- eg.GoCtx(ctx, func(context.Context) error { ran = true; return nil })
+		done <- eg.GoContext(ctx, func(context.Context) error { ran = true; return nil })
 	}()
 
 	select {
 	case submitted := <-done:
 		if submitted {
-			t.Fatal("GoCtx submitted a function with no permit free")
+			t.Fatal("GoContext submitted a function with no permit free")
 		}
 
 		if ran {
 			t.Fatal("the function ran")
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("GoCtx did not return; the permit wait is unbounded")
+		t.Fatal("GoContext did not return; the permit wait is unbounded")
 	}
 }
 
-// TestErrGroupGoCtxSubmitsWhenAPermitArrives is the other half: bounding
+// TestErrGroupGoContextSubmitsWhenAPermitArrives is the other half: bounding
 // the wait must not cost a submission that would have run.
-func TestErrGroupGoCtxSubmitsWhenAPermitArrives(t *testing.T) {
+func TestErrGroupGoContextSubmitsWhenAPermitArrives(t *testing.T) {
 	// Two permits, one of them held, so one is free to be taken.
 	eg, _ := runner(t, async.Limited(2)).ErrGroup(context.Background())
 	release := make(chan struct{})
@@ -323,9 +324,9 @@ func TestErrGroupGoCtxSubmitsWhenAPermitArrives(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	submitted := eg.GoCtx(ctx, func(context.Context) error { return nil })
+	submitted := eg.GoContext(ctx, func(context.Context) error { return nil })
 	if !submitted {
-		t.Fatal("GoCtx = false, want a submission while a permit was free")
+		t.Fatal("GoContext = false, want a submission while a permit was free")
 	}
 
 	close(release)
@@ -372,7 +373,7 @@ func TestErrGroupHookReportsSubmissionThatNeverRan(t *testing.T) {
 	ran := false
 	never := func(context.Context) error { ran = true; return nil }
 	eg.Go(never)
-	eg.GoCtx(context.Background(), never)
+	eg.GoContext(context.Background(), never)
 
 	if eg.TryGo(never) {
 		t.Fatal("TryGo submitted a function to a finished group")
@@ -398,10 +399,10 @@ func TestErrGroupHookReportsSubmissionThatNeverRan(t *testing.T) {
 	}
 }
 
-func TestErrGroupGoCtxValidation(t *testing.T) {
+func TestErrGroupGoContextValidation(t *testing.T) {
 	eg, _ := runner(t, async.Unlimited).ErrGroup(context.Background())
 	//lint:ignore SA1012 a nil context is exactly what is under test
-	if eg.GoCtx(nil, func(context.Context) error { return nil }) {
+	if eg.GoContext(nil, func(context.Context) error { return nil }) {
 		t.Fatal("nil ctx submitted a function")
 	}
 
@@ -410,11 +411,117 @@ func TestErrGroupGoCtxValidation(t *testing.T) {
 	}
 
 	eg, _ = runner(t, async.Unlimited).ErrGroup(context.Background())
-	if eg.GoCtx(context.Background(), nil) {
+	if eg.GoContext(context.Background(), nil) {
 		t.Fatal("nil fn submitted a function")
 	}
 
 	if err := eg.Wait(); !errors.Is(err, async.ErrNilTask) {
 		t.Fatalf("nil fn = %v", err)
 	}
+}
+
+// goOutcome is everything a caller can observe about one submission: the
+// boolean the method returns, how many tasks the hook heard about, and what
+// Wait collected. Compared as a unit, so an alias that got one of the three
+// wrong still fails rather than passing on the two it happened to match.
+type goOutcome struct {
+	accepted bool
+	fired    int
+	waitErr  string
+}
+
+// TestGoCtxIsGoContext pins the deprecated spelling to the one it names.
+//
+// The check is parity rather than behaviour, and that is deliberate: each case
+// below already passes against GoContext on its own, so the only thing being
+// tested is whether the two names are the same method. A shim that answered
+// true without submitting would pass every test GoContext has, and one that
+// submitted without reporting a submission that never ran would break the
+// Hooks contract without breaking a boolean.
+func TestGoCtxIsGoContext(t *testing.T) {
+	live := func(*testing.T) context.Context { return context.Background() }
+
+	expired := func(*testing.T) context.Context {
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		t.Cleanup(cancel)
+
+		return ctx
+	}
+
+	cancelled := func(*testing.T) context.Context {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		return ctx
+	}
+
+	absent := func(*testing.T) context.Context { return nil }
+
+	for _, tt := range []struct {
+		name  string
+		limit async.Limit
+		ctx   func(*testing.T) context.Context
+	}{
+		// Two permits, one of them held by a function that never returns, so a
+		// submission can be taken.
+		{"a free permit", async.Limited(2), live},
+		// One permit, held: the bounded wait has to give up on it.
+		{"a held permit", async.Limited(1), expired},
+		{"a context already done", async.Limited(2), cancelled},
+		{"a nil context", async.Limited(2), absent},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			want := submitThrough(t, tt.limit, tt.ctx, (*async.ErrGroup).GoContext)
+			got := submitThrough(t, tt.limit, tt.ctx, (*async.ErrGroup).GoCtx)
+
+			if got != want {
+				t.Errorf("GoCtx = %+v, GoContext = %+v", got, want)
+			}
+		})
+	}
+}
+
+// submitThrough runs one submission on a fresh group, calling it through the
+// given method expression, and reports what the caller could observe. The
+// submitted function succeeds and does nothing, so the submission is the only
+// thing that can differ between two runs of the same case.
+func submitThrough(
+	t *testing.T,
+	limit async.Limit,
+	ctx func(*testing.T) context.Context,
+	submit func(*async.ErrGroup, context.Context, func(context.Context) error) bool,
+) goOutcome {
+	t.Helper()
+
+	var (
+		mu    sync.Mutex
+		fired int
+	)
+
+	hooks := async.Hooks{OnTaskComplete: func(_ int, _ string, _, _ time.Duration, _ error) {
+		mu.Lock()
+		fired++
+		mu.Unlock()
+	}}
+
+	eg, _ := runner(t, limit, async.WithHooks(hooks)).ErrGroup(context.Background())
+
+	held := make(chan struct{})
+
+	eg.Go(func(context.Context) error { <-held; return nil })
+
+	// A nil context reaches submit through a variable, so the call below is not
+	// a literal nil argument and needs no SA1012 suppression of its own.
+	accepted := submit(eg, ctx(t), func(context.Context) error { return nil })
+
+	// The holder has to go before Wait, which blocks on it. Released here
+	// rather than deferred because Wait is inside this function.
+	close(held)
+
+	waitErr := eg.Wait()
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	return goOutcome{accepted: accepted, fired: fired, waitErr: fmt.Sprint(waitErr)}
 }

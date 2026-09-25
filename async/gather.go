@@ -5,6 +5,8 @@ import (
 	"errors"
 	"sync"
 	"time"
+
+	"github.com/apsis-io/velocity/traits"
 )
 
 // Outcome identifies one source task and its terminal result.
@@ -18,6 +20,16 @@ type Outcome[T any] struct {
 // Gather executes every task and returns outcomes in source-index order,
 // with every error joined. Take and Last are recipes over the returned
 // slice, not separate operations.
+//
+// **A task that ends through runtime.Goexit is recorded as
+// traits.ErrCallbackExit, and a task that panics still takes the process
+// down.** The two are treated differently on purpose. A Goexit is
+// cooperative — a test asserting inside a task calls it deliberately — and
+// leaves a goroutine that ran its defers, so its outcome is knowable. A panic
+// is a bug, and the caller is joined at Wait below, so the unwind passes
+// through the caller's own frame: a panic in a task *is* at the call site in
+// the one sense that was ever true, and crashing there is more useful than
+// filing a stack in a slice the caller may never read.
 func (r *Runner) Gather[T any](ctx context.Context, tasks ...Task[T]) ([]Outcome[T], error) {
 	if err := validTasks(r, tasks); err != nil {
 		return nil, err
@@ -42,21 +54,13 @@ func (r *Runner) Gather[T any](ctx context.Context, tasks ...Task[T]) ([]Outcome
 	// plan over a large collection would then hold thousands of parked
 	// goroutines. Blocking the submitting goroutine is the backpressure.
 	for i, task := range tasks {
-		var waited time.Duration
+		waited, ok := r.acquire(ctx, permits)
+		if !ok {
+			// Neither this task nor any after it will start.
+			r.cancelRemaining(tasks, outcomes, i, waited, context.Cause(ctx))
+			wg.Wait()
 
-		if permits != nil {
-			waitStart := time.Now()
-
-			select {
-			case permits <- struct{}{}:
-				waited = time.Since(waitStart)
-			case <-ctx.Done():
-				// Neither this task nor any after it will start.
-				r.cancelRemaining(tasks, outcomes, i, time.Since(waitStart), context.Cause(ctx))
-				wg.Wait()
-
-				return outcomes, joinedErrors(outcomes)
-			}
+			return outcomes, joinedErrors(outcomes)
 		}
 
 		wg.Go(func() {
@@ -64,14 +68,41 @@ func (r *Runner) Gather[T any](ctx context.Context, tasks ...Task[T]) ([]Outcome
 				defer func() { <-permits }()
 			}
 
-			runStart := time.Now()
-			value, err := task.Run(ctx)
-			duration := time.Since(runStart)
+			var (
+				value    T
+				err      error
+				duration time.Duration
+				returned bool
+			)
 
-			outcomes[i] = Outcome[T]{Index: i, Label: task.Label, Value: value, Err: err}
-			if hook := r.hooks.OnTaskComplete; hook != nil {
-				hook(i, task.Label, waited, duration, err)
-			}
+			// The outcome is written in a defer rather than after the call, so
+			// that a task ending through runtime.Goexit is recorded instead of
+			// skipped. A Goexit unwinds the goroutine without returning, so the
+			// slot kept the zero Outcome — Err nil, Value zero, and an Index of
+			// zero, which is indistinguishable from a successful first task.
+			// That is reachable from ordinary test code, since t.Fatal and
+			// t.FailNow call Goexit.
+			//
+			// The defer does not call recover, so a panicking task still takes
+			// the process down, which is deliberate here: whatever this writes
+			// on the way out is unobservable.
+			defer func() {
+				if !returned {
+					var zero T
+
+					value, err = zero, traits.ErrCallbackExit
+				}
+
+				outcomes[i] = Outcome[T]{Index: i, Label: task.Label, Value: value, Err: err}
+				if hook := r.hooks.OnTaskComplete; hook != nil {
+					hook(i, task.Label, waited, duration, err)
+				}
+			}()
+
+			runStart := time.Now()
+			value, err = task.Run(ctx)
+			duration = time.Since(runStart)
+			returned = true
 		})
 	}
 
@@ -194,7 +225,35 @@ func race[T any](ctx context.Context, r *Runner, tasks []Task[T], successOnly bo
 
 	for i, task := range tasks {
 		wg.Go(func() {
-			var waited time.Duration
+			var (
+				value    T
+				err      error
+				waited   time.Duration
+				duration time.Duration
+				returned bool
+			)
+
+			// The completion is sent in a defer, which is the whole reason this
+			// loop cannot be written the obvious way. A task ending through
+			// runtime.Goexit never reached the send, so the collector below sat
+			// waiting for a completion that was never coming — blocked on
+			// something no amount of waiting produces, until the caller's context
+			// ended and Race reported the CONTEXT's cause. A refusal reported as
+			// somebody else's reason is the defect this repository already wrote
+			// up once, in a queued ownership mutation.
+			defer func() {
+				if !returned {
+					var zero T
+
+					value, err = zero, traits.ErrCallbackExit
+				}
+
+				completions <- Outcome[T]{Index: i, Label: task.Label, Value: value, Err: err}
+
+				if hook := r.hooks.OnTaskComplete; hook != nil {
+					hook(i, task.Label, waited, duration, err)
+				}
+			}()
 
 			if permits != nil {
 				waitStart := time.Now()
@@ -205,28 +264,17 @@ func race[T any](ctx context.Context, r *Runner, tasks []Task[T], successOnly bo
 
 					defer func() { <-permits }()
 				case <-ctx.Done():
-					err := context.Cause(ctx)
-
-					outcome := Outcome[T]{Index: i, Label: task.Label, Err: err}
-					completions <- outcome
-
-					if hook := r.hooks.OnTaskComplete; hook != nil {
-						hook(i, task.Label, time.Since(waitStart), 0, err)
-					}
+					err = context.Cause(ctx)
+					returned = true
 
 					return
 				}
 			}
 
 			runStart := time.Now()
-			value, err := task.Run(ctx)
-
-			outcome := Outcome[T]{Index: i, Label: task.Label, Value: value, Err: err}
-			completions <- outcome
-
-			if hook := r.hooks.OnTaskComplete; hook != nil {
-				hook(i, task.Label, waited, time.Since(runStart), err)
-			}
+			value, err = task.Run(ctx)
+			duration = time.Since(runStart)
+			returned = true
 		})
 	}
 

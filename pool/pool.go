@@ -44,11 +44,11 @@ type Pool[T any] struct {
 // New validates cfg and returns an empty pool. Resources are made on demand.
 func New[T any](cfg Config[T]) (*Pool[T], error) {
 	if cfg.New == nil {
-		return nil, &ConfigError{Field: "New", Reason: ownership.ErrNilOption}
+		return nil, &ConfigError{Option: "New", Reason: ownership.ErrNilOption}
 	}
 
 	if cfg.Max <= 0 {
-		return nil, &ConfigError{Field: "Max", Reason: ErrInvalidMax}
+		return nil, &ConfigError{Option: "Max", Reason: ErrInvalidMax}
 	}
 
 	return &Pool[T]{cfg: cfg, permits: make(chan struct{}, cfg.Max)}, nil

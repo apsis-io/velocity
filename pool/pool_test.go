@@ -11,6 +11,7 @@ import (
 
 	"github.com/apsis-io/velocity/ownership"
 	"github.com/apsis-io/velocity/pool"
+	"github.com/apsis-io/velocity/traits"
 )
 
 // conn is a resource with an identity, so tests can tell reuse from
@@ -85,6 +86,21 @@ func TestNewValidation(t *testing.T) {
 			var ce *pool.ConfigError
 			if !errors.Is(err, tt.want) || !errors.Is(err, pool.ErrInvalidConfig) || !errors.As(err, &ce) {
 				t.Fatalf("error = %v, want %v", err, tt.want)
+			}
+
+			// The sentinel is shared, not merely aliased by name: a caller
+			// matching traits.ErrInvalidConfig across velocity's packages gets
+			// one answer. pool used to define its own value, so this was false
+			// here and true everywhere else, which is the worst shape for a
+			// check written once.
+			if !errors.Is(err, traits.ErrInvalidConfig) {
+				t.Fatalf("error = %v, does not match the shared ErrInvalidConfig", err)
+			}
+
+			// And the named thing is named: a caller that wants to tell the two
+			// refusals apart reads it off the error rather than matching text.
+			if ce.Option == "" {
+				t.Fatalf("error = %v, names no option", err)
 			}
 		})
 	}
