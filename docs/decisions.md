@@ -2064,3 +2064,26 @@ distinguished the two. The same hazard applies to `Result`, `Hooks`,
 'apsis-io/velocity/\w+"'` finds the users; `rg '\bGather\('` finds the word.
 Today those are different sets, and the second one is not evidence about this
 library.
+
+Sized, because "prefer it" would imply a tie and there is no tie. A consumer
+counted six of velocity's symbols in their own tree both ways:
+
+| symbol | name-hits | files importing velocity and using it |
+|---|---|---|
+| `Outcome` | 355 | 0 |
+| `Result` | 188 | 0 |
+| `Hooks` | 16 | 1 |
+| `Gather` | 8 | 0 |
+| `Counters` | 8 | 0 |
+| `Task` | 4 | 0 |
+
+**Four of the six return a number that is confidently wrong**, and `Gather` was
+caught only because it is small enough to spot-check by hand. The other five are
+ordinary Go — error returns, Kubernetes status types, test names — and nearly all
+of it has nothing to do with this library. `Result` at 188 and `Outcome` at 355
+are not noisy searches to be tuned; they measure a different program.
+
+Which is worth saying plainly, because this record was assembled by grepping
+names all day: **a count of the word is not a count of the thing**, and that
+error has a shape — it was the "ten sites" figure, and it is whatever a
+name-census produces.
