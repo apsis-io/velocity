@@ -62,11 +62,11 @@ func NewRWMutex() *RWMutex { return &RWMutex{} }
 //velocity:acquires
 func (m *RWMutex) RLock(ctx context.Context) (*Permit, error) {
 	if m == nil {
-		return nil, &PlanError{Index: -1, Cause: ErrNilRunner}
+		return nil, &TaskError{Index: -1, Cause: ErrNilReceiver}
 	}
 
 	if ctx == nil {
-		return nil, &PlanError{Index: -1, Cause: ErrNilContext}
+		return nil, &TaskError{Index: -1, Cause: ErrNilContext}
 	}
 
 	for {
@@ -99,11 +99,11 @@ func (m *RWMutex) RLock(ctx context.Context) (*Permit, error) {
 //velocity:acquires
 func (m *RWMutex) Lock(ctx context.Context) (*Permit, error) {
 	if m == nil {
-		return nil, &PlanError{Index: -1, Cause: ErrNilRunner}
+		return nil, &TaskError{Index: -1, Cause: ErrNilReceiver}
 	}
 
 	if ctx == nil {
-		return nil, &PlanError{Index: -1, Cause: ErrNilContext}
+		return nil, &TaskError{Index: -1, Cause: ErrNilContext}
 	}
 	// Counted once, and decremented on the way out however the loop leaves —
 	// otherwise a Lock that gave up would keep new readers blocked forever.

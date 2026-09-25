@@ -2,25 +2,11 @@ package async
 
 import (
 	"context"
-	"fmt"
 	"runtime/debug"
 	"sync"
+
+	"github.com/apsis-io/velocity/traits"
 )
-
-// Panic captures a callback panic and its originating goroutine stack.
-type Panic struct {
-	Value any
-	Stack []byte
-}
-
-func (p *Panic) Error() string { return fmt.Sprintf("panic: %v\n%s", p.Value, p.Stack) }
-func (p *Panic) Unwrap() error {
-	if err, ok := p.Value.(error); ok {
-		return err
-	}
-
-	return nil
-}
 
 // Group owns callback goroutines and propagates the first panic from Wait.
 type Group struct {
@@ -30,7 +16,7 @@ type Group struct {
 	active  int
 	closing bool
 	done    chan struct{}
-	panic   *Panic
+	panic   *traits.Panic
 }
 
 // Go starts f unless the group is closing or closed.
@@ -68,7 +54,7 @@ func (g *Group) Go(f func()) error {
 func (g *Group) capture(value any) {
 	g.mu.Lock()
 	if g.panic == nil {
-		g.panic = &Panic{Value: value, Stack: debug.Stack()}
+		g.panic = &traits.Panic{Value: value, Stack: debug.Stack()}
 	}
 	g.mu.Unlock()
 }
@@ -83,7 +69,7 @@ func (g *Group) finish() {
 	g.mu.Unlock()
 }
 
-// Wait blocks for every callback and re-panics with the first captured Panic.
+// Wait blocks for every callback and re-panics with the first captured *traits.Panic.
 func (g *Group) Wait() {
 	g.wg.Wait()
 	g.mu.Lock()

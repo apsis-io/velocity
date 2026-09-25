@@ -8,6 +8,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/apsis-io/velocity/traits"
 )
 
 // ErrGroup runs functions concurrently under a Runner's Limit, keeps the
@@ -20,7 +22,7 @@ import (
 //
 //   - each function receives the group context instead of closing over it;
 //
-//   - a panic is recovered into a *Panic error rather than taking the
+//   - a panic is recovered into a *traits.Panic rather than taking the
 //     process down;
 //
 //   - a function submitted after the group has failed is not run;
@@ -147,12 +149,12 @@ func (g *ErrGroup) Go(fn func(context.Context) error) {
 func (g *ErrGroup) GoCtx(ctx context.Context, fn func(context.Context) error) bool {
 	if ctx == nil {
 		if g.run == nil {
-			g.record(-1, &PlanError{Index: -1, Cause: ErrNilRunner})
+			g.record(-1, &TaskError{Index: -1, Cause: ErrNilReceiver})
 			return false
 		}
 
 		index := g.next()
-		g.record(index, &PlanError{Index: index, Cause: ErrNilContext})
+		g.record(index, &TaskError{Index: index, Cause: ErrNilContext})
 
 		return false
 	}
@@ -208,13 +210,13 @@ func (g *ErrGroup) GoCtx(ctx context.Context, fn func(context.Context) error) bo
 // submission is reported the same way whichever was called.
 func (g *ErrGroup) admissible(fn func(context.Context) error) bool {
 	if g.run == nil {
-		g.record(-1, &PlanError{Index: -1, Cause: ErrNilRunner})
+		g.record(-1, &TaskError{Index: -1, Cause: ErrNilReceiver})
 		return false
 	}
 
 	if fn == nil {
 		index := g.next()
-		g.record(index, &PlanError{Index: index, Cause: ErrNilTask})
+		g.record(index, &TaskError{Index: index, Cause: ErrNilTask})
 
 		return false
 	}
@@ -283,7 +285,7 @@ func (g *ErrGroup) exec(fn func(context.Context) error, index int, waited time.D
 
 	defer func() {
 		if value := recover(); value != nil {
-			err = &Panic{Value: value, Stack: debug.Stack()}
+			err = &traits.Panic{Value: value, Stack: debug.Stack()}
 		}
 
 		if err != nil {

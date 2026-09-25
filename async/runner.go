@@ -18,7 +18,7 @@ var Unlimited = Limit{configured: true, unlimited: true}
 
 func (l Limit) valid() error {
 	if !l.configured || (!l.unlimited && l.value <= 0) {
-		return &PlanError{Index: -1, Cause: ErrInvalidLimit}
+		return &TaskError{Index: -1, Cause: ErrInvalidLimit}
 	}
 
 	return nil
@@ -95,7 +95,7 @@ func New(limit Limit, opts ...Option) (*Runner, error) {
 
 	for _, opt := range opts {
 		if opt == nil {
-			return nil, &PlanError{Index: -1, Cause: ErrNilOption}
+			return nil, &TaskError{Index: -1, Cause: ErrNilOption}
 		}
 
 		if err := opt.apply(r); err != nil {
@@ -122,16 +122,16 @@ func (r *Runner) Limit() Limit { return r.limit }
 
 func (r *Runner) validTasks(n int, run func(int) bool) error {
 	if r == nil {
-		return &PlanError{Index: -1, Cause: ErrNilRunner}
+		return &TaskError{Index: -1, Cause: ErrNilReceiver}
 	}
 
 	if n == 0 {
-		return &PlanError{Index: -1, Cause: ErrNoTasks}
+		return &TaskError{Index: -1, Cause: ErrNoTasks}
 	}
 
 	for i := range n {
 		if !run(i) {
-			return &PlanError{Index: i, Cause: ErrNilTask}
+			return &TaskError{Index: i, Cause: ErrNilTask}
 		}
 	}
 

@@ -39,7 +39,7 @@ func TestNewValidation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := async.New(tt.limit, tt.opts...)
 
-			var pe *async.PlanError
+			var pe *async.TaskError
 			if !errors.Is(err, tt.want) || !errors.As(err, &pe) {
 				t.Fatalf("error = %v, want %v", err, tt.want)
 			}
@@ -106,7 +106,7 @@ func TestTaskValidation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := run.Gather(context.Background(), tt.tasks...)
 
-			var pe *async.PlanError
+			var pe *async.TaskError
 			if !errors.Is(err, tt.want) || !errors.As(err, &pe) {
 				t.Fatalf("Gather error = %v, want %v", err, tt.want)
 			}
@@ -118,7 +118,7 @@ func TestTaskValidation(t *testing.T) {
 	}
 
 	var none *async.Runner
-	if _, err := none.Gather(context.Background(), async.Task[int]{Run: func(context.Context) (int, error) { return 1, nil }}); !errors.Is(err, async.ErrNilRunner) {
+	if _, err := none.Gather(context.Background(), async.Task[int]{Run: func(context.Context) (int, error) { return 1, nil }}); !errors.Is(err, async.ErrNilReceiver) {
 		t.Fatalf("nil Runner = %v", err)
 	}
 }

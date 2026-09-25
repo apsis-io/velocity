@@ -11,7 +11,7 @@ import (
 // Owner.View already permits concurrently.
 func (r *Runner) Broadcast[T, R any](ctx context.Context, input *ownership.Owner[T], workers ...func(context.Context, T) (R, error)) ([]Outcome[R], error) {
 	if input == nil {
-		return nil, &PlanError{Index: -1, Cause: ErrNilOwner}
+		return nil, &TaskError{Index: -1, Cause: ErrNilOwner}
 	}
 
 	if err := r.validTasks(len(workers), func(i int) bool { return workers[i] != nil }); err != nil {

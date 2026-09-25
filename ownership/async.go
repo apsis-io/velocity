@@ -2,34 +2,10 @@ package ownership
 
 import (
 	"context"
-	"fmt"
 	"runtime/debug"
 
 	"github.com/apsis-io/velocity/traits"
 )
-
-// Panic captures a callback panic on a mutation that ran on its own goroutine.
-// The same value is reported for Mutate and MutateAsync, so a caller that
-// recovers the synchronous case can check the asynchronous one.
-//
-// It lives here rather than in traits because what it describes is a callback
-// in this package's contract. The handle that carries it is shared.
-type Panic struct {
-	Value any
-	Stack []byte
-}
-
-func (p *Panic) Error() string {
-	return fmt.Sprintf("ownership: panic in mutation callback: %v\n%s", p.Value, p.Stack)
-}
-
-func (p *Panic) Unwrap() error {
-	if err, ok := p.Value.(error); ok {
-		return err
-	}
-
-	return nil
-}
 
 // MutateAsync is Mutate with the work moved to its own goroutine, and with
 // **admission queued rather than refused**: the write borrow is waited for, and
@@ -146,7 +122,7 @@ func (o *Owner[T]) mutateAsync[R any](ctx context.Context, f *traits.Future[R], 
 				c.mu.Unlock()
 
 				if panicked != nil {
-					f.Complete(zero[R](), &Panic{Value: panicked, Stack: debug.Stack()})
+					f.Complete(zero[R](), &traits.Panic{Value: panicked, Stack: debug.Stack()})
 					return
 				}
 

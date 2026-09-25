@@ -6,33 +6,36 @@ import (
 )
 
 var (
-	ErrInvalidPlan  = errors.New("invalid async plan")
+	ErrInvalidTask  = errors.New("invalid async task")
 	ErrInvalidLimit = errors.New("invalid async limit")
 	ErrNilTask      = errors.New("nil async task")
 	ErrNilOwner     = errors.New("nil async owner")
-	ErrNoTasks      = errors.New("async plan has no tasks")
+	ErrNoTasks      = errors.New("async has no tasks")
 	ErrNilContext   = errors.New("nil async context")
 	ErrNilPipeline  = errors.New("nil async pipeline stage")
 	ErrClosed       = errors.New("async group closed")
-	ErrNilRunner    = errors.New("nil async runner")
+	ErrNilReceiver  = errors.New("nil async receiver")
 	ErrNilOption    = errors.New("nil async option")
 )
 
-// PlanError identifies a runner or task set that cannot execute.
-type PlanError struct {
+// TaskError identifies a runner or a task that cannot execute. It is
+// wrapped in ErrInvalidTask, which is a name the package kept after Plan was
+// removed; the type reports the same condition and no longer names a type
+// that cannot be constructed.
+type TaskError struct {
 	Index int
 	Cause error
 }
 
-func (e *PlanError) Error() string {
+func (e *TaskError) Error() string {
 	if e.Index < 0 {
-		return fmt.Sprintf("async plan: %v", e.Cause)
+		return fmt.Sprintf("async task: %v", e.Cause)
 	}
 
-	return fmt.Sprintf("async plan: task %d: %v", e.Index, e.Cause)
+	return fmt.Sprintf("async task: task %d: %v", e.Index, e.Cause)
 }
 
-func (e *PlanError) Unwrap() []error { return []error{ErrInvalidPlan, e.Cause} }
+func (e *TaskError) Unwrap() []error { return []error{ErrInvalidTask, e.Cause} }
 
 // PipelineError identifies an invalid pipeline stage.
 type PipelineError struct {

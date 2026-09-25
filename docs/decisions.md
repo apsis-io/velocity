@@ -1839,3 +1839,44 @@ somewhere around `ErrGaveUp`, and the only way it was found was by looking for
 the one thing already known to be wrong and asking what else was in the same
 category. **A grep for the known-stale claim is a search for its siblings**, and
 the first sibling found was a broken link introduced in the fixing.
+
+## The exported surface was carrying three things that no longer exist (implemented)
+
+Stopping feature work to solidify the API, and looking at the whole surface with
+`go doc` rather than at the diffs that produced it, found three public names
+describing things the record says were deleted or never were.
+
+**`Plan` is gone; its vocabulary was not.** The DX pass removed it — "it existed
+to validate eagerly and copy tasks for reuse, and nothing reused one" — and there
+is no `type Plan` or `NewPlan` left. But `async` still exported `PlanError`
+("async plan: task N: ..."), `ErrInvalidPlan` ("invalid async plan") and
+`ErrNoTasks` ("async plan has no tasks"). A caller whose `Gather` was handed a
+nil function got a message about a type that cannot be constructed. Now
+`TaskError` and `ErrInvalidTask`, with `ErrNoTasks` keeping its name and losing
+"plan" from its message.
+
+**`ErrNilRunner` was returned for receivers that are not runners.** Four of the
+five sites were wrong on their face: a nil `*Semaphore`, a nil `*Mutex` and two
+nil `*RWMutex` all reported "nil async runner". Someone with a nil `*Semaphore`
+is told the runner is nil — a type they never touched, with total confidence.
+`ErrNilReceiver` fits all five sites, because all five are nil receivers.
+
+**`Panic` existed twice, identically.** `async.Panic` and `ownership.Panic`, both
+`{Value any; Stack []byte}`, one reporting "panic: ..." and the other
+"ownership: panic in mutation callback: ...". A caller recovering a panic from
+either had to handle both, and `errors.As` against one missed the other. One
+`traits.Panic` now, which is where shared vocabulary already lives, and the two
+names are gone rather than aliased — an alias would have left the duplication
+visible under a name that implies it is not duplicated.
+
+The cost of the last one is a prefix: `ownership.Panic` said which callback
+panicked, and the shared type says "panic: ...". Losing the package-specific
+wording is the price of one type, and it is the right trade — a panic carrying
+its own stack does not need the package name to be diagnosable.
+
+**Not changed, and still open:** `Gather(ctx)` with zero tasks returns
+`ErrNoTasks`. That made sense when an empty `Plan` was a configuration error; for
+a v1 API, erroring on an empty fan-out is unfriendly, and `Gather` over nothing
+returning an empty slice and a nil error is what a caller expects. It is the same
+error whose name was stale, so the decision belongs beside the rename, and it was
+not taken here.

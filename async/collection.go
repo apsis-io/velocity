@@ -47,11 +47,11 @@ import (
 //	})
 func (r *Runner) Map[T, R any](ctx context.Context, items []T, fn func(context.Context, T) (R, error)) ([]R, error) {
 	if r == nil {
-		return nil, &PlanError{Index: -1, Cause: ErrNilRunner}
+		return nil, &TaskError{Index: -1, Cause: ErrNilReceiver}
 	}
 
 	if fn == nil {
-		return nil, &PlanError{Index: -1, Cause: ErrNilTask}
+		return nil, &TaskError{Index: -1, Cause: ErrNilTask}
 	}
 
 	results := make([]R, len(items))
@@ -130,7 +130,7 @@ func (r *Runner) Map[T, R any](ctx context.Context, items []T, fn func(context.C
 // error is the same join of *ItemError values.
 func (r *Runner) ForEach[T any](ctx context.Context, items []T, fn func(context.Context, T) error) error {
 	if fn == nil {
-		return &PlanError{Index: -1, Cause: ErrNilTask}
+		return &TaskError{Index: -1, Cause: ErrNilTask}
 	}
 
 	_, err := r.Map(ctx, items, func(ctx context.Context, item T) (struct{}, error) {

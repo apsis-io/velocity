@@ -74,7 +74,7 @@ func TestMapValidation(t *testing.T) {
 	}
 
 	var none *async.Runner
-	if _, err := none.Map(context.Background(), []int{1}, func(context.Context, int) (int, error) { return 0, nil }); !errors.Is(err, async.ErrNilRunner) {
+	if _, err := none.Map(context.Background(), []int{1}, func(context.Context, int) (int, error) { return 0, nil }); !errors.Is(err, async.ErrNilReceiver) {
 		t.Fatalf("nil Runner Map = %v", err)
 	}
 }

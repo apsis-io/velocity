@@ -127,7 +127,7 @@ func TestNilPermitAndNilSemaphoreAreSafe(t *testing.T) {
 	p.Release()
 
 	var sem *async.Semaphore
-	if _, err := sem.Acquire(context.Background()); !errors.Is(err, async.ErrNilRunner) {
+	if _, err := sem.Acquire(context.Background()); !errors.Is(err, async.ErrNilReceiver) {
 		t.Fatalf("nil semaphore = %v", err)
 	}
 

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/apsis-io/velocity/async"
+	"github.com/apsis-io/velocity/traits"
 )
 
 func TestErrGroupFirstErrorCancelsSiblings(t *testing.T) {
@@ -224,7 +225,7 @@ func TestErrGroupRecoversPanicsAsErrors(t *testing.T) {
 	eg.Go(func(context.Context) error { panic("callback") })
 	err := eg.Wait()
 
-	var p *async.Panic
+	var p *traits.Panic
 	if !errors.As(err, &p) || p.Value != "callback" {
 		t.Fatalf("Wait = %v, want Panic", err)
 	}
@@ -243,7 +244,7 @@ func TestErrGroupValidation(t *testing.T) {
 	eg, _ = none.ErrGroup(context.Background())
 	eg.Go(func(context.Context) error { return nil })
 
-	if err := eg.Wait(); !errors.Is(err, async.ErrNilRunner) {
+	if err := eg.Wait(); !errors.Is(err, async.ErrNilReceiver) {
 		t.Fatalf("nil runner = %v", err)
 	}
 }

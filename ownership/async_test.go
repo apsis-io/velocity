@@ -194,12 +194,12 @@ func TestMutateAsyncRecoversAPanicAndReleasesTheBorrow(t *testing.T) {
 
 	// A recovered panic arrives as the returned error too, and stays unwrappable
 	// to the value underneath.
-	var raised *ownership.Panic
+	var raised *traits.Panic
 	if !errors.As(err, &raised) || raised.Value != "callback" {
 		t.Fatalf("Await = %v, want a *Panic carrying the value", err)
 	}
 
-	var p *ownership.Panic
+	var p *traits.Panic
 	if !errors.As(res.Err, &p) || p.Value != "callback" {
 		t.Fatalf("Result.Err = %v, want a *Panic carrying the value", res.Err)
 	}

@@ -22,7 +22,7 @@ type Semaphore struct {
 // NewSemaphore returns a semaphore admitting n holders at once.
 func NewSemaphore(n int) (*Semaphore, error) {
 	if n <= 0 {
-		return nil, &PlanError{Index: -1, Cause: ErrInvalidLimit}
+		return nil, &TaskError{Index: -1, Cause: ErrInvalidLimit}
 	}
 
 	return &Semaphore{permits: make(chan struct{}, n)}, nil
@@ -35,7 +35,7 @@ func NewSemaphore(n int) (*Semaphore, error) {
 //velocity:acquires
 func (s *Semaphore) Acquire(ctx context.Context) (*Permit, error) {
 	if s == nil {
-		return nil, &PlanError{Index: -1, Cause: ErrNilRunner}
+		return nil, &TaskError{Index: -1, Cause: ErrNilReceiver}
 	}
 
 	if err := ctx.Err(); err != nil {
@@ -144,7 +144,7 @@ func NewMutex() *Mutex {
 //velocity:acquires
 func (m *Mutex) Lock(ctx context.Context) (*Permit, error) {
 	if m == nil {
-		return nil, &PlanError{Index: -1, Cause: ErrNilRunner}
+		return nil, &TaskError{Index: -1, Cause: ErrNilReceiver}
 	}
 
 	return m.sem.Acquire(ctx)
