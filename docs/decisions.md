@@ -1135,15 +1135,34 @@ E5-2690 v4, Go 1.27, both arms interleaved in one process):
 
 | | async | sync |
 |---|---|---|
-| uncontended read | 95 ns, 1 alloc | **12 ns, 0 allocs** |
-| uncontended write | 82 ns, 1 alloc | **28 ns, 0 allocs** |
-| contended read x8 | 3860 ns, 33 allocs | **2560 ns, 9 allocs** |
-| contended write x8 | 4250 ns, 33 allocs | **2790 ns, 9 allocs** |
+| uncontended read | 85 ns, 48 B, 1 alloc | **12 ns, 0 allocs** |
+| uncontended write | 86 ns, 48 B, 1 alloc | **27 ns, 0 allocs** |
 
-This is a worse result than `async.Mutex` has, and the difference matters: the
-Mutex is ~4x worse uncontended and ~1.3x *better* under contention, so there is
-a regime where it wins. RWMutex has none. The cancellability is what is being
-bought, and it costs between 1.5x and 9x depending on the shape.
+**Correction: the contended rows in the original version of this entry were
+measuring the harness.** They spawned a goroutine per iteration inside
+`b.Loop`, so each sample included the cost of creating a goroutine and joining
+it — hundreds of nanoseconds against a lock that takes eleven — and the
+conclusion that RWMutex loses under contention was a measurement of `sync.WaitGroup`
+rather than of either lock. Re-measured with the workers started once and looping
+(`BenchmarkRWMutexParallel`), the uncontended figures above hold and the contended
+ones come out at async 351 ns against sync 35 on reads, 177 against 130 on
+writes.
+
+**Even so, do not read the contended direction as settled, because a second
+measurement disagrees with it.** A consumer benchmarking on a different machine
+reports the same magnitude with the signs reversed — sync roughly 11x *slower*
+under contention, at 315 ns against async's 29. Same ratio, opposite conclusion,
+two machines. Under contention an atomic counter and a mutex trade places
+depending on core count, cache topology and how much real parallelism the
+scheduler finds, and none of that transfers between hosts.
+
+**So the portable number is the uncontended one, and it is the one that decides
+a decision.** It reproduces across the two machines — 7.3x here against 8.2x
+there — because uncontended arithmetic does not depend on the host. A consumer
+whose registry serves 19 reads a minute pays about a microsecond a minute for the
+gap, which is why they kept the type despite it: the cost that is not negligible
+is the complexity, and that is paid once and written down. The cancellability is
+what is being bought, and it costs ~7x on the fast path.
 
 **The cost falls on the existing hot path.** `Permit` grew two fields so
 `Release` can tell a read lock from a write lock without a closure:
