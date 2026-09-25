@@ -59,10 +59,17 @@ func (o *Owner[T]) Map[U any](fn func(T) (U, error), opts ...Option[U]) (*Owner[
 
 	o.h.state = handleMoved
 
+	// A queued MutateAsync cannot reach its own cancellation branch while it is
+	// asleep, and nothing else will change this cell again. Without the wake it
+	// sleeps until its context ends and then reports the context's cause, which
+	// is a different failure from the one that happened.
+	c.changedLocked()
+
 	var zero T
 
 	c.value = zero
 	c.mode = modeReleased
+	c.changedLocked()
 	c.mu.Unlock()
 
 	return &Owner[U]{c: &cell[U]{

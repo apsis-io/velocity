@@ -1894,3 +1894,58 @@ reason written where the check is.
 It was taken as its own change rather than folded into the rename above, because a
 behaviour change inside a rename commit is the one a reviewer has to notice, and
 this one is not obvious from the diff.
+
+## Two bugs in MutateAsync, found by asking whether it was correct (implemented)
+
+Asked directly, rather than by diff. Re-reading the loop adversarially found
+two defects, and both had failing tests before the fix and pass in 0.00 s after
+— where before, the first took the full context deadline to report the wrong
+thing.
+
+**A queued mutation whose owner went terminal reported the context's cause.**
+`changedLocked` fired when a borrow ended and when a cell was sealed, but not
+when an owner was released or moved — so a waiter asleep on the broadcast was
+never woken to discover the cell was gone.
+
+The wake was only half of it, and the trace is what showed that. The loop
+treated **every** refusal as "wait for something to change", including a
+terminal one:
+
+	LOOP refused=true   behind the held borrow
+	WOKE                the new broadcast worked
+	LOOP refused=true   refused again — the cell is now released or moved
+	GAVEUP              parked forever waiting for a change that cannot come
+
+A `ReleasedError` is never followed by a change, so parking on it sleeps until
+the context ends and then reports the context's cause — a different failure from
+the one that happened, and one that sends a caller looking at their deadline
+rather than at the owner they released. Both fixes are needed and they are
+different: **the broadcast answers "something changed, look again", and the
+terminal check answers "looking again will not help."** A refusal that is not
+`ErrConflict` is terminal and is reported immediately.
+
+**A callback that called `runtime.Goexit` reported success.** Goexit runs the
+deferred release — so the cell stayed healthy — and then ended the goroutine
+without returning. `recover` saw nothing, so the Future was completed with the
+named return values: a zero value and a nil error, reading as a success for work
+that never happened. A panic becomes `*traits.Panic`; a Goexit was silently the
+opposite.
+
+`dedupe` had this exact problem and had named it — `ErrCallbackExit`, "callback
+exited without returning". It is now `traits.ErrCallbackExit`, beside `Panic`,
+because one concept with two names is the duplication `Panic` was just
+consolidated for. The cost is that dedupe's message loses its package prefix.
+
+**What this says about the review that preceded it.** The queued-admission work
+went through the same scrutiny as the rest — mutation-tested, measured,
+documented, reviewed by a consumer — and still shipped two defects that a
+couple of minutes of reading could not have been found by testing alone. Both are
+about what happens when something goes *terminal*, which is a state the happy
+path and the contention tests both avoid: a test that queues behind a borrow and
+then releases that borrow is a race the waiter usually wins, so the bug only
+appears when the cell dies *first* — which is exactly the shutdown path, and the
+one nobody writes a test for because the process is on its way out.
+
+Two tests pin both, and the queued one is deliberately written so the cell goes
+terminal before the borrow is dropped, which is the ordering that a
+contention-shaped test would never produce by accident.

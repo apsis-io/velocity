@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/apsis-io/velocity/ownership"
+	"github.com/apsis-io/velocity/traits"
 )
 
 type Group[K comparable, V any] struct {
@@ -436,7 +437,7 @@ func (g *Group[K, V]) run(key K, c *call[V], fn func(context.Context) (V, error)
 	var panicErr *PanicError
 	defer func() {
 		if !normal && panicErr == nil {
-			c.err = ErrCallbackExit
+			c.err = traits.ErrCallbackExit
 		}
 
 		c.panicErr = panicErr

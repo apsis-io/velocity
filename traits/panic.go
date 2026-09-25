@@ -1,6 +1,19 @@
 package traits
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
+
+// ErrCallbackExit reports a callback that ended without returning — a
+// runtime.Goexit, which runs the deferred release and then ends the goroutine
+// without recovering and without returning.
+//
+// Without it a callback that never returned is indistinguishable from one that
+// returned the zero value, so the work is reported as a success it did not
+// have. dedupe had this exact problem and named it there; one concept belongs
+// beside Panic rather than in each package that can hit it.
+var ErrCallbackExit = errors.New("callback exited without returning")
 
 // Panic captures a callback panic together with the stack it came from, so a
 // panic that cannot reach its caller — because the caller has already returned

@@ -248,5 +248,10 @@ func (c *cell[T]) beginCountedRelease(h *handle, expected mode) (value T, drop f
 	c.value = zero
 	c.mode = modeReleased
 
+	// The last handle going away is terminal for admission, and a queued
+	// MutateAsync waiting on this cell is asleep rather than polling. See the
+	// note in Move.
+	c.changedLocked()
+
 	return value, c.drop, true, nil
 }

@@ -317,6 +317,12 @@ func (c *cell[T]) beginOwnerRelease(h *handle) (value T, drop func(T) error, fir
 	h.state = handleReleased
 	value = c.value
 
+	// Terminal for admission, and a queued MutateAsync waiting on this cell is
+	// asleep rather than polling — so without the wake it sleeps until its
+	// context ends and then reports the context's cause, which is a different
+	// failure from the one that happened. See the note in Move.
+	c.changedLocked()
+
 	var zero T
 
 	c.value = zero

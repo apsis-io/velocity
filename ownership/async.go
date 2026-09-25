@@ -2,6 +2,7 @@ package ownership
 
 import (
 	"context"
+	"errors"
 	"runtime/debug"
 
 	"github.com/apsis-io/velocity/traits"
@@ -89,10 +90,17 @@ func (o *Owner[T]) mutateAsync[R any](ctx context.Context, f *traits.Future[R], 
 		c.mu.Unlock()
 
 		if admitErr != nil {
-			// Not an error to report: being turned away is what a queue is. A
-			// cell that has been sealed or moved will never admit, so its change
-			// is the only signal a waiter gets — the loop re-reads the state and
-			// `admitWriteLocked` reports the terminal condition itself.
+			// Only a CONFLICT is worth waiting out — being turned away is what a
+			// queue is, and something else will change the answer. A terminal
+			// refusal (released, moved, sealed) is different: no future change
+			// can make this cell admit, so parking on the broadcast would sleep
+			// until the context ended and then report the context's cause —
+			// a different failure from the one that actually happened.
+			if !errors.Is(admitErr, ErrConflict) {
+				f.Complete(zero[R](), admitErr)
+				return
+			}
+
 			select {
 			case <-changed:
 			case <-ctx.Done():
@@ -107,6 +115,7 @@ func (o *Owner[T]) mutateAsync[R any](ctx context.Context, f *traits.Future[R], 
 			r        R
 			err      error
 			panicked any
+			returned bool
 		)
 
 		func() {
@@ -121,17 +130,23 @@ func (o *Owner[T]) mutateAsync[R any](ctx context.Context, f *traits.Future[R], 
 				c.endWriteLocked(&o.h)
 				c.mu.Unlock()
 
-				if panicked != nil {
+				switch {
+				case panicked != nil:
 					f.Complete(zero[R](), &traits.Panic{Value: panicked, Stack: debug.Stack()})
-					return
+				case !returned:
+					// runtime.Goexit. The release above ran, so the cell is
+					// fine, but nothing came back — and reporting the zero
+					// value would be a success the work never had.
+					f.Complete(zero[R](), traits.ErrCallbackExit)
+				default:
+					f.Complete(r, err)
 				}
-
-				f.Complete(r, err)
 			}()
 
 			// The writer flag excludes every other access until the deferred end
 			// above, so the address is exclusive for exactly that long.
 			r, err = fn(&c.value)
+			returned = true
 		}()
 
 		return
