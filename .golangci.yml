@@ -27,13 +27,13 @@ linters:
       - linters: [errcheck]
         path: '_test\.go'
 
-      # async's benchmark file is entirely empty critical sections, which is
-      # the measurement. The file carries //lint:ignore for standalone
-      # staticcheck, which honours it; this tool does not, so it is listed
-      # here as well.
+      # The two RWMutex benchmark files are entirely empty critical sections,
+      # which is the measurement. The //lint:file-ignore at the top of each is
+      # for standalone staticcheck, which honours it; this tool does not, so
+      # they are listed here as well.
       - linters: [staticcheck]
         text: 'SA2001'
-        path: 'async/rwmutex_benchmark_test\.go'
+        path: 'async/rwmutex_(benchmark|contention)_test\.go'
 
       # The nil-context tests exist to check that a nil context is rejected.
       #
