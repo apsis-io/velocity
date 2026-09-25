@@ -36,9 +36,31 @@ So, read the record with this in mind:
 
 - Module: `github.com/apsis-io/velocity`, Go 1.27 only, MIT license held by
   Malformed C, development `Version = "dev"`.
-- No retained or updated upstream clones, hosted CI, external linter,
-  GoReleaser, reflection registry, inheritance framework, or generated API
-  unless repetition later proves generation useful.
+- No retained or updated upstream clones, hosted CI, GoReleaser, reflection
+  registry, inheritance framework, or generated API unless repetition later
+  proves generation useful.
+- **Amended: the exclusion of external linters was too broad, and had already
+  been contradicted before it was written down.** `staticcheck` has been in CI
+  and in the justfile since the first entries in this record, so the line was
+  describing something the repository did not do. It is amended rather than
+  left to be discovered a second time, and the line above now says what the
+  rule actually is.
+- **Two external linters, and why each earned its place.** `staticcheck` for
+  correctness — it caught a suppression written in golangci-lint's directive
+  dialect, which staticcheck does not read, on two release candidates in a row
+  that every other check passed. `wsl` for whitespace: a blank line where a
+  block ends and a new statement group begins, which is the one style rule here
+  that nothing enforced. Both run as a pinned `go run` from the justfile and as
+  a CI step, over the root module and all three submodules, rather than through
+  a linter aggregator — a whole framework to run two binaries is the dependency
+  the rule was protecting against.
+- **`wsl` is pinned to v5.9.0 and the pin is load-bearing.** v4 bundles an
+  `x/tools` too old to read Go 1.27 export data and dies with `package strconv
+  without types` before reporting anything, so a version that looks current
+  silently reports nothing at all. Applied across every module it changed 2321
+  sites over 96 files, of which 2267 were blank lines and 54 merged adjacent
+  `var` declarations into a `var (...)` group — semantically inert in Go, which
+  was verified with the suite, `-race`, and a benchmark rather than assumed.
 - Traits are generic function types, not interfaces. The initial traits are
   Drop and Clone with strict nil validation, ordered Drop error joining,
   sequential Clone short-circuiting, and explicit intermediate cleanup.

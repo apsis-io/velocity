@@ -52,6 +52,16 @@ jobs:
           version: latest
           install-go: false
 
+      # Whitespace style. Pinned to v5: v4 bundles an x/tools too old to read
+      # Go 1.27 export data. Every module, since the root's ./... does not
+      # reach the submodules.
+      - name: wsl
+        run: |
+          go run github.com/bombsimon/wsl/v5/cmd/wsl@v5.9.0 ./...
+          go -C failsafeown run github.com/bombsimon/wsl/v5/cmd/wsl@v5.9.0 ./...
+          go -C analysis run github.com/bombsimon/wsl/v5/cmd/wsl@v5.9.0 ./...
+          go -C benchmarks run github.com/bombsimon/wsl/v5/cmd/wsl@v5.9.0 ./...
+
       # velocity's own analyzer, over both modules that use the library.
       - name: lostrelease
         run: |
