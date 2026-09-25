@@ -23,6 +23,43 @@ func ExampleRunner_Gather() {
 	// two 2
 }
 
+// Submit is the handle form of a fire-and-forget start: one task, written out
+// by hand, whose result is collected whenever the caller gets around to it —
+// including never, which is safe, because the Future resolves without its
+// holder. Three are started here and read in the reverse order they finished,
+// which is the thing a Gather cannot express: the answer arrives when it is
+// asked for, not when the slowest task in a batch happens to land.
+func ExampleRunner_Submit() {
+	run, _ := async.New(async.Unlimited)
+
+	slow := run.Submit(context.Background(),
+		func(ctx context.Context) (string, error) {
+			select {
+			case <-ctx.Done():
+				return "", context.Cause(ctx)
+			case <-time.After(20 * time.Millisecond):
+				return "slow", nil
+			}
+		})
+	fast := run.Submit(context.Background(),
+		func(context.Context) (string, error) { return "fast", nil })
+	bad := run.Submit(context.Background(),
+		func(context.Context) (string, error) { return "", errors.New("no route") })
+
+	// The handles are independent and order-free: read them in any order, or
+	// not at all — a Submit whose handle is dropped still runs to completion.
+	res, _ := bad.Await(context.Background())
+	fmt.Println(res.Err)
+	res, _ = fast.Await(context.Background())
+	fmt.Println(res.Value)
+	res, _ = slow.Await(context.Background())
+	fmt.Println(res.Value)
+	// Output:
+	// no route
+	// fast
+	// slow
+}
+
 func ExampleRunner_Map() {
 	run, _ := async.New(async.Limited(2))
 	squares, err := run.Map(context.Background(), []int{1, 2, 3},
