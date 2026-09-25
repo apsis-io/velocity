@@ -13,14 +13,17 @@ func (r *Runner) Broadcast[T, R any](ctx context.Context, input *ownership.Owner
 	if input == nil {
 		return nil, &PlanError{Index: -1, Cause: ErrNilOwner}
 	}
+
 	if err := r.validTasks(len(workers), func(i int) bool { return workers[i] != nil }); err != nil {
 		return nil, err
 	}
+
 	tasks := make([]Task[R], len(workers))
 	for i, worker := range workers {
 		tasks[i] = Task[R]{Run: func(taskCtx context.Context) (R, error) {
 			return input.View(func(value T) (R, error) { return worker(taskCtx, value) })
 		}}
 	}
+
 	return r.Gather(ctx, tasks...)
 }

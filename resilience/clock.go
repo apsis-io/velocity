@@ -40,8 +40,10 @@ func (realClock) Sleep(ctx context.Context, delay time.Duration) error {
 			return nil
 		}
 	}
+
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
+
 	select {
 	case <-timer.C:
 		return nil

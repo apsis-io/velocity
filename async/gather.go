@@ -27,8 +27,11 @@ func (r *Runner) Gather[T any](ctx context.Context, tasks ...Task[T]) ([]Outcome
 	// would only ever be canceled by its own defer. Passing ctx through keeps
 	// parent cancellation working and avoids allocating one per call.
 	outcomes := make([]Outcome[T], len(tasks))
-	var wg sync.WaitGroup
-	var permits chan struct{}
+
+	var (
+		wg      sync.WaitGroup
+		permits chan struct{}
+	)
 	if !r.limit.unlimited {
 		permits = make(chan struct{}, r.limit.value)
 	}
@@ -40,8 +43,10 @@ func (r *Runner) Gather[T any](ctx context.Context, tasks ...Task[T]) ([]Outcome
 	// goroutines. Blocking the submitting goroutine is the backpressure.
 	for i, task := range tasks {
 		var waited time.Duration
+
 		if permits != nil {
 			waitStart := time.Now()
+
 			select {
 			case permits <- struct{}{}:
 				waited = time.Since(waitStart)
@@ -49,23 +54,29 @@ func (r *Runner) Gather[T any](ctx context.Context, tasks ...Task[T]) ([]Outcome
 				// Neither this task nor any after it will start.
 				r.cancelRemaining(tasks, outcomes, i, time.Since(waitStart), context.Cause(ctx))
 				wg.Wait()
+
 				return outcomes, joinedErrors(outcomes)
 			}
 		}
+
 		wg.Go(func() {
 			if permits != nil {
 				defer func() { <-permits }()
 			}
+
 			runStart := time.Now()
 			value, err := task.Run(ctx)
 			duration := time.Since(runStart)
+
 			outcomes[i] = Outcome[T]{Index: i, Label: task.Label, Value: value, Err: err}
 			if hook := r.hooks.OnTaskComplete; hook != nil {
 				hook(i, task.Label, waited, duration, err)
 			}
 		})
 	}
+
 	wg.Wait()
+
 	return outcomes, joinedErrors(outcomes)
 }
 
@@ -74,11 +85,13 @@ func (r *Runner) Gather[T any](ctx context.Context, tasks ...Task[T]) ([]Outcome
 func (r *Runner) cancelRemaining[T any](tasks []Task[T], outcomes []Outcome[T], first int, waited time.Duration, err error) {
 	for i := first; i < len(tasks); i++ {
 		label := tasks[i].Label
+
 		outcomes[i] = Outcome[T]{Index: i, Label: label, Err: err}
 		if hook := r.hooks.OnTaskComplete; hook != nil {
 			if i > first {
 				waited = 0
 			}
+
 			hook(i, label, waited, 0, err)
 		}
 	}
@@ -86,20 +99,25 @@ func (r *Runner) cancelRemaining[T any](tasks []Task[T], outcomes []Outcome[T], 
 
 func joinedErrors[T any](outcomes []Outcome[T]) error {
 	failed := 0
+
 	for _, outcome := range outcomes {
 		if outcome.Err != nil {
 			failed++
 		}
 	}
+
 	if failed == 0 {
 		return nil
 	}
+
 	errs := make([]error, 0, failed)
+
 	for _, outcome := range outcomes {
 		if outcome.Err != nil {
 			errs = append(errs, outcome.Err)
 		}
 	}
+
 	return errors.Join(errs...)
 }
 
@@ -135,6 +153,7 @@ func funcsToOutcomes(fns []func(context.Context) error) []Task[struct{}] {
 	for i, fn := range fns {
 		out[i].Run = func(ctx context.Context) (struct{}, error) { return struct{}{}, fn(ctx) }
 	}
+
 	return out
 }
 
@@ -152,38 +171,52 @@ func race[T any](ctx context.Context, r *Runner, tasks []Task[T], successOnly bo
 	if err := validTasks(r, tasks); err != nil {
 		return Outcome[T]{}, err
 	}
+
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	completions := make(chan Outcome[T], len(tasks))
-	var wg sync.WaitGroup
-	var permits chan struct{}
+
+	var (
+		wg      sync.WaitGroup
+		permits chan struct{}
+	)
 	if !r.limit.unlimited {
 		permits = make(chan struct{}, r.limit.value)
 	}
+
 	for i, task := range tasks {
 		wg.Go(func() {
 			var waited time.Duration
+
 			if permits != nil {
 				waitStart := time.Now()
+
 				select {
 				case permits <- struct{}{}:
 					waited = time.Since(waitStart)
+
 					defer func() { <-permits }()
 				case <-ctx.Done():
 					err := context.Cause(ctx)
+
 					outcome := Outcome[T]{Index: i, Label: task.Label, Err: err}
 					completions <- outcome
+
 					if hook := r.hooks.OnTaskComplete; hook != nil {
 						hook(i, task.Label, time.Since(waitStart), 0, err)
 					}
+
 					return
 				}
 			}
+
 			runStart := time.Now()
 			value, err := task.Run(ctx)
+
 			outcome := Outcome[T]{Index: i, Label: task.Label, Value: value, Err: err}
 			completions <- outcome
+
 			if hook := r.hooks.OnTaskComplete; hook != nil {
 				hook(i, task.Label, waited, time.Since(runStart), err)
 			}
@@ -191,6 +224,7 @@ func race[T any](ctx context.Context, r *Runner, tasks []Task[T], successOnly bo
 	}
 
 	var errs []error
+
 	for range tasks {
 		select {
 		case outcome := <-completions:
@@ -198,12 +232,15 @@ func race[T any](ctx context.Context, r *Runner, tasks []Task[T], successOnly bo
 				cancel()
 				return outcome, outcome.Err
 			}
+
 			errs = append(errs, outcome.Err)
 		case <-ctx.Done():
 			return Outcome[T]{}, context.Cause(ctx)
 		}
 	}
+
 	wg.Wait()
+
 	return Outcome[T]{}, errors.Join(errs...)
 }
 

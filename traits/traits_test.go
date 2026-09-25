@@ -11,6 +11,7 @@ import (
 func TestComposeDropsRunsAllAndJoinsErrors(t *testing.T) {
 	errFirst := errors.New("first")
 	errThird := errors.New("third")
+
 	var calls []int
 
 	drop, err := traits.ComposeDrops(
@@ -23,9 +24,11 @@ func TestComposeDropsRunsAllAndJoinsErrors(t *testing.T) {
 	}
 
 	err = drop(42)
+
 	if !reflect.DeepEqual(calls, []int{1, 2, 3}) {
 		t.Fatalf("calls = %v", calls)
 	}
+
 	if !errors.Is(err, errFirst) || !errors.Is(err, errThird) {
 		t.Fatalf("drop error = %v", err)
 	}
@@ -44,6 +47,7 @@ func TestComposeClonesAppliesSequentially(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if got != 18 {
 		t.Fatalf("clone(4) = %d, want 18", got)
 	}
@@ -52,6 +56,7 @@ func TestComposeClonesAppliesSequentially(t *testing.T) {
 func TestComposeClonesStopsAtFirstError(t *testing.T) {
 	wantErr := errors.New("stop")
 	called := false
+
 	clone, err := traits.ComposeClones(
 		func(value int) (int, error) { return value + 1, nil },
 		func(int) (int, error) { return 0, wantErr },
@@ -65,6 +70,7 @@ func TestComposeClonesStopsAtFirstError(t *testing.T) {
 	if got != 0 || !errors.Is(err, wantErr) {
 		t.Fatalf("clone = (%d, %v)", got, err)
 	}
+
 	if called {
 		t.Fatal("clone after failure was called")
 	}
@@ -72,7 +78,9 @@ func TestComposeClonesStopsAtFirstError(t *testing.T) {
 
 func TestDropCloneOwnsOnlyIntermediates(t *testing.T) {
 	var dropped []int
+
 	drop := traits.Drop[int](func(value int) error { dropped = append(dropped, value); return nil })
+
 	clone, err := drop.Clone(
 		func(value int) (int, error) { return value + 1, nil },
 		func(value int) (int, error) { return value + 1, nil },
@@ -86,9 +94,11 @@ func TestDropCloneOwnsOnlyIntermediates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if got != 13 {
 		t.Fatalf("clone = %d, want 13", got)
 	}
+
 	if !reflect.DeepEqual(dropped, []int{11, 12}) {
 		t.Fatalf("dropped = %v, want [11 12]", dropped)
 	}
@@ -97,8 +107,11 @@ func TestDropCloneOwnsOnlyIntermediates(t *testing.T) {
 func TestDropCloneCleansAfterCloneFailure(t *testing.T) {
 	cloneErr := errors.New("clone")
 	dropErr := errors.New("drop")
+
 	var dropped []int
+
 	drop := traits.Drop[int](func(value int) error { dropped = append(dropped, value); return dropErr })
+
 	clone, err := drop.Clone(
 		func(value int) (int, error) { return value + 1, nil },
 		func(int) (int, error) { return 0, cloneErr },
@@ -111,6 +124,7 @@ func TestDropCloneCleansAfterCloneFailure(t *testing.T) {
 	if got != 0 || !errors.Is(err, cloneErr) || !errors.Is(err, dropErr) {
 		t.Fatalf("clone = (%d, %v)", got, err)
 	}
+
 	if !reflect.DeepEqual(dropped, []int{11}) {
 		t.Fatalf("dropped = %v, want [11]", dropped)
 	}
@@ -118,14 +132,18 @@ func TestDropCloneCleansAfterCloneFailure(t *testing.T) {
 
 func TestDropCloneStopsAfterDropFailureAndCleansNext(t *testing.T) {
 	dropErr := errors.New("drop")
+
 	var dropped []int
+
 	drop := traits.Drop[int](func(value int) error {
 		dropped = append(dropped, value)
 		if value == 11 {
 			return dropErr
 		}
+
 		return nil
 	})
+
 	clone, err := drop.Clone(
 		func(value int) (int, error) { return value + 1, nil },
 		func(value int) (int, error) { return value + 1, nil },
@@ -139,6 +157,7 @@ func TestDropCloneStopsAfterDropFailureAndCleansNext(t *testing.T) {
 	if got != 0 || !errors.Is(err, dropErr) {
 		t.Fatalf("clone = (%d, %v)", got, err)
 	}
+
 	if !reflect.DeepEqual(dropped, []int{11, 12}) {
 		t.Fatalf("dropped = %v, want [11 12]", dropped)
 	}
@@ -156,7 +175,9 @@ func TestCompositionValidation(t *testing.T) {
 		{"nil clone", func() error { _, err := traits.ComposeClones(append([]traits.Clone[int]{}, nil)...); return err }, 0},
 		{"nil cleanup drop", func() error {
 			var drop traits.Drop[int]
+
 			_, err := drop.Clone(func(v int) (int, error) { return v, nil })
+
 			return err
 		}, 0},
 	}
@@ -167,13 +188,16 @@ func TestCompositionValidation(t *testing.T) {
 			if !errors.Is(err, traits.ErrInvalidComposition) {
 				t.Fatalf("error = %v, want ErrInvalidComposition", err)
 			}
+
 			var configErr *traits.ConfigError
 			if !errors.As(err, &configErr) {
 				t.Fatalf("error = %T, want ConfigError", err)
 			}
+
 			if configErr.Index != tt.idx {
 				t.Fatalf("index = %d, want %d", configErr.Index, tt.idx)
 			}
+
 			if tt.idx >= 0 && !errors.Is(err, traits.ErrNilTrait) {
 				t.Fatalf("error = %v, want ErrNilTrait", err)
 			}

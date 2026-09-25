@@ -24,6 +24,7 @@ func ComposeDrops[T any](drops ...Drop[T]) (Drop[T], error) {
 				errs = append(errs, err)
 			}
 		}
+
 		return errors.Join(errs...)
 	}, nil
 }
@@ -38,14 +39,17 @@ func ComposeClones[T any](clones ...Clone[T]) (Clone[T], error) {
 
 	return func(value T) (T, error) {
 		current := value
+
 		for _, clone := range clones {
 			var err error
+
 			current, err = clone(current)
 			if err != nil {
 				var zero T
 				return zero, err
 			}
 		}
+
 		return current, nil
 	}, nil
 }
@@ -61,6 +65,7 @@ func (d Drop[T]) Clone(clones ...Clone[T]) (Clone[T], error) {
 	if d == nil {
 		return nil, &ConfigError{Trait: "clones with drop", Index: 0, Cause: ErrNilTrait}
 	}
+
 	if err := validate("clones", clones, func(clone Clone[T]) bool { return clone == nil }); err != nil {
 		return nil, err
 	}
@@ -75,17 +80,22 @@ func (d Drop[T]) Clone(clones ...Clone[T]) (Clone[T], error) {
 				if owned {
 					cloneErr = errors.Join(cloneErr, d(current))
 				}
+
 				var zero T
+
 				return zero, cloneErr
 			}
 
 			if owned {
 				if dropErr := d(current); dropErr != nil {
 					cleanupErr := d(next)
+
 					var zero T
+
 					return zero, errors.Join(dropErr, cleanupErr)
 				}
 			}
+
 			current = next
 			owned = true
 		}

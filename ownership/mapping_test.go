@@ -10,10 +10,14 @@ import (
 )
 
 func TestMapTransfersAndChainsDropInOrder(t *testing.T) {
-	var mu sync.Mutex
-	var order []string
+	var (
+		mu    sync.Mutex
+		order []string
+	)
+
 	record := func(name string) {
 		mu.Lock()
+
 		order = append(order, name)
 		mu.Unlock()
 	}
@@ -37,6 +41,7 @@ func TestMapTransfersAndChainsDropInOrder(t *testing.T) {
 	if state := source.State(); !state.Moved {
 		t.Fatalf("source after Map = %+v", state)
 	}
+
 	if _, err := source.Borrow(); !errors.Is(err, ownership.ErrMoved) {
 		t.Fatalf("source Borrow after Map = %v", err)
 	}
@@ -75,9 +80,11 @@ func TestMapPreservesSourceDropWithoutDerivedDrop(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if err := derived.Release(); err != nil {
 		t.Fatal(err)
 	}
+
 	select {
 	case value := <-dropped:
 		if value != 7 {
@@ -100,6 +107,7 @@ func TestMapJoinsBothDropErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	err = derived.Release()
 	if !errors.Is(err, sourceErr) || !errors.Is(err, derivedErr) {
 		t.Fatalf("Release = %v, want both drop errors", err)
@@ -108,6 +116,7 @@ func TestMapJoinsBothDropErrors(t *testing.T) {
 
 func TestMapLeavesSourceUsableWhenFnFails(t *testing.T) {
 	wantErr := errors.New("nope")
+
 	source := mustOwner(t, 5)
 	defer source.Release()
 
@@ -119,6 +128,7 @@ func TestMapLeavesSourceUsableWhenFnFails(t *testing.T) {
 	if state := source.State(); state.Moved || state.Released || state.Writer || state.Readers != 0 {
 		t.Fatalf("source after failed Map = %+v", state)
 	}
+
 	value, err := source.View(func(value int) (int, error) { return value, nil })
 	if err != nil || value != 5 {
 		t.Fatalf("source still usable = (%d, %v)", value, err)
@@ -128,19 +138,23 @@ func TestMapLeavesSourceUsableWhenFnFails(t *testing.T) {
 func TestMapRequiresExclusivity(t *testing.T) {
 	source := mustOwner(t, 1)
 	defer source.Release()
+
 	borrow, err := source.Borrow()
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := source.Map(func(value int) (int, error) { return value, nil }); !errors.Is(err, ownership.ErrConflict) {
 		t.Fatalf("Map with outstanding borrow = %v", err)
 	}
+
 	_ = borrow.Release()
 
 	derived, err := source.Map(func(value int) (int, error) { return value + 1, nil })
 	if err != nil {
 		t.Fatalf("Map after release = %v", err)
 	}
+
 	_ = derived.Release()
 }
 
@@ -148,6 +162,7 @@ func TestMapValidation(t *testing.T) {
 	t.Run("nil fn", func(t *testing.T) {
 		owner := mustOwner(t, 1)
 		defer owner.Release()
+
 		if _, err := owner.Map[int](nil); !errors.Is(err, ownership.ErrProjection) {
 			t.Fatalf("nil fn = %v", err)
 		}
@@ -163,10 +178,12 @@ func TestMapValidation(t *testing.T) {
 	t.Run("bad option leaves owner usable", func(t *testing.T) {
 		owner := mustOwner(t, 1)
 		defer owner.Release()
+
 		_, err := owner.Map(func(value int) (int, error) { return value, nil }, (ownership.Option[int])(nil))
 		if !errors.Is(err, ownership.ErrNilOption) {
 			t.Fatalf("nil option = %v", err)
 		}
+
 		if state := owner.State(); state.Moved || state.Writer {
 			t.Fatalf("owner after rejected option = %+v", state)
 		}
@@ -175,6 +192,7 @@ func TestMapValidation(t *testing.T) {
 
 func TestMapDerivedSupportsSnapshot(t *testing.T) {
 	source := mustOwner(t, 3)
+
 	derived, err := source.Map(
 		func(value int) ([]int, error) { return []int{value}, nil },
 		ownership.WithClone(func(value []int) ([]int, error) { return append([]int(nil), value...), nil }),
@@ -188,7 +206,9 @@ func TestMapDerivedSupportsSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	snapshot[0] = 99
+
 	original, err := derived.View(func(value []int) (int, error) { return value[0], nil })
 	if err != nil || original != 3 {
 		t.Fatalf("snapshot leaked: (%d, %v)", original, err)

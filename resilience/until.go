@@ -40,33 +40,42 @@ func RetryUntil[T any](ctx context.Context, policy UntilPolicy, probe func(conte
 	if ctx == nil {
 		return zero, &PolicyError{Cause: context.Canceled}
 	}
+
 	if probe == nil {
 		return zero, &PolicyError{Cause: ErrNilFunction}
 	}
+
 	if err := validBound(ctx, policy.MaxAttempts); err != nil {
 		return zero, err
 	}
+
 	clock := policy.Clock
 	if clock == nil {
 		clock = RealClock()
 	}
+
 	for attempt := 1; ; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return zero, &RetryError{Attempts: attempt - 1, Last: context.Cause(ctx)}
 		}
+
 		value, satisfied, err := probe(ctx)
 		if err != nil {
 			return zero, err
 		}
+
 		if satisfied {
 			return value, nil
 		}
+
 		if policy.MaxAttempts > 0 && attempt == policy.MaxAttempts {
 			return zero, &RetryError{Attempts: attempt}
 		}
+
 		if policy.Backoff == nil {
 			continue
 		}
+
 		delay := policy.Backoff(attempt)
 		if err := clock.Sleep(ctx, delay); err != nil {
 			return zero, &RetryError{Attempts: attempt, Last: err}

@@ -53,6 +53,7 @@ func TestAcquirerTableHasNotDrifted(t *testing.T) {
 	if testing.Short() {
 		t.Skip("loads the velocity packages")
 	}
+
 	dir, err := filepath.Abs(filepath.Join("testdata", "fixture"))
 	if err != nil {
 		t.Fatal(err)
@@ -60,22 +61,29 @@ func TestAcquirerTableHasNotDrifted(t *testing.T) {
 	// The fixture module already requires a published velocity, so this
 	// checks the table against a real release rather than hand-written stubs.
 	cfg := &packages.Config{Mode: packages.NeedName | packages.NeedTypes, Dir: dir}
+
 	pkgs, err := packages.Load(cfg, ownershipPath, poolPath, asyncPath)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	loaded := 0
 	seen := map[string]bool{}
+
 	for _, pkg := range pkgs {
 		if pkg.Types == nil || len(pkg.Errors) > 0 {
 			for _, e := range pkg.Errors {
 				t.Errorf("loading %s: %v", pkg.PkgPath, e)
 			}
+
 			continue
 		}
+
 		loaded++
+
 		checkPackage(t, pkg, seen)
 	}
+
 	if loaded != 3 {
 		t.Fatalf("loaded %d of 3 velocity packages; the check proves nothing if they did not load", loaded)
 	}
@@ -84,11 +92,13 @@ func TestAcquirerTableHasNotDrifted(t *testing.T) {
 	if len(seen) == 0 {
 		t.Fatal("no function returning a releasable handle was found; isReleasable is not matching and the check is vacuous")
 	}
+
 	for excluded := range notAcquirers {
 		if !seen[excluded] {
 			t.Errorf("notAcquirers lists %s, which no longer exists or no longer returns a releasable handle; remove it", excluded)
 		}
 	}
+
 	for path, byRecv := range acquirers {
 		for recv, names := range byRecv {
 			for _, name := range names {
@@ -96,6 +106,7 @@ func TestAcquirerTableHasNotDrifted(t *testing.T) {
 				if recv != "" {
 					qualified += recv + "."
 				}
+
 				if qualified += name; !seen[qualified] {
 					t.Errorf("acquirers lists %s, which no longer exists or no longer returns a releasable handle", qualified)
 				}
@@ -114,17 +125,20 @@ func shortName(path string) string {
 	case asyncPath:
 		return "async"
 	}
+
 	return path
 }
 
 func checkPackage(t *testing.T, pkg *packages.Package, seen map[string]bool) {
 	t.Helper()
+
 	scope := pkg.Types.Scope()
 	for _, name := range scope.Names() {
 		obj := scope.Lookup(name)
 		if !obj.Exported() {
 			continue
 		}
+
 		switch obj := obj.(type) {
 		case *types.Func:
 			checkCallable(t, pkg, "", obj, seen)
@@ -148,28 +162,34 @@ func checkPackage(t *testing.T, pkg *packages.Package, seen map[string]bool) {
 // which the analyzer neither tracks nor deliberately excludes.
 func checkCallable(t *testing.T, pkg *packages.Package, recv string, fn *types.Func, seen map[string]bool) {
 	t.Helper()
+
 	sig, ok := fn.Type().(*types.Signature)
 	if !ok || sig.Results().Len() == 0 {
 		return
 	}
+
 	if !isReleasable(sig.Results().At(0).Type()) {
 		return
 	}
+
 	qualified := pkg.Types.Name() + "."
 	if recv != "" {
 		qualified += recv + "."
 	}
+
 	qualified += fn.Name()
 	seen[qualified] = true
 
 	if _, excluded := notAcquirers[qualified]; excluded {
 		return
 	}
+
 	for _, name := range acquirers[pkg.PkgPath][recv] {
 		if name == fn.Name() {
 			return
 		}
 	}
+
 	t.Errorf("%s returns a releasable handle but lostrelease neither tracks it nor excludes it.\n"+
 		"\tAdd it to acquirers if a caller must release what it returns, or to notAcquirers with the reason if not.", qualified)
 }
@@ -182,10 +202,12 @@ func isReleasable(t types.Type) bool {
 	if named, ok := types.Unalias(t).(*types.Named); ok {
 		t = types.NewPointer(named)
 	}
+
 	for sel := range types.NewMethodSet(t).Methods() {
 		if sel.Obj().Name() == "Release" {
 			return true
 		}
 	}
+
 	return false
 }

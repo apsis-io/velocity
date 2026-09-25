@@ -111,6 +111,7 @@ func factKey(recv, name string) string {
 	if recv == "" {
 		return name
 	}
+
 	return recv + "." + name
 }
 
@@ -148,10 +149,12 @@ func run(pass *analysis.Pass) (any, error) {
 	if !marked && !imports(pass.Pkg, ownershipPath) && !imports(pass.Pkg, poolPath) && !imports(pass.Pkg, asyncPath) {
 		return nil, nil
 	}
+
 	insp := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
 	insp.Preorder([]ast.Node{(*ast.FuncLit)(nil), (*ast.FuncDecl)(nil)}, func(n ast.Node) {
 		runFunc(pass, n)
 	})
+
 	return nil, nil
 }
 
@@ -159,23 +162,29 @@ func run(pass *analysis.Pass) (any, error) {
 // package whose doc comment carries Marker, and reports whether any did.
 func exportMarkers(pass *analysis.Pass) bool {
 	names := map[string]bool{}
+
 	for _, file := range pass.Files {
 		for _, decl := range file.Decls {
 			fn, ok := decl.(*ast.FuncDecl)
 			if !ok || fn.Doc == nil || !hasMarker(fn.Doc) {
 				continue
 			}
+
 			obj, ok := pass.TypesInfo.Defs[fn.Name].(*types.Func)
 			if !ok {
 				continue
 			}
+
 			names[factKey(receiverName(obj), obj.Name())] = true
 		}
 	}
+
 	if len(names) == 0 {
 		return false
 	}
+
 	pass.ExportPackageFact(&acquires{Names: names})
+
 	return true
 }
 
@@ -186,13 +195,16 @@ func receiverName(fn *types.Func) string {
 	if recv == nil {
 		return ""
 	}
+
 	t := types.Unalias(recv.Type())
 	if ptr, ok := t.(*types.Pointer); ok {
 		t = types.Unalias(ptr.Elem())
 	}
+
 	if named, ok := t.(*types.Named); ok {
 		return named.Obj().Name()
 	}
+
 	return ""
 }
 
@@ -202,6 +214,7 @@ func hasMarker(doc *ast.CommentGroup) bool {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -211,6 +224,7 @@ func imports(pkg *types.Package, path string) bool {
 			return true
 		}
 	}
+
 	return false
 }
 
@@ -224,6 +238,7 @@ type acquisition struct {
 
 func runFunc(pass *analysis.Pass, node ast.Node) {
 	var funcScope *types.Scope
+
 	switch v := node.(type) {
 	case *ast.FuncLit:
 		funcScope = pass.TypesInfo.Scopes[v.Type]
@@ -232,14 +247,17 @@ func runFunc(pass *analysis.Pass, node ast.Node) {
 	}
 
 	handles := make(map[*types.Var]acquisition)
+
 	ast.PreorderStack(node, nil, func(n ast.Node, stack []ast.Node) bool {
 		if _, ok := n.(*ast.FuncLit); ok && len(stack) > 0 {
 			return false // nested functions are analyzed on their own
 		}
+
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
 		}
+
 		what := acquirerName(pass, call)
 		if what == "" || len(stack) == 0 {
 			return true
@@ -249,6 +267,7 @@ func runFunc(pass *analysis.Pass, node ast.Node) {
 		//	borrow, err := owner.Borrow()
 		//	var borrow, err = owner.Borrow()
 		var names []*ast.Ident
+
 		stmt := stack[len(stack)-1]
 		switch stmt := stmt.(type) {
 		case *ast.ValueSpec:
@@ -261,34 +280,46 @@ func runFunc(pass *analysis.Pass, node ast.Node) {
 		default:
 			return true
 		}
+
 		if len(names) == 0 || names[0] == nil {
 			return true
 		}
+
 		id := names[0]
 		if id.Name == "_" {
 			if !probesError(pass.TypesInfo, stack, names) {
 				pass.ReportRangef(id, "the handle returned by %s should be released, not discarded", what)
 			}
+
 			return true
 		}
+
 		v := varOf(pass.TypesInfo, id)
 		if v == nil || !funcScope.Contains(v.Pos()) {
 			return true // defined outside this function: assume other uses
 		}
+
 		acq := acquisition{stmt: stmt, what: what}
 		if len(names) > 1 && names[1] != nil {
 			acq.errVar = varOf(pass.TypesInfo, names[1])
 		}
+
 		handles[v] = acq
+
 		return true
 	})
+
 	if len(handles) == 0 {
 		return
 	}
 
 	cfgs := pass.ResultOf[ctrlflow.Analyzer].(*ctrlflow.CFGs)
-	var g *cfg.CFG
-	var sig *types.Signature
+
+	var (
+		g   *cfg.CFG
+		sig *types.Signature
+	)
+
 	switch node := node.(type) {
 	case *ast.FuncDecl:
 		sig, _ = pass.TypesInfo.Defs[node.Name].Type().(*types.Signature)
@@ -297,20 +328,25 @@ func runFunc(pass *analysis.Pass, node ast.Node) {
 		sig, _ = pass.TypesInfo.Types[node.Type].Type.(*types.Signature)
 		g = cfgs.FuncLit(node)
 	}
+
 	if sig == nil || g == nil {
 		return
 	}
+
 	for v, acq := range handles {
 		ret := lostPath(pass, g, v, acq, sig)
 		if ret == nil {
 			continue
 		}
+
 		line := pass.Fset.Position(acq.stmt.Pos()).Line
 		pass.ReportRangef(acq.stmt, "%s returned by %s is not released on all paths", v.Name(), acq.what)
+
 		pos, end := ret.Pos(), ret.End()
 		if pass.Fset.File(pos) != pass.Fset.File(end) {
 			end = pos // synthetic return at the closing brace
 		}
+
 		pass.Report(analysis.Diagnostic{
 			Pos:     pos,
 			End:     end,
@@ -330,23 +366,30 @@ func probesError(info *types.Info, stack []ast.Node, names []*ast.Ident) bool {
 	if len(names) < 2 || names[1] == nil || len(stack) < 2 {
 		return false
 	}
+
 	errVar := varOf(info, names[1])
+
 	ifStmt, ok := stack[len(stack)-2].(*ast.IfStmt)
 	if !ok || errVar == nil || ifStmt.Init != stack[len(stack)-1] {
 		return false
 	}
+
 	if isBool(errVar) {
 		// `if _, ok := mu.TryLock(); ok` holds the lock on its true branch
 		// with no way to release it: a leak, not a probe.
 		return false
 	}
+
 	mentioned := false
+
 	ast.Inspect(ifStmt.Cond, func(n ast.Node) bool {
 		if id, ok := n.(*ast.Ident); ok && info.Uses[id] == errVar {
 			mentioned = true
 		}
+
 		return !mentioned
 	})
+
 	return mentioned
 }
 
@@ -365,6 +408,7 @@ func isBlankAssign(n *ast.AssignStmt) bool {
 			return false
 		}
 	}
+
 	return true
 }
 
@@ -372,9 +416,11 @@ func varOf(info *types.Info, id *ast.Ident) *types.Var {
 	if v, ok := info.Defs[id].(*types.Var); ok {
 		return v
 	}
+
 	if v, ok := info.Uses[id].(*types.Var); ok {
 		return v
 	}
+
 	return nil
 }
 
@@ -397,23 +443,29 @@ func acquirerName(pass *analysis.Pass, call *ast.CallExpr) string {
 	if !ok {
 		return ""
 	}
+
 	recvName := ""
+
 	if recv := fn.Signature().Recv(); recv != nil {
 		t := types.Unalias(recv.Type())
 		if ptr, ok := t.(*types.Pointer); ok {
 			t = types.Unalias(ptr.Elem())
 		}
+
 		named, ok := t.(*types.Named)
 		if !ok {
 			return ""
 		}
+
 		recvName = named.Obj().Name()
 	}
+
 	for _, name := range byRecv[recvName] {
 		if name == fn.Name() {
 			return qualifiedName(fn)
 		}
 	}
+
 	return ""
 }
 
@@ -423,6 +475,7 @@ func qualifiedName(fn *types.Func) string {
 	if recv := receiverName(fn); recv != "" {
 		name += recv + "."
 	}
+
 	return name + fn.Name()
 }
 
@@ -432,16 +485,19 @@ func qualifiedName(fn *types.Func) string {
 // reached, or nil.
 func lostPath(pass *analysis.Pass, g *cfg.CFG, v *types.Var, acq acquisition, sig *types.Signature) *ast.ReturnStmt {
 	namedResult := false
+
 	for r := range sig.Results().Variables() {
 		if r == v {
 			namedResult = true
 		}
 	}
+
 	uses := func(nodes []ast.Node) bool {
 		found := false
 		// Idents that mention v without discharging it: the receiver of a
 		// non-releasing method, or the right side of a blank assignment.
 		ignored := map[*ast.Ident]bool{}
+
 		for _, node := range nodes {
 			ast.Inspect(node, func(n ast.Node) bool {
 				switch n := n.(type) {
@@ -468,60 +524,78 @@ func lostPath(pass *analysis.Pass, g *cfg.CFG, v *types.Var, acq acquisition, si
 						found = true
 					}
 				}
+
 				return !found
 			})
 		}
+
 		return found
 	}
 
-	var defblock *cfg.Block
-	var rest []ast.Node
+	var (
+		defblock *cfg.Block
+		rest     []ast.Node
+	)
+
 outer:
 	for _, b := range g.Blocks {
 		for i, n := range b.Nodes {
 			if n == acq.stmt {
 				defblock = b
 				rest = b.Nodes[i+1:]
+
 				break outer
 			}
 		}
 	}
+
 	if defblock == nil {
 		return nil
 	}
+
 	if uses(rest) {
 		return nil
 	}
+
 	if ret := defblock.Return(); ret != nil {
 		return ret
 	}
 
 	seen := map[*cfg.Block]bool{defblock: true}
 	memo := map[*cfg.Block]bool{}
+
 	var search func(b *cfg.Block) *ast.ReturnStmt
+
 	search = func(b *cfg.Block) *ast.ReturnStmt {
 		for _, succ := range successors(pass, b, acq.errVar) {
 			if succ == nil || seen[succ] {
 				continue
 			}
+
 			seen[succ] = true
+
 			used, ok := memo[succ]
 			if !ok {
 				used = uses(succ.Nodes)
 				memo[succ] = used
 			}
+
 			if used {
 				continue
 			}
+
 			if ret := succ.Return(); ret != nil {
 				return ret
 			}
+
 			if ret := search(succ); ret != nil {
 				return ret
 			}
 		}
+
 		return nil
 	}
+
 	return search(defblock)
 }
 
@@ -534,27 +608,33 @@ func successors(pass *analysis.Pass, b *cfg.Block, errVar *types.Var) []*cfg.Blo
 	if len(b.Succs) != 2 {
 		return b.Succs
 	}
+
 	switch b.Kind {
 	case cfg.KindForLoop, cfg.KindRangeLoop:
 		// Succs[0] enters the body, Succs[1] leaves the loop.
 		if runsAtLeastOnce(pass.TypesInfo, b.Stmt) {
 			return []*cfg.Block{b.Succs[0], nil}
 		}
+
 		return b.Succs
 	}
+
 	if errVar == nil || len(b.Nodes) == 0 {
 		return b.Succs
 	}
+
 	cond, ok := b.Nodes[len(b.Nodes)-1].(ast.Expr)
 	if !ok {
 		return b.Succs
 	}
+
 	switch failsWhen(pass.TypesInfo, cond, errVar) {
 	case token.NEQ: // err != nil: true branch is the failure
 		return []*cfg.Block{nil, b.Succs[1]}
 	case token.EQL: // err == nil: false branch is the failure
 		return []*cfg.Block{b.Succs[0], nil}
 	}
+
 	return b.Succs
 }
 
@@ -568,6 +648,7 @@ func runsAtLeastOnce(info *types.Info, stmt ast.Stmt) bool {
 		if loop.Cond == nil {
 			return true
 		}
+
 		return firstIterationHolds(info, loop.Init, loop.Cond)
 	case *ast.RangeStmt:
 		x := ast.Unparen(loop.X)
@@ -580,15 +661,18 @@ func runsAtLeastOnce(info *types.Info, stmt ast.Stmt) bool {
 				return len(constant.StringVal(tv.Value)) > 0
 			}
 		}
+
 		if lit, ok := x.(*ast.CompositeLit); ok {
 			return len(lit.Elts) > 0
 		}
+
 		if tv, ok := info.Types[x]; ok {
 			if arr, ok := types.Unalias(tv.Type).Underlying().(*types.Array); ok {
 				return arr.Len() > 0
 			}
 		}
 	}
+
 	return false
 }
 
@@ -599,23 +683,29 @@ func firstIterationHolds(info *types.Info, init ast.Stmt, cond ast.Expr) bool {
 	if !ok || assign.Tok != token.DEFINE || len(assign.Lhs) != 1 || len(assign.Rhs) != 1 {
 		return false
 	}
+
 	loopVar, ok := assign.Lhs[0].(*ast.Ident)
 	if !ok {
 		return false
 	}
+
 	start := constInt(info, assign.Rhs[0])
+
 	bin, ok := ast.Unparen(cond).(*ast.BinaryExpr)
 	if !ok {
 		return false
 	}
+
 	id, ok := ast.Unparen(bin.X).(*ast.Ident)
 	if !ok || info.Uses[id] != info.Defs[loopVar] || start == nil {
 		return false
 	}
+
 	bound := constInt(info, bin.Y)
 	if bound == nil {
 		return false
 	}
+
 	return constant.Compare(start, bin.Op, bound)
 }
 
@@ -629,6 +719,7 @@ func constInt(info *types.Info, e ast.Expr) constant.Value {
 	if !ok || tv.Value == nil || tv.Value.Kind() != constant.Int {
 		return nil
 	}
+
 	return tv.Value
 }
 
@@ -641,31 +732,39 @@ func failsWhen(info *types.Info, cond ast.Expr, errVar *types.Var) token.Token {
 		if id, ok := cond.(*ast.Ident); ok && info.Uses[id] == errVar {
 			return token.EQL // `if ok`: false branch fails
 		}
+
 		if not, ok := cond.(*ast.UnaryExpr); ok && not.Op == token.NOT {
 			if id, ok := ast.Unparen(not.X).(*ast.Ident); ok && info.Uses[id] == errVar {
 				return token.NEQ // `if !ok`: true branch fails
 			}
 		}
+
 		return token.ILLEGAL
 	}
+
 	bin, ok := cond.(*ast.BinaryExpr)
 	if !ok || (bin.Op != token.NEQ && bin.Op != token.EQL) {
 		return token.ILLEGAL
 	}
+
 	isErr := func(e ast.Expr) bool {
 		id, ok := ast.Unparen(e).(*ast.Ident)
 		return ok && info.Uses[id] == errVar
 	}
+
 	isNil := func(e ast.Expr) bool {
 		id, ok := ast.Unparen(e).(*ast.Ident)
 		if !ok {
 			return false
 		}
+
 		_, ok = info.Uses[id].(*types.Nil)
+
 		return ok
 	}
 	if (isErr(bin.X) && isNil(bin.Y)) || (isNil(bin.X) && isErr(bin.Y)) {
 		return bin.Op
 	}
+
 	return token.ILLEGAL
 }

@@ -58,10 +58,12 @@ func (s *Scope) Own[T any](owner *Owner[T]) error {
 	if owner == nil {
 		return &ReleasedError{Operation: OpOwn}
 	}
+
 	moved, err := owner.Move()
 	if err != nil {
 		return err
 	}
+
 	return s.OnRelease(moved.Release)
 }
 
@@ -71,6 +73,7 @@ func (s *Scope) OwnCloser(closer io.Closer) error {
 	if closer == nil {
 		return &ReleasedError{Operation: OpOwn}
 	}
+
 	return s.OnRelease(closer.Close)
 }
 
@@ -93,12 +96,16 @@ func (s *Scope) OnRelease(release func() error) error {
 	if release == nil {
 		return &ReleasedError{Operation: OpOwn}
 	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	if s.closed || s.disarmed {
 		return &ScopeError{Operation: OpOwn, Cause: ErrScopeClosed}
 	}
+
 	s.releases = append(s.releases, release)
+
 	return nil
 }
 
@@ -111,9 +118,11 @@ func (s *Scope) OnRelease(release func() error) error {
 func (s *Scope) Disarm() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	count := len(s.releases)
 	s.disarmed = true
 	s.releases = nil
+
 	return count
 }
 
@@ -128,6 +137,7 @@ func (s *Scope) Close() error {
 		s.mu.Unlock()
 		return nil
 	}
+
 	s.closed = true
 	releases := s.releases
 	s.releases = nil
@@ -135,11 +145,13 @@ func (s *Scope) Close() error {
 
 	// Reverse order: later resources are the ones likely built on earlier ones.
 	var errs []error
+
 	for _, release := range slices.Backward(releases) {
 		if err := release(); err != nil {
 			errs = append(errs, err)
 		}
 	}
+
 	return errors.Join(errs...)
 }
 
@@ -147,5 +159,6 @@ func (s *Scope) Close() error {
 func (s *Scope) Len() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	return len(s.releases)
 }

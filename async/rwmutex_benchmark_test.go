@@ -28,6 +28,7 @@ func BenchmarkRWMutex(b *testing.B) {
 
 		b.Run("async", func(b *testing.B) {
 			b.ReportAllocs()
+
 			for b.Loop() {
 				read, _ := mine.RLock(ctx)
 				read.Release()
@@ -35,6 +36,7 @@ func BenchmarkRWMutex(b *testing.B) {
 		})
 		b.Run("sync", func(b *testing.B) {
 			b.ReportAllocs()
+
 			for b.Loop() {
 				theirs.RLock()
 				theirs.RUnlock()
@@ -48,6 +50,7 @@ func BenchmarkRWMutex(b *testing.B) {
 
 		b.Run("async", func(b *testing.B) {
 			b.ReportAllocs()
+
 			for b.Loop() {
 				held, _ := mine.Lock(ctx)
 				held.Release()
@@ -55,6 +58,7 @@ func BenchmarkRWMutex(b *testing.B) {
 		})
 		b.Run("sync", func(b *testing.B) {
 			b.ReportAllocs()
+
 			for b.Loop() {
 				theirs.Lock()
 				theirs.Unlock()
@@ -65,6 +69,7 @@ func BenchmarkRWMutex(b *testing.B) {
 	b.Run("contended read x8", func(b *testing.B) {
 		mine := async.NewRWMutex()
 		theirs := &sync.RWMutex{}
+
 		run(b, 8, func(i int) {
 			read, _ := mine.RLock(ctx)
 			read.Release()
@@ -77,6 +82,7 @@ func BenchmarkRWMutex(b *testing.B) {
 	b.Run("contended write x8", func(b *testing.B) {
 		mine := async.NewRWMutex()
 		theirs := &sync.RWMutex{}
+
 		run(b, 8, func(int) {
 			held, _ := mine.Lock(ctx)
 			held.Release()
@@ -92,21 +98,25 @@ func run(b *testing.B, n int, mine func(int), theirs func()) {
 	b.Helper()
 	b.Run("async", func(b *testing.B) {
 		b.ReportAllocs()
+
 		for b.Loop() {
 			var wg sync.WaitGroup
 			for i := range n {
 				wg.Go(func() { mine(i) })
 			}
+
 			wg.Wait()
 		}
 	})
 	b.Run("sync", func(b *testing.B) {
 		b.ReportAllocs()
+
 		for b.Loop() {
 			var wg sync.WaitGroup
 			for range n {
 				wg.Go(theirs)
 			}
+
 			wg.Wait()
 		}
 	})
@@ -120,13 +130,17 @@ func BenchmarkSemaphoreAcquire(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
+
 	ctx := context.Background()
+
 	b.ReportAllocs()
+
 	for b.Loop() {
 		permit, err := sem.Acquire(ctx)
 		if err != nil {
 			b.Fatal(err)
 		}
+
 		permit.Release()
 	}
 }
@@ -134,12 +148,15 @@ func BenchmarkSemaphoreAcquire(b *testing.B) {
 func BenchmarkMutexLock(b *testing.B) {
 	mu := async.NewMutex()
 	ctx := context.Background()
+
 	b.ReportAllocs()
+
 	for b.Loop() {
 		held, err := mu.Lock(ctx)
 		if err != nil {
 			b.Fatal(err)
 		}
+
 		held.Release()
 	}
 }

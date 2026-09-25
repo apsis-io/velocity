@@ -64,16 +64,20 @@ func (m *RWMutex) RLock(ctx context.Context) (*Permit, error) {
 	if m == nil {
 		return nil, &PlanError{Index: -1, Cause: ErrNilRunner}
 	}
+
 	if ctx == nil {
 		return nil, &PlanError{Index: -1, Cause: ErrNilContext}
 	}
+
 	for {
 		m.mu.Lock()
 		if !m.held && m.waiting == 0 {
 			m.readers++
 			m.mu.Unlock()
+
 			return &Permit{rw: m}, nil
 		}
+
 		ch := m.register()
 		m.mu.Unlock()
 
@@ -82,6 +86,7 @@ func (m *RWMutex) RLock(ctx context.Context) (*Permit, error) {
 			m.mu.Lock()
 			m.deregister(ch)
 			m.mu.Unlock()
+
 			return nil, context.Cause(ctx)
 		case <-ch:
 		}
@@ -96,12 +101,14 @@ func (m *RWMutex) Lock(ctx context.Context) (*Permit, error) {
 	if m == nil {
 		return nil, &PlanError{Index: -1, Cause: ErrNilRunner}
 	}
+
 	if ctx == nil {
 		return nil, &PlanError{Index: -1, Cause: ErrNilContext}
 	}
 	// Counted once, and decremented on the way out however the loop leaves —
 	// otherwise a Lock that gave up would keep new readers blocked forever.
 	counted := false
+
 	for {
 		m.mu.Lock()
 		if !m.held && m.readers == 0 {
@@ -110,12 +117,15 @@ func (m *RWMutex) Lock(ctx context.Context) (*Permit, error) {
 				m.waiting--
 			}
 			m.mu.Unlock()
+
 			return &Permit{rw: m, write: true}, nil
 		}
+
 		if !counted {
 			m.waiting++
 			counted = true
 		}
+
 		ch := m.register()
 		m.mu.Unlock()
 
@@ -123,10 +133,12 @@ func (m *RWMutex) Lock(ctx context.Context) (*Permit, error) {
 		case <-ctx.Done():
 			m.mu.Lock()
 			m.deregister(ch)
+
 			if counted {
 				m.waiting--
 			}
 			m.mu.Unlock()
+
 			return nil, context.Cause(ctx)
 		case <-ch:
 		}
@@ -142,12 +154,16 @@ func (m *RWMutex) TryRLock() (*Permit, bool) {
 	if m == nil {
 		return nil, false
 	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
 	if m.held || m.waiting != 0 {
 		return nil, false
 	}
+
 	m.readers++
+
 	return &Permit{rw: m}, true
 }
 
@@ -158,12 +174,16 @@ func (m *RWMutex) TryLock() (*Permit, bool) {
 	if m == nil {
 		return nil, false
 	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
 	if m.held || m.readers != 0 {
 		return nil, false
 	}
+
 	m.held = true
+
 	return &Permit{rw: m, write: true}, true
 }
 
@@ -173,6 +193,7 @@ func (m *RWMutex) TryLock() (*Permit, bool) {
 // broadcast per release would be an allocation on the uncontended path.
 func (m *RWMutex) unlockRead() {
 	m.mu.Lock()
+
 	m.readers--
 	if m.readers == 0 {
 		m.wake()
@@ -191,6 +212,7 @@ func (m *RWMutex) unlockWrite() {
 func (m *RWMutex) register() chan struct{} {
 	ch := make(chan struct{})
 	m.waiters = append(m.waiters, ch)
+
 	return ch
 }
 
@@ -214,5 +236,6 @@ func (m *RWMutex) wake() {
 	for _, ch := range m.waiters {
 		close(ch)
 	}
+
 	m.waiters = nil
 }

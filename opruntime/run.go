@@ -13,9 +13,12 @@ func Run(program []opcodes.Instruction, table *Table) error {
 			} else {
 				dispatchErr = &DispatchError{Index: -1, Op: inst.Op, Cause: err}
 			}
+
 			dispatchErr.Index = i
+
 			return dispatchErr
 		}
 	}
+
 	return nil
 }

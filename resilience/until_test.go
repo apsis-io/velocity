@@ -11,6 +11,7 @@ import (
 
 func TestRetryUntilStopsWhenTheConditionHolds(t *testing.T) {
 	probes := 0
+
 	got, err := resilience.RetryUntil(context.Background(), resilience.UntilPolicy{MaxAttempts: 5},
 		func(context.Context) (string, bool, error) {
 			probes++
@@ -34,6 +35,7 @@ func TestRetryUntilProbeErrorEndsTheLoop(t *testing.T) {
 	if !errors.Is(err, boom) || probes != 1 {
 		t.Fatalf("RetryUntil = %v after %d probes", err, probes)
 	}
+
 	if errors.Is(err, resilience.ErrGaveUp) {
 		t.Fatalf("a probe error was reported as a give-up: %v", err)
 	}
@@ -55,6 +57,7 @@ func TestRetryUntilIsBoundedByItsContextNotByADerivedCount(t *testing.T) {
 	}
 
 	probes := 0
+
 	_, err = resilience.RetryUntil(ctx, resilience.UntilPolicy{Backoff: backoff},
 		func(context.Context) (struct{}, bool, error) {
 			probes++
@@ -63,6 +66,7 @@ func TestRetryUntilIsBoundedByItsContextNotByADerivedCount(t *testing.T) {
 	if !errors.Is(err, resilience.ErrGaveUp) {
 		t.Fatalf("RetryUntil = %v, want a give-up", err)
 	}
+
 	if probes < 2 {
 		t.Fatalf("probed %d times; the context, not an attempt count, should bound it", probes)
 	}
@@ -75,13 +79,16 @@ func TestRetryUntilGivesUpOnItsAttemptBound(t *testing.T) {
 			probes++
 			return 0, false, nil
 		})
+
 	var giveUp *resilience.RetryError
 	if !errors.As(err, &giveUp) || giveUp.Attempts != 3 || probes != 3 {
 		t.Fatalf("RetryUntil = %v after %d probes", err, probes)
 	}
+
 	if !errors.Is(err, resilience.ErrGaveUp) {
 		t.Fatalf("RetryUntil = %v, want ErrGaveUp", err)
 	}
+
 	if giveUp.Last != nil {
 		t.Fatalf("a condition that never held reported a last error: %v", giveUp.Last)
 	}
@@ -93,6 +100,7 @@ func TestRetryUntilRejectsAnUnboundedPolicy(t *testing.T) {
 	if !errors.Is(err, resilience.ErrNoBound) {
 		t.Fatalf("RetryUntil = %v, want ErrNoBound", err)
 	}
+
 	if !errors.Is(err, resilience.ErrInvalidPolicy) {
 		t.Fatalf("RetryUntil = %v, want it to be a policy error", err)
 	}
@@ -121,6 +129,7 @@ func TestRetryUntilValidation(t *testing.T) {
 // demonstrably met inside its own budget.
 func TestRetryUntilHonoursAConditionMetOnTheFinalAllowedProbe(t *testing.T) {
 	probes := 0
+
 	got, err := resilience.RetryUntil(context.Background(), resilience.UntilPolicy{MaxAttempts: 3},
 		func(context.Context) (string, bool, error) {
 			probes++
@@ -135,6 +144,7 @@ func TestRetryUntilHonoursAConditionMetOnTheFinalAllowedProbe(t *testing.T) {
 // fourth — the other half of the same ordering.
 func TestRetryUntilGivesUpOneProbePastTheBound(t *testing.T) {
 	probes := 0
+
 	_, err := resilience.RetryUntil(context.Background(), resilience.UntilPolicy{MaxAttempts: 3},
 		func(context.Context) (int, bool, error) {
 			probes++

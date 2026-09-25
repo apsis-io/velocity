@@ -4,6 +4,7 @@ package ownership
 var closedDrain = func() <-chan struct{} {
 	ch := make(chan struct{})
 	close(ch)
+
 	return ch
 }()
 
@@ -30,6 +31,7 @@ func (o *Owner[T]) Seal() error {
 	if o == nil || o.c == nil {
 		return &ReleasedError{Operation: OpSeal}
 	}
+
 	return o.c.seal(&o.h)
 }
 
@@ -43,6 +45,7 @@ func (o *Owner[T]) Drained() <-chan struct{} {
 	if o == nil || o.c == nil {
 		return closedDrain
 	}
+
 	return o.c.drainedChan()
 }
 
@@ -52,6 +55,7 @@ func (s *Shared[T]) Seal() error {
 	if s == nil || s.c == nil {
 		return &ReleasedError{Operation: OpSeal}
 	}
+
 	return s.c.seal(&s.h)
 }
 
@@ -61,6 +65,7 @@ func (s *Shared[T]) Drained() <-chan struct{} {
 	if s == nil || s.c == nil {
 		return closedDrain
 	}
+
 	return s.c.drainedChan()
 }
 
@@ -69,6 +74,7 @@ func (f *Frozen[T]) Seal() error {
 	if f == nil || f.c == nil {
 		return &ReleasedError{Operation: OpSeal}
 	}
+
 	return f.c.seal(&f.h)
 }
 
@@ -78,5 +84,6 @@ func (f *Frozen[T]) Drained() <-chan struct{} {
 	if f == nil || f.c == nil {
 		return closedDrain
 	}
+
 	return f.c.drainedChan()
 }

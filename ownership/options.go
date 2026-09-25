@@ -24,14 +24,17 @@ func (f optionFunc[T]) apply(cfg *config[T]) error { return f(cfg) }
 // themselves so the common no-option path never forces cfg to escape.
 func buildConfig[T any](opts []Option[T]) (config[T], error) {
 	cfg := config[T]{}
+
 	for i, opt := range opts {
 		if opt == nil {
 			return cfg, &ConfigError{Option: fmt.Sprintf("option %d", i), Reason: ErrNilOption}
 		}
+
 		if err := opt.apply(&cfg); err != nil {
 			return cfg, err
 		}
 	}
+
 	return cfg, nil
 }
 
@@ -41,10 +44,13 @@ func WithDrop[T any](drop traits.Drop[T]) Option[T] {
 		if drop == nil {
 			return &ConfigError{Option: "drop", Reason: traits.ErrNilTrait}
 		}
+
 		if cfg.drop != nil {
 			return &ConfigError{Option: "drop", Reason: ErrDuplicateOption}
 		}
+
 		cfg.drop = drop
+
 		return nil
 	})
 }
@@ -55,10 +61,13 @@ func WithClone[T any](clone traits.Clone[T]) Option[T] {
 		if clone == nil {
 			return &ConfigError{Option: "clone", Reason: traits.ErrNilTrait}
 		}
+
 		if cfg.clone != nil {
 			return &ConfigError{Option: "clone", Reason: ErrDuplicateOption}
 		}
+
 		cfg.clone = clone
+
 		return nil
 	})
 }

@@ -23,6 +23,7 @@ func TestCapabilitiesAcrossHandles(t *testing.T) {
 	if err := grow(owner); err != nil {
 		t.Fatal(err)
 	}
+
 	if n, err := describe(owner); err != nil || n != 3 {
 		t.Fatalf("describe(owner) = (%d, %v)", n, err)
 	}
@@ -31,9 +32,11 @@ func TestCapabilitiesAcrossHandles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if err := grow(shared); err != nil {
 		t.Fatal(err)
 	}
+
 	if n, err := describe(shared); err != nil || n != 4 {
 		t.Fatalf("describe(shared) = (%d, %v)", n, err)
 	}
@@ -42,11 +45,13 @@ func TestCapabilitiesAcrossHandles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	frozen, err := thawed.Freeze()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer frozen.Release()
+
 	if n, err := describe(frozen); err != nil || n != 4 {
 		t.Fatalf("describe(frozen) = (%d, %v)", n, err)
 	}
@@ -57,6 +62,7 @@ func TestPackageLevelViewAndMutateMirrorTheMethods(t *testing.T) {
 	defer owner.Release()
 
 	committed := errors.New("committed")
+
 	got, err := ownership.Mutate(owner, func(value *int) (int, error) {
 		*value += 5
 		return *value, committed
@@ -64,6 +70,7 @@ func TestPackageLevelViewAndMutateMirrorTheMethods(t *testing.T) {
 	if got != 15 || !errors.Is(err, committed) {
 		t.Fatalf("Mutate = (%d, %v), want (15, committed)", got, err)
 	}
+
 	if value, err := ownership.View(owner, func(value int) (int, error) { return value, nil }); err != nil || value != 15 {
 		t.Fatalf("View = (%d, %v)", value, err)
 	}
@@ -71,9 +78,11 @@ func TestPackageLevelViewAndMutateMirrorTheMethods(t *testing.T) {
 	if _, err := ownership.View[int, int](nil, func(int) (int, error) { return 0, nil }); !errors.Is(err, ownership.ErrReleased) {
 		t.Fatalf("nil Viewer = %v", err)
 	}
+
 	if _, err := ownership.View[int, int](owner, nil); !errors.Is(err, ownership.ErrProjection) {
 		t.Fatalf("nil fn = %v", err)
 	}
+
 	var released *ownership.Owner[int]
 	if _, err := ownership.Mutate(released, func(*int) (int, error) { return 0, nil }); !errors.Is(err, ownership.ErrReleased) {
 		t.Fatalf("nil owner = %v", err)

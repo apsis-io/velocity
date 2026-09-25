@@ -23,6 +23,7 @@ func (e *ConfigError) Error() string {
 	if e.Index < 0 {
 		return fmt.Sprintf("compose %s: %v", e.Trait, e.Cause)
 	}
+
 	return fmt.Sprintf("compose %s: trait %d: %v", e.Trait, e.Index, e.Cause)
 }
 
@@ -35,10 +36,12 @@ func validate[T any](name string, traits []T, isNil func(T) bool) error {
 	if len(traits) == 0 {
 		return &ConfigError{Trait: name, Index: -1, Cause: errors.New("no traits")}
 	}
+
 	for i, trait := range traits {
 		if isNil(trait) {
 			return &ConfigError{Trait: name, Index: i, Cause: ErrNilTrait}
 		}
 	}
+
 	return nil
 }

@@ -23,6 +23,7 @@ func TestRWMutexReadersDoNotExcludeEachOther(t *testing.T) {
 	if err != nil {
 		t.Fatalf("a second RLock blocked or failed: %v", err)
 	}
+
 	first.Release()
 	second.Release()
 }
@@ -36,6 +37,7 @@ func TestRWMutexWriterExcludesReaders(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if held, ok := mu.TryLock(); ok {
 		held.Release()
 		t.Fatal("TryLock took the write lock while a reader held the lock")
@@ -43,14 +45,17 @@ func TestRWMutexWriterExcludesReaders(t *testing.T) {
 
 	// A writer waits for the reader, and takes it once the reader is gone.
 	var took atomic.Bool
+
 	go func() {
 		held, err := mu.Lock(ctx)
 		if err == nil {
 			took.Store(true)
+
 			if read, ok := mu.TryRLock(); ok {
 				read.Release()
 				t.Error("TryRLock succeeded while the write lock was held")
 			}
+
 			held.Release()
 		}
 	}()
@@ -73,16 +78,21 @@ func TestRWMutexWriterTakesPriorityOverNewReaders(t *testing.T) {
 	// Queue a writer behind the reader we hold.
 	writerWaiting := make(chan struct{})
 	writerTook := make(chan struct{})
+
 	go func() {
 		close(writerWaiting)
+
 		lock, err := mu.Lock(ctx)
 		if err == nil {
 			close(writerTook)
 			lock.Release()
 		}
 	}()
+
 	<-writerWaiting
+
 	readerTook := make(chan struct{})
+
 	go func() {
 		read, err := mu.RLock(ctx)
 		if err == nil {
@@ -149,6 +159,7 @@ func TestRWMutexAbandonedWriterDoesNotBlockReaders(t *testing.T) {
 		if _, err := mu.Lock(short); !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("Lock = %v, want the deadline", err)
 		}
+
 		cancel()
 	}
 
@@ -160,10 +171,12 @@ func TestRWMutexAbandonedWriterDoesNotBlockReaders(t *testing.T) {
 	// first version, and it turned a caught mutation into a silent one.
 	fresh, cancelFresh := context.WithTimeout(ctx, 5*time.Second)
 	defer cancelFresh()
+
 	read, err := mu.RLock(fresh)
 	if err != nil {
 		t.Fatalf("RLock after abandoned writers: %v", err)
 	}
+
 	read.Release()
 }
 
@@ -174,20 +187,24 @@ func TestRWMutexTryForms(t *testing.T) {
 	if !ok {
 		t.Fatal("TryLock on a free lock")
 	}
+
 	if read, ok := mu.TryRLock(); ok {
 		read.Release()
 		t.Fatal("TryRLock while the write lock is held")
 	}
+
 	if again, ok := mu.TryLock(); ok {
 		again.Release()
 		t.Fatal("TryLock while the write lock is held")
 	}
+
 	write.Release()
 
 	read, ok := mu.TryRLock()
 	if !ok {
 		t.Fatal("TryRLock on a free lock")
 	}
+
 	if held, ok := mu.TryLock(); ok {
 		held.Release()
 		t.Fatal("TryLock while a reader holds the lock")
@@ -198,6 +215,7 @@ func TestRWMutexTryForms(t *testing.T) {
 	} else {
 		second.Release()
 	}
+
 	read.Release()
 }
 
@@ -211,6 +229,7 @@ func TestRWMutexDoubleReleaseIsSafe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	read.Release()
 	read.Release()
 	read.Release()
@@ -221,6 +240,7 @@ func TestRWMutexDoubleReleaseIsSafe(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Lock after a triple read release: %v", err)
 	}
+
 	write.Release()
 	write.Release()
 }
@@ -238,8 +258,10 @@ func TestRWMutexExcludesUnderLoad(t *testing.T) {
 	mu := async.NewRWMutex()
 	ctx := context.Background()
 
-	var active, peak atomic.Int64
-	var overlap atomic.Bool
+	var (
+		active, peak atomic.Int64
+		overlap      atomic.Bool
+	)
 
 	for range readers {
 		go func() {
@@ -249,13 +271,16 @@ func TestRWMutexExcludesUnderLoad(t *testing.T) {
 					t.Error(err)
 					return
 				}
+
 				n := active.Add(1)
+
 				for {
 					old := peak.Load()
 					if n <= old || peak.CompareAndSwap(old, n) {
 						break
 					}
 				}
+
 				time.Sleep(time.Microsecond)
 				active.Add(-1)
 				held.Release()
@@ -275,6 +300,7 @@ func TestRWMutexExcludesUnderLoad(t *testing.T) {
 				if active.Add(1) != 1 {
 					overlap.Store(true)
 				}
+
 				time.Sleep(time.Microsecond)
 				active.Add(-1)
 				held.Release()
@@ -296,11 +322,13 @@ func TestRWMutexExcludesUnderLoad(t *testing.T) {
 // something took. The timeout is a failure bound, not a measurement.
 func waitFor(t *testing.T, cond func() bool) {
 	t.Helper()
+
 	deadline := time.Now().Add(5 * time.Second)
 	for !cond() {
 		if time.Now().After(deadline) {
 			t.Fatal("condition never held")
 		}
+
 		time.Sleep(time.Millisecond)
 	}
 }

@@ -18,11 +18,14 @@ func ExponentialBackoff(base, max time.Duration, jitter float64) (Backoff, error
 	if base < 0 || max < base || jitter < 0 || jitter > 1 {
 		return nil, &PolicyError{Cause: ErrInvalidBackoff}
 	}
+
 	return func(attempt int) time.Duration {
 		if attempt < 1 {
 			return 0
 		}
+
 		shift := attempt - 1
+
 		delay := base
 		if shift >= 63 || delay > max>>shift {
 			delay = max
@@ -32,14 +35,18 @@ func ExponentialBackoff(base, max time.Duration, jitter float64) (Backoff, error
 				delay = max
 			}
 		}
+
 		if jitter == 0 || delay == 0 {
 			return delay
 		}
+
 		factor := 1 + (rand.Float64()*2-1)*jitter
+
 		result := time.Duration(math.Round(float64(delay) * factor))
 		if result > max {
 			return max
 		}
+
 		return result
 	}, nil
 }

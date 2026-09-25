@@ -37,6 +37,7 @@ func NewLease[T any](value T, release func(T) error) (*Lease[T], error) {
 	if release == nil {
 		return nil, &ConfigError{Option: "lease release", Reason: ErrNilOption}
 	}
+
 	return &Lease[T]{value: value, release: release}, nil
 }
 
@@ -51,12 +52,15 @@ func (l *Lease[T]) Value() (T, error) {
 		var zero T
 		return zero, &ReleasedError{Operation: OpProject}
 	}
+
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
 	if l.released {
 		var zero T
 		return zero, &ReleasedError{Operation: OpProject}
 	}
+
 	return l.value, nil
 }
 
@@ -65,8 +69,10 @@ func (l *Lease[T]) Held() bool {
 	if l == nil {
 		return false
 	}
+
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
 	return !l.released
 }
 
@@ -77,12 +83,16 @@ func (l *Lease[T]) Move() (*Lease[T], error) {
 	if l == nil {
 		return nil, &ReleasedError{Operation: OpMove}
 	}
+
 	l.mu.Lock()
 	defer l.mu.Unlock()
+
 	if l.released {
 		return nil, &ReleasedError{Operation: OpMove}
 	}
+
 	l.released = true
+
 	return &Lease[T]{value: l.value, release: l.release}, nil
 }
 
@@ -93,15 +103,20 @@ func (l *Lease[T]) Release() error {
 	if l == nil {
 		return nil
 	}
+
 	l.mu.Lock()
 	if l.released {
 		err := l.relErr
 		l.mu.Unlock()
+
 		return err
 	}
+
 	l.released = true
 	value, release := l.value, l.release
+
 	var zero T
+
 	l.value = zero
 	l.mu.Unlock()
 
@@ -110,6 +125,7 @@ func (l *Lease[T]) Release() error {
 	l.mu.Lock()
 	l.relErr = err
 	l.mu.Unlock()
+
 	return err
 }
 

@@ -38,6 +38,7 @@ func (e *DispatchError) Error() string {
 	if e.Index < 0 {
 		return fmt.Sprintf("dispatch %v: %v", e.Op, e.Cause)
 	}
+
 	return fmt.Sprintf("instruction %d (%v): %v", e.Index, e.Op, e.Cause)
 }
 

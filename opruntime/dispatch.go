@@ -10,9 +10,11 @@ func (t *Table) Dispatch(inst opcodes.Instruction) error {
 	if !ok {
 		return newDispatchError(inst.Op, ErrNoHandler)
 	}
+
 	if err := h(inst); err != nil {
 		return newDispatchError(inst.Op, err)
 	}
+
 	return nil
 }
 

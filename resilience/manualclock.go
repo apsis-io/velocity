@@ -38,11 +38,14 @@ type manualTimer struct {
 func (t *manualTimer) Stop() bool {
 	t.clock.mu.Lock()
 	defer t.clock.mu.Unlock()
+
 	if t.stopped {
 		return false
 	}
+
 	t.stopped = true
 	t.clock.timers = slices.DeleteFunc(t.clock.timers, func(p *manualTimer) bool { return p == t })
+
 	return true
 }
 
@@ -55,6 +58,7 @@ func NewManualClock(start time.Time) *ManualClock {
 func (c *ManualClock) Now() time.Time {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
 	return c.now
 }
 
@@ -66,6 +70,7 @@ func (c *ManualClock) Sleep(ctx context.Context, d time.Duration) error {
 	c.sleeps++
 	c.mu.Unlock()
 	c.Advance(d)
+
 	return context.Cause(ctx)
 }
 
@@ -79,6 +84,7 @@ func (c *ManualClock) AfterFunc(d time.Duration, f func()) Timer {
 	target := c.now
 	c.mu.Unlock()
 	c.advanceTo(target)
+
 	return t
 }
 
@@ -100,6 +106,7 @@ func (c *ManualClock) Set(t time.Time) {
 	if t.Before(c.now) {
 		c.now = t
 		c.mu.Unlock()
+
 		return
 	}
 	c.mu.Unlock()
@@ -111,20 +118,25 @@ func (c *ManualClock) Set(t time.Time) {
 func (c *ManualClock) advanceTo(target time.Time) {
 	for {
 		c.mu.Lock()
+
 		var next *manualTimer
 		for _, t := range c.timers {
 			if !t.due.After(target) && (next == nil || t.due.Before(next.due) || (t.due.Equal(next.due) && t.id < next.id)) {
 				next = t
 			}
 		}
+
 		if next == nil {
 			c.now = target
 			c.mu.Unlock()
+
 			return
 		}
+
 		if next.due.After(c.now) {
 			c.now = next.due
 		}
+
 		next.stopped = true
 		c.timers = slices.DeleteFunc(c.timers, func(p *manualTimer) bool { return p == next })
 		c.mu.Unlock()
@@ -137,5 +149,6 @@ func (c *ManualClock) advanceTo(target time.Time) {
 func (c *ManualClock) Sleeps() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
 	return c.sleeps
 }

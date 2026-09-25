@@ -33,19 +33,24 @@ func benchmarkVelocityUncontended(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
+
 	b.ReportAllocs()
+
 	for b.Loop() {
 		value, err := group.Do(context.Background(), "key", func(context.Context) (int, error) { return 1, nil })
 		if err != nil {
 			b.Fatal(err)
 		}
+
 		velocityDedupeSink = value
 	}
 }
 
 func benchmarkJanosUncontended(b *testing.B) {
 	var group janos.Group[string, int]
+
 	b.ReportAllocs()
+
 	for b.Loop() {
 		_, _, err := group.Do(context.Background(), "key", func(context.Context) (int, error) { return 1, nil })
 		if err != nil {
@@ -56,7 +61,9 @@ func benchmarkJanosUncontended(b *testing.B) {
 
 func benchmarkSamberUncontended(b *testing.B) {
 	var group samber.Group[string, int]
+
 	b.ReportAllocs()
+
 	for b.Loop() {
 		_, err, _ := group.Do("key", func() (int, error) { return 1, nil })
 		if err != nil {
@@ -67,7 +74,9 @@ func benchmarkSamberUncontended(b *testing.B) {
 
 func benchmarkXSyncUncontended(b *testing.B) {
 	var group xsingleflight.Group
+
 	b.ReportAllocs()
+
 	for b.Loop() {
 		_, err, _ := group.Do("key", func() (any, error) { return 1, nil })
 		if err != nil {
@@ -81,12 +90,15 @@ func benchmarkVelocitySharedUncontended(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
+
 	b.ReportAllocs()
+
 	for b.Loop() {
 		handle, err := group.DoShared(context.Background(), "key", func(context.Context) (int, error) { return 1, nil })
 		if err != nil {
 			b.Fatal(err)
 		}
+
 		_ = handle.Release()
 	}
 }
@@ -96,6 +108,7 @@ func benchmarkVelocityContended(b *testing.B) {
 	if err != nil {
 		b.Fatal(err)
 	}
+
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
@@ -104,6 +117,7 @@ func benchmarkVelocityContended(b *testing.B) {
 				b.Error(err)
 				continue
 			}
+
 			velocityDedupeSink = value
 		}
 	})
@@ -111,6 +125,7 @@ func benchmarkVelocityContended(b *testing.B) {
 
 func benchmarkJanosContended(b *testing.B) {
 	var group janos.Group[string, int]
+
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
@@ -124,6 +139,7 @@ func benchmarkJanosContended(b *testing.B) {
 
 func benchmarkSamberContended(b *testing.B) {
 	var group samber.Group[string, int]
+
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
@@ -137,6 +153,7 @@ func benchmarkSamberContended(b *testing.B) {
 
 func benchmarkXSyncContended(b *testing.B) {
 	var group xsingleflight.Group
+
 	b.ReportAllocs()
 	b.RunParallel(func(pb *testing.PB) {
 		for pb.Next() {
@@ -165,12 +182,14 @@ func velocityBackends() []struct {
 
 func benchmarkBackends(b *testing.B, run func(*testing.B, *dedupe.Group[string, int])) {
 	b.Helper()
+
 	for _, tc := range velocityBackends() {
 		b.Run(tc.name, func(b *testing.B) {
 			group, err := dedupe.New[string, int](tc.opt)
 			if err != nil {
 				b.Fatal(err)
 			}
+
 			b.ReportAllocs()
 			run(b, group)
 		})
@@ -188,6 +207,7 @@ func BenchmarkVelocityBackendsUncontended(b *testing.B) {
 			if err != nil {
 				b.Fatal(err)
 			}
+
 			velocityDedupeSink = value
 		}
 	})
@@ -202,6 +222,7 @@ func BenchmarkVelocityBackendsSharedKey(b *testing.B) {
 					b.Error(err)
 					continue
 				}
+
 				velocityDedupeSink = value
 			}
 		})
@@ -211,6 +232,7 @@ func BenchmarkVelocityBackendsSharedKey(b *testing.B) {
 func BenchmarkVelocityBackendsContended(b *testing.B) {
 	benchmarkBackends(b, func(b *testing.B, group *dedupe.Group[string, int]) {
 		var nextKey atomic.Int64
+
 		b.RunParallel(func(pb *testing.PB) {
 			key := strconv.FormatInt(nextKey.Add(1), 10)
 			for pb.Next() {
@@ -219,6 +241,7 @@ func BenchmarkVelocityBackendsContended(b *testing.B) {
 					b.Error(err)
 					continue
 				}
+
 				velocityDedupeSink = value
 			}
 		})

@@ -11,11 +11,14 @@ import (
 
 func TestLeaseHoldsThenReleasesOnce(t *testing.T) {
 	var returned atomic.Int32
+
 	lease, err := ownership.NewLease("10.0.0.7", func(ip string) error {
 		if ip != "10.0.0.7" {
 			t.Errorf("release got %q", ip)
 		}
+
 		returned.Add(1)
+
 		return nil
 	})
 	if err != nil {
@@ -26,6 +29,7 @@ func TestLeaseHoldsThenReleasesOnce(t *testing.T) {
 	if err != nil || value != "10.0.0.7" {
 		t.Fatalf("Value = (%q, %v)", value, err)
 	}
+
 	if !lease.Held() {
 		t.Fatal("lease not held")
 	}
@@ -35,9 +39,11 @@ func TestLeaseHoldsThenReleasesOnce(t *testing.T) {
 			t.Fatalf("Release = %v", err)
 		}
 	}
+
 	if returned.Load() != 1 {
 		t.Fatalf("released %d times, want 1", returned.Load())
 	}
+
 	if lease.Held() {
 		t.Fatal("lease still held after release")
 	}
@@ -49,9 +55,11 @@ func TestLeaseValueAfterReleaseFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if err := lease.Release(); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := lease.Value(); !errors.Is(err, ownership.ErrReleased) {
 		t.Fatalf("Value after release = %v", err)
 	}
@@ -59,7 +67,9 @@ func TestLeaseValueAfterReleaseFails(t *testing.T) {
 
 func TestLeaseReportsReleaseErrorRepeatedly(t *testing.T) {
 	wantErr := errors.New("pool rejected return")
+
 	var calls atomic.Int32
+
 	lease, err := ownership.NewLease(1, func(int) error {
 		calls.Add(1)
 		return wantErr
@@ -67,11 +77,13 @@ func TestLeaseReportsReleaseErrorRepeatedly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	for range 3 {
 		if err := lease.Release(); !errors.Is(err, wantErr) {
 			t.Fatalf("Release = %v", err)
 		}
 	}
+
 	if calls.Load() != 1 {
 		t.Fatalf("release callback ran %d times, want 1", calls.Load())
 	}
@@ -79,6 +91,7 @@ func TestLeaseReportsReleaseErrorRepeatedly(t *testing.T) {
 
 func TestLeaseMoveSpendsOriginal(t *testing.T) {
 	var returned atomic.Int32
+
 	lease, err := ownership.NewLease(7, func(int) error { returned.Add(1); return nil })
 	if err != nil {
 		t.Fatal(err)
@@ -88,9 +101,11 @@ func TestLeaseMoveSpendsOriginal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if lease.Held() {
 		t.Fatal("original still held after Move")
 	}
+
 	if _, err := lease.Value(); !errors.Is(err, ownership.ErrReleased) {
 		t.Fatalf("Value on moved-from lease = %v", err)
 	}
@@ -98,6 +113,7 @@ func TestLeaseMoveSpendsOriginal(t *testing.T) {
 	if err := lease.Release(); err != nil {
 		t.Fatal(err)
 	}
+
 	if returned.Load() != 0 {
 		t.Fatalf("moved-from handle released the resource")
 	}
@@ -106,12 +122,15 @@ func TestLeaseMoveSpendsOriginal(t *testing.T) {
 	if err != nil || value != 7 {
 		t.Fatalf("moved Value = (%d, %v)", value, err)
 	}
+
 	if err := moved.Close(); err != nil {
 		t.Fatal(err)
 	}
+
 	if returned.Load() != 1 {
 		t.Fatalf("returned %d times, want 1", returned.Load())
 	}
+
 	if _, err := moved.Move(); !errors.Is(err, ownership.ErrReleased) {
 		t.Fatalf("Move after release = %v", err)
 	}
@@ -128,12 +147,15 @@ func TestLeaseNilHandle(t *testing.T) {
 	if lease.Held() {
 		t.Fatal("nil lease reports held")
 	}
+
 	if err := lease.Release(); err != nil {
 		t.Fatalf("nil Release = %v", err)
 	}
+
 	if _, err := lease.Value(); !errors.Is(err, ownership.ErrReleased) {
 		t.Fatalf("nil Value = %v", err)
 	}
+
 	if _, err := lease.Move(); !errors.Is(err, ownership.ErrReleased) {
 		t.Fatalf("nil Move = %v", err)
 	}
@@ -142,15 +164,19 @@ func TestLeaseNilHandle(t *testing.T) {
 // Concurrent Release must hand the resource back exactly once.
 func TestLeaseConcurrentReleaseIsSingular(t *testing.T) {
 	var returned atomic.Int32
+
 	lease, err := ownership.NewLease(1, func(int) error { returned.Add(1); return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	var wg sync.WaitGroup
 	for range 32 {
 		wg.Go(func() { _ = lease.Release() })
 	}
+
 	wg.Wait()
+
 	if returned.Load() != 1 {
 		t.Fatalf("returned %d times, want 1", returned.Load())
 	}
@@ -159,17 +185,21 @@ func TestLeaseConcurrentReleaseIsSingular(t *testing.T) {
 // A Lease fits naturally into a Scope, since its release is just a func.
 func TestLeaseEnrolsInScope(t *testing.T) {
 	var returned atomic.Int32
+
 	lease, err := ownership.NewLease(1, func(int) error { returned.Add(1); return nil })
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	scope := ownership.NewScope()
 	if err := scope.OnRelease(lease.Release); err != nil {
 		t.Fatal(err)
 	}
+
 	if err := scope.Close(); err != nil {
 		t.Fatal(err)
 	}
+
 	if returned.Load() != 1 {
 		t.Fatalf("returned %d times, want 1", returned.Load())
 	}

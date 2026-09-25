@@ -74,6 +74,7 @@ func Get[T any](ctx context.Context, exec failsafe.Executor[*ownership.Owner[T]]
 	if fn == nil {
 		return nil, ownership.ErrNilOption
 	}
+
 	return GetWithExecution(ctx, exec, func(e failsafe.Execution[*ownership.Owner[T]]) (*ownership.Owner[T], error) {
 		return fn(executionContext(ctx, e))
 	}, hooks)
@@ -119,16 +120,20 @@ func GetWithExecution[T any](ctx context.Context, exec failsafe.Executor[*owners
 	if ctx == nil {
 		return nil, context.Canceled
 	}
+
 	if exec == nil || fn == nil {
 		return nil, ownership.ErrNilOption
 	}
+
 	track := &tracker[T]{hooks: hooks}
 	result, err := exec.WithContext(ctx).GetWithExecution(func(e failsafe.Execution[*ownership.Owner[T]]) (*ownership.Owner[T], error) {
 		owner, err := fn(e)
 		track.record(owner)
+
 		return owner, err
 	})
 	track.settle(result)
+
 	return result, err
 }
 
@@ -139,6 +144,7 @@ func executionContext[T any](ctx context.Context, e failsafe.Execution[*ownershi
 	if inner := e.Context(); inner != nil {
 		return inner
 	}
+
 	return ctx
 }
 
@@ -157,16 +163,19 @@ func (t *tracker[T]) record(owner *ownership.Owner[T]) {
 	if owner == nil {
 		return
 	}
+
 	t.mu.Lock()
 	if !t.settled {
 		t.pending = append(t.pending, owner)
 		t.mu.Unlock()
+
 		return
 	}
 	// The executor has already answered. Anything arriving now lost, unless
 	// it is somehow the very owner that was returned.
 	settledWinner := t.winner
 	t.mu.Unlock()
+
 	if owner != settledWinner {
 		t.release(owner)
 	}
@@ -180,6 +189,7 @@ func (t *tracker[T]) settle(winner *ownership.Owner[T]) {
 	pending := t.pending
 	t.pending = nil
 	t.mu.Unlock()
+
 	for _, owner := range pending {
 		if owner != winner {
 			t.release(owner)

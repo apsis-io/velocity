@@ -44,7 +44,9 @@ func WithBaseContext[K comparable, V any](ctx context.Context) Option[K, V] {
 		if ctx == nil {
 			return &ConfigError{Option: "base context", Cause: ErrNilContext}
 		}
+
 		cfg.baseCtx = ctx
+
 		return nil
 	})
 }
@@ -55,10 +57,13 @@ func WithResultDrop[K comparable, V any](drop traits.Drop[V]) Option[K, V] {
 		if drop == nil {
 			return &ConfigError{Option: "result drop", Cause: ErrNilOption}
 		}
+
 		if cfg.drop != nil {
 			return &ConfigError{Option: "result drop", Cause: ErrDuplicateOption}
 		}
+
 		cfg.drop = drop
+
 		return nil
 	})
 }
@@ -69,10 +74,13 @@ func WithResultClone[K comparable, V any](clone traits.Clone[V]) Option[K, V] {
 		if clone == nil {
 			return &ConfigError{Option: "result clone", Cause: ErrNilOption}
 		}
+
 		if cfg.clone != nil {
 			return &ConfigError{Option: "result clone", Cause: ErrDuplicateOption}
 		}
+
 		cfg.clone = clone
+
 		return nil
 	})
 }
@@ -83,8 +91,10 @@ func WithHooks[K comparable, V any](hooks Hooks[K]) Option[K, V] {
 		if cfg.hooksSet {
 			return &ConfigError{Option: "hooks", Cause: ErrDuplicateOption}
 		}
+
 		cfg.hooks = hooks
 		cfg.hooksSet = true
+
 		return nil
 	})
 }
@@ -110,6 +120,7 @@ func WithSharded[K comparable, V any](shards int) Option[K, V] {
 		if shards <= 0 {
 			return &ConfigError{Option: "sharded backend", Cause: fmt.Errorf("shards must be positive: %d", shards)}
 		}
+
 		return setBackend(cfg, backendSharded, shards)
 	})
 }
@@ -122,8 +133,10 @@ func setBackend[K comparable, V any](cfg *config[K, V], kind backendKind, shards
 	if cfg.backendSet {
 		return &ConfigError{Option: "backend", Cause: ErrDuplicateOption}
 	}
+
 	cfg.backendKind = kind
 	cfg.shards = shards
 	cfg.backendSet = true
+
 	return nil
 }

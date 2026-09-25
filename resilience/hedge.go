@@ -79,15 +79,19 @@ func Hedge[T any](ctx context.Context, policy HedgePolicy[T], fn func(context.Co
 	if ctx == nil {
 		return zero, &PolicyError{Cause: context.Canceled}
 	}
+
 	if fn == nil {
 		return zero, &PolicyError{Cause: ErrNilFunction}
 	}
+
 	if policy.MaxAttempts < 2 || policy.Delay == nil {
 		return zero, &PolicyError{Cause: ErrInvalidPolicy}
 	}
+
 	if err := ctx.Err(); err != nil {
 		return zero, context.Cause(ctx)
 	}
+
 	clock := policy.Clock
 	if clock == nil {
 		clock = RealClock()
@@ -111,6 +115,7 @@ func Hedge[T any](ctx context.Context, policy HedgePolicy[T], fn func(context.Co
 	// goroutine that exits when the last one reports, discarding any result
 	// that arrives too late to be returned.
 	go run.reap()
+
 	return value, err
 }
 
@@ -140,15 +145,19 @@ type hedgeRun[T any] struct {
 // launch starts the next attempt and schedules the one after it.
 func (r *hedgeRun[T]) launch() {
 	attempt := r.launched
+
 	r.launched++
+
 	if hook := r.policy.Hooks.OnAttempt; hook != nil {
 		hook(attempt, attempt > 0)
 	}
 	go func() {
 		start := r.clock.Now()
+
 		value, err := r.fn(r.ctx, attempt)
 		r.results <- hedgeResult[T]{attempt: attempt, value: value, err: err, duration: r.clock.Now().Sub(start)}
 	}()
+
 	r.schedule()
 }
 
@@ -157,6 +166,7 @@ func (r *hedgeRun[T]) schedule() {
 	if r.launched >= r.policy.MaxAttempts {
 		return
 	}
+
 	delay := r.policy.Delay(r.launched)
 	r.timer = r.clock.AfterFunc(delay, func() {
 		select {
@@ -176,8 +186,11 @@ func (r *hedgeRun[T]) hedgeAllowed() bool {
 // caller's context. It returns the value to hand back.
 func (r *hedgeRun[T]) collect(callerCtx context.Context) (T, error) {
 	var zero T
+
 	r.won = -1
+
 	var errs []error
+
 	for {
 		select {
 		case <-r.due:
@@ -190,9 +203,12 @@ func (r *hedgeRun[T]) collect(callerCtx context.Context) (T, error) {
 				r.won = result.attempt
 				r.report(result, true)
 				r.stop(nil)
+
 				return result.value, nil
 			}
+
 			r.report(result, false)
+
 			errs = append(errs, result.err)
 			if r.policy.Retryable != nil && !r.policy.Retryable(result.err) {
 				r.stop(result.err)
@@ -212,6 +228,7 @@ func (r *hedgeRun[T]) collect(callerCtx context.Context) (T, error) {
 		case <-callerCtx.Done():
 			cause := context.Cause(callerCtx)
 			r.stop(cause)
+
 			return zero, cause
 		}
 	}
@@ -222,6 +239,7 @@ func (r *hedgeRun[T]) stop(cause error) {
 	if r.timer != nil {
 		r.timer.Stop()
 	}
+
 	r.cancel(cause)
 }
 
@@ -236,14 +254,17 @@ func (r *hedgeRun[T]) report(result hedgeResult[T], won bool) {
 // cannot outlive the execution.
 func (r *hedgeRun[T]) reap() {
 	defer r.cancel(nil)
+
 	for r.completed < r.launched {
 		select {
 		case result := <-r.results:
 			r.completed++
 			r.report(result, false)
+
 			if result.err != nil || result.attempt == r.won {
 				continue
 			}
+
 			if discard := r.policy.Discard; discard != nil {
 				err := discard(result.value)
 				if hook := r.policy.Hooks.OnDiscard; hook != nil {
@@ -281,6 +302,7 @@ func NewHedgeBudget(ratio float64, burst int) (*HedgeBudget, error) {
 	if ratio <= 0 || ratio > 1 || burst <= 0 {
 		return nil, &PolicyError{Cause: ErrInvalidBudget}
 	}
+
 	return &HedgeBudget{ratio: ratio, burst: float64(burst)}, nil
 }
 
@@ -289,6 +311,7 @@ func (b *HedgeBudget) credit() {
 	if b == nil {
 		return
 	}
+
 	b.mu.Lock()
 	b.tokens = min(b.tokens+b.ratio, b.burst)
 	b.mu.Unlock()
@@ -300,12 +323,16 @@ func (b *HedgeBudget) withdraw() bool {
 	if b == nil {
 		return true
 	}
+
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
 	if b.tokens < 1 {
 		return false
 	}
+
 	b.tokens--
+
 	return true
 }
 
@@ -315,8 +342,10 @@ func (b *HedgeBudget) Tokens() float64 {
 	if b == nil {
 		return 0
 	}
+
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
 	return b.tokens
 }
 
@@ -361,6 +390,7 @@ func NewLatencyDelay(quantile float64, window, minSamples int, warmup time.Durat
 	if quantile <= 0 || quantile >= 1 || window <= 0 || minSamples <= 0 || minSamples > window || warmup < 0 {
 		return nil, &PolicyError{Cause: ErrInvalidBackoff}
 	}
+
 	return &LatencyDelay{
 		quantile:   quantile,
 		minSamples: minSamples,
@@ -376,8 +406,10 @@ func (d *LatencyDelay) Observe(_ int, duration time.Duration, err error, _ bool)
 	if d == nil || err != nil || duration < 0 {
 		return
 	}
+
 	d.mu.Lock()
 	d.samples[d.next] = duration
+
 	d.next++
 	if d.next == len(d.samples) {
 		d.next = 0
@@ -393,12 +425,15 @@ func (d *LatencyDelay) Delay(int) time.Duration {
 	if d == nil {
 		return 0
 	}
+
 	d.mu.Lock()
 	defer d.mu.Unlock()
+
 	count := d.next
 	if d.filled {
 		count = len(d.samples)
 	}
+
 	if count < d.minSamples {
 		return d.warmup
 	}
@@ -407,6 +442,7 @@ func (d *LatencyDelay) Delay(int) time.Duration {
 	d.scratch = append(d.scratch[:0], d.samples[:count]...)
 	slices.Sort(d.scratch)
 	rank := int(math.Ceil(d.quantile*float64(count))) - 1
+
 	return d.scratch[max(0, min(rank, count-1))]
 }
 
@@ -416,10 +452,13 @@ func (d *LatencyDelay) Samples() int {
 	if d == nil {
 		return 0
 	}
+
 	d.mu.Lock()
 	defer d.mu.Unlock()
+
 	if d.filled {
 		return len(d.samples)
 	}
+
 	return d.next
 }

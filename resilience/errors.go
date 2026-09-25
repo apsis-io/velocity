@@ -56,12 +56,14 @@ func (e *RetryError) Error() string {
 	if e.Last == nil {
 		return fmt.Sprintf("gave up after %d attempts", e.Attempts)
 	}
+
 	return fmt.Sprintf("gave up after %d attempts: %v", e.Attempts, e.Last)
 }
 func (e *RetryError) Unwrap() []error {
 	if e.Last == nil {
 		return []error{ErrGaveUp}
 	}
+
 	return []error{ErrGaveUp, e.Last}
 }
 
@@ -78,6 +80,7 @@ func (e *BreakerError) Error() string {
 	if e.State == HalfOpen {
 		return "circuit breaker half-open: probes in flight"
 	}
+
 	return fmt.Sprintf("circuit breaker open: retry after %v", e.RetryAfter)
 }
 

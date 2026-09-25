@@ -46,9 +46,11 @@ func New[T any](cfg Config[T]) (*Pool[T], error) {
 	if cfg.New == nil {
 		return nil, &ConfigError{Field: "New", Reason: ownership.ErrNilOption}
 	}
+
 	if cfg.Max <= 0 {
 		return nil, &ConfigError{Field: "Max", Reason: ErrInvalidMax}
 	}
+
 	return &Pool[T]{cfg: cfg, permits: make(chan struct{}, cfg.Max)}, nil
 }
 
@@ -58,6 +60,7 @@ func Must[T any](p *Pool[T], err error) *Pool[T] {
 	if err != nil {
 		panic(err)
 	}
+
 	return p
 }
 
@@ -80,10 +83,12 @@ func (c *Checkout[T]) Move() (*Checkout[T], error) {
 	if c == nil {
 		return nil, &ownership.ReleasedError{Operation: ownership.OpMove}
 	}
+
 	lease, err := c.Lease.Move()
 	if err != nil {
 		return nil, err
 	}
+
 	return &Checkout[T]{Lease: lease, discard: c.discard}, nil
 }
 
@@ -94,7 +99,9 @@ func (c *Checkout[T]) Discard() error {
 	if c == nil {
 		return nil
 	}
+
 	c.discard.Store(true)
+
 	return c.Release()
 }
 
@@ -105,10 +112,12 @@ func (c *Checkout[T]) Discard() error {
 //velocity:acquires
 func (p *Pool[T]) Get(ctx context.Context) (*Checkout[T], error) {
 	start := time.Now()
+
 	checkout, created, err := p.get(ctx)
 	if hook := p.cfg.Hooks.OnAcquire; hook != nil {
 		hook(time.Since(start), created, err)
 	}
+
 	return checkout, err
 }
 
@@ -124,14 +133,19 @@ func (p *Pool[T]) get(ctx context.Context) (*Checkout[T], bool, error) {
 	if p.closed {
 		p.mu.Unlock()
 		<-p.permits
+
 		return nil, false, ErrClosed
 	}
+
 	if n := len(p.idle); n > 0 {
 		value := p.idle[n-1]
+
 		var zero T
+
 		p.idle[n-1] = zero
 		p.idle = p.idle[:n-1]
 		p.mu.Unlock()
+
 		return p.checkout(value), false, nil
 	}
 	p.mu.Unlock()
@@ -141,15 +155,19 @@ func (p *Pool[T]) get(ctx context.Context) (*Checkout[T], bool, error) {
 		<-p.permits
 		return nil, true, err
 	}
+
 	p.mu.Lock()
 	if p.closed {
 		// Closed while constructing; the pool will never hand this out.
 		p.mu.Unlock()
 		<-p.permits
+
 		return nil, true, errors.Join(ErrClosed, p.destroy(value))
 	}
+
 	p.total++
 	p.mu.Unlock()
+
 	return p.checkout(value), true, nil
 }
 
@@ -160,6 +178,7 @@ func (p *Pool[T]) checkout(value T) *Checkout[T] {
 	c.Lease, _ = ownership.NewLease(value, func(value T) error {
 		return p.put(value, c.flag.Load())
 	})
+
 	return c
 }
 
@@ -173,13 +192,16 @@ func (p *Pool[T]) put(value T, discard bool) error {
 		p.mu.Unlock()
 		<-p.permits
 		p.released(false, nil)
+
 		return nil
 	}
+
 	p.total--
 	p.mu.Unlock()
 	err := p.destroy(value)
 	<-p.permits
 	p.released(true, err)
+
 	return err
 }
 
@@ -193,6 +215,7 @@ func (p *Pool[T]) destroy(value T) error {
 	if p.cfg.Close == nil {
 		return nil
 	}
+
 	return p.cfg.Close(value)
 }
 
@@ -210,6 +233,7 @@ type Stats struct {
 func (p *Pool[T]) Stats() Stats {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+
 	return Stats{Idle: len(p.idle), InUse: p.total - len(p.idle), Max: p.cfg.Max}
 }
 
@@ -223,6 +247,7 @@ func (p *Pool[T]) Close() error {
 		p.mu.Unlock()
 		return nil
 	}
+
 	p.closed = true
 	idle := p.idle
 	p.idle = nil
@@ -230,10 +255,12 @@ func (p *Pool[T]) Close() error {
 	p.mu.Unlock()
 
 	var errs []error
+
 	for _, value := range idle {
 		if err := p.destroy(value); err != nil {
 			errs = append(errs, err)
 		}
 	}
+
 	return errors.Join(errs...)
 }

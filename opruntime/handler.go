@@ -23,10 +23,13 @@ func (t *Table) Register(op opcodes.Op, h Handler) error {
 	if h == nil {
 		return &RegisterError{Op: op, Cause: ErrNilHandler}
 	}
+
 	if t.handlers[op] != nil {
 		return &RegisterError{Op: op, Cause: ErrDuplicateHandler}
 	}
+
 	t.handlers[op] = h
+
 	return nil
 }
 

@@ -22,12 +22,14 @@ func (p Pipeline[T]) Then[R any](fn func(context.Context, T) (R, error)) Pipelin
 	if fn == nil {
 		return Pipeline[R]{}
 	}
+
 	return Pipeline[R]{run: func(ctx context.Context) (R, error) {
 		value, err := p.Run(ctx)
 		if err != nil {
 			var zero R
 			return zero, err
 		}
+
 		return fn(ctx, value)
 	}}
 }
@@ -38,9 +40,11 @@ func (p Pipeline[T]) Run(ctx context.Context) (T, error) {
 		var zero T
 		return zero, &PipelineError{Cause: ErrNilPipeline}
 	}
+
 	if ctx == nil {
 		var zero T
 		return zero, &PipelineError{Cause: ErrNilContext}
 	}
+
 	return p.run(ctx)
 }

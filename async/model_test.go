@@ -54,7 +54,9 @@ func FuzzErrGroupModel(f *testing.F) {
 		if len(ops) == 0 {
 			return
 		}
+
 		limit := 1 + int(ops[0])%4
+
 		run, err := async.New(async.Limited(limit))
 		if err != nil {
 			t.Fatal(err)
@@ -85,12 +87,14 @@ func FuzzErrGroupModel(f *testing.F) {
 				mu.Unlock()
 
 				n := running.Add(1)
+
 				for {
 					old := peak.Load()
 					if n <= old || peak.CompareAndSwap(old, n) {
 						break
 					}
 				}
+
 				defer running.Add(-1)
 
 				// A function that ends because its context did is not a
@@ -98,9 +102,11 @@ func FuzzErrGroupModel(f *testing.F) {
 				if err := ctx.Err(); err != nil {
 					return nil
 				}
+
 				if op%3 == 0 {
 					return errors.New("modeled failure")
 				}
+
 				return nil
 			}
 
@@ -111,6 +117,7 @@ func FuzzErrGroupModel(f *testing.F) {
 				eg.TryGo(fn)
 			case 3:
 				refused[id] = true
+
 				eg.GoContext(done, fn)
 			case 4:
 				eg.GoContext(context.Background(), fn)
@@ -122,6 +129,7 @@ func FuzzErrGroupModel(f *testing.F) {
 		}
 
 		_ = eg.Wait()
+
 		cancelDone()
 
 		if p := int(peak.Load()); p > limit {
@@ -133,6 +141,7 @@ func FuzzErrGroupModel(f *testing.F) {
 			if count > 1 {
 				t.Fatalf("function %d ran %d times", id, count)
 			}
+
 			if refused[id] && count > 0 {
 				t.Fatalf("function %d ran, but its context was already done", id)
 			}
@@ -143,10 +152,12 @@ func FuzzErrGroupModel(f *testing.F) {
 		// return if a permit was free. Every function has returned and the
 		// group has finished, so a permit still held here is a leak.
 		returned := make(chan struct{})
+
 		go func() {
 			eg.Go(func(context.Context) error { return nil })
 			close(returned)
 		}()
+
 		select {
 		case <-returned:
 		case <-time.After(5 * time.Second):

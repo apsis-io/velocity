@@ -26,37 +26,47 @@ func newMutexBackend[K comparable, V any]() backend[K, V] {
 func (b *mutexBackend[K, V]) loadOrStore(key K, value *call[V]) (*call[V], bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
 	if actual, ok := b.calls[key]; ok {
 		return actual, true
 	}
+
 	b.calls[key] = value
+
 	return value, false
 }
 
 func (b *mutexBackend[K, V]) load(key K) (*call[V], bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
 	value, ok := b.calls[key]
+
 	return value, ok
 }
 
 func (b *mutexBackend[K, V]) compareAndDelete(key K, expected *call[V]) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
 	if actual, ok := b.calls[key]; !ok || actual != expected {
 		return false
 	}
+
 	delete(b.calls, key)
+
 	return true
 }
 
 func (b *mutexBackend[K, V]) delete(key K) (*call[V], bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+
 	value, ok := b.calls[key]
 	if ok {
 		delete(b.calls, key)
 	}
+
 	return value, ok
 }
 
@@ -76,13 +86,16 @@ func (b *xsyncBackend[K, V]) load(key K) (*call[V], bool) { return b.calls.Load(
 
 func (b *xsyncBackend[K, V]) compareAndDelete(key K, expected *call[V]) bool {
 	deleted := false
+
 	b.calls.Compute(key, func(actual *call[V], loaded bool) (*call[V], xsync.ComputeOp) {
 		if loaded && actual == expected {
 			deleted = true
 			return nil, xsync.DeleteOp
 		}
+
 		return actual, xsync.CancelOp
 	})
+
 	return deleted
 }
 
@@ -100,6 +113,7 @@ func newShardedBackend[K comparable, V any](count int) backend[K, V] {
 	for i := range shards {
 		shards[i] = &mutexBackend[K, V]{calls: make(map[K]*call[V])}
 	}
+
 	return &shardedBackend[K, V]{seed: maphash.MakeSeed(), shards: shards}
 }
 

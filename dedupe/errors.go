@@ -38,5 +38,6 @@ func (e *PanicError) Unwrap() error {
 	if err, ok := e.Value.(error); ok {
 		return err
 	}
+
 	return nil
 }

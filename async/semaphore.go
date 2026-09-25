@@ -24,6 +24,7 @@ func NewSemaphore(n int) (*Semaphore, error) {
 	if n <= 0 {
 		return nil, &PlanError{Index: -1, Cause: ErrInvalidLimit}
 	}
+
 	return &Semaphore{permits: make(chan struct{}, n)}, nil
 }
 
@@ -36,9 +37,11 @@ func (s *Semaphore) Acquire(ctx context.Context) (*Permit, error) {
 	if s == nil {
 		return nil, &PlanError{Index: -1, Cause: ErrNilRunner}
 	}
+
 	if err := ctx.Err(); err != nil {
 		return nil, context.Cause(ctx)
 	}
+
 	select {
 	case s.permits <- struct{}{}:
 		return &Permit{permits: s.permits}, nil
@@ -54,6 +57,7 @@ func (s *Semaphore) TryAcquire() (*Permit, bool) {
 	if s == nil {
 		return nil, false
 	}
+
 	select {
 	case s.permits <- struct{}{}:
 		return &Permit{permits: s.permits}, true
@@ -85,6 +89,7 @@ func (p *Permit) Release() {
 	if p == nil {
 		return
 	}
+
 	p.once.Do(func() {
 		if p.rw != nil {
 			if p.write {
@@ -92,8 +97,10 @@ func (p *Permit) Release() {
 			} else {
 				p.rw.unlockRead()
 			}
+
 			return
 		}
+
 		<-p.permits
 	})
 }
@@ -139,6 +146,7 @@ func (m *Mutex) Lock(ctx context.Context) (*Permit, error) {
 	if m == nil {
 		return nil, &PlanError{Index: -1, Cause: ErrNilRunner}
 	}
+
 	return m.sem.Acquire(ctx)
 }
 
@@ -149,5 +157,6 @@ func (m *Mutex) TryLock() (*Permit, bool) {
 	if m == nil {
 		return nil, false
 	}
+
 	return m.sem.TryAcquire()
 }

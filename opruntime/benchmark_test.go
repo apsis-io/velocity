@@ -11,7 +11,9 @@ func BenchmarkTable(b *testing.B) {
 	b.Run("direct", func(b *testing.B) {
 		handler := func(opcodes.Instruction) error { return nil }
 		inst := opcodes.Instruction{Op: opDemo}
+
 		b.ReportAllocs()
+
 		for b.Loop() {
 			_ = handler(inst)
 		}
@@ -21,7 +23,9 @@ func BenchmarkTable(b *testing.B) {
 		table := opruntime.NewTable()
 		_ = table.Register(opDemo, func(opcodes.Instruction) error { return nil })
 		inst := opcodes.Instruction{Op: opDemo}
+
 		b.ReportAllocs()
+
 		for b.Loop() {
 			_ = table.Dispatch(inst)
 		}
@@ -30,11 +34,14 @@ func BenchmarkTable(b *testing.B) {
 	b.Run("run", func(b *testing.B) {
 		table := opruntime.NewTable()
 		_ = table.Register(opDemo, func(opcodes.Instruction) error { return nil })
+
 		program := make([]opcodes.Instruction, 16)
 		for i := range program {
 			program[i] = opcodes.Instruction{Op: opDemo}
 		}
+
 		b.ReportAllocs()
+
 		for b.Loop() {
 			_ = opruntime.Run(program, table)
 		}
@@ -53,6 +60,7 @@ var dispatchSink int
 func BenchmarkSwitchVsTable(b *testing.B) {
 	b.Run("switch", func(b *testing.B) {
 		b.ReportAllocs()
+
 		i := 0
 		for b.Loop() {
 			switch switchOps[i%len(switchOps)] {
@@ -77,6 +85,7 @@ func BenchmarkSwitchVsTable(b *testing.B) {
 			case 10:
 				dispatchSink += 10
 			}
+
 			i++
 		}
 	})
@@ -89,7 +98,9 @@ func BenchmarkSwitchVsTable(b *testing.B) {
 				return nil
 			})
 		}
+
 		b.ReportAllocs()
+
 		i := 0
 		for b.Loop() {
 			_ = table.Dispatch(opcodes.Instruction{Op: switchOps[i%len(switchOps)]})

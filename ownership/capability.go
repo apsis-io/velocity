@@ -33,14 +33,19 @@ func View[T, R any](v Viewer[T], fn func(T) (R, error)) (R, error) {
 	if fn == nil {
 		return result, &ProjectionError{Operation: OpProject}
 	}
+
 	if v == nil {
 		return result, &ReleasedError{Operation: OpBorrow}
 	}
+
 	err := v.WithRead(func(value T) error {
 		var err error
+
 		result, err = fn(value)
+
 		return err
 	})
+
 	return result, err
 }
 
@@ -51,13 +56,18 @@ func Mutate[T, R any](m Mutator[T], fn func(*T) (R, error)) (R, error) {
 	if fn == nil {
 		return result, &ProjectionError{Operation: OpUpdate}
 	}
+
 	if m == nil {
 		return result, &ReleasedError{Operation: OpBorrowMut}
 	}
+
 	err := m.WithWrite(func(value *T) error {
 		var err error
+
 		result, err = fn(value)
+
 		return err
 	})
+
 	return result, err
 }

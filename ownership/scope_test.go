@@ -11,6 +11,7 @@ import (
 
 func TestScopeReleasesInReverseOrder(t *testing.T) {
 	var order []string
+
 	scope := ownership.NewScope()
 	for _, name := range []string{"first", "second", "third"} {
 		if err := scope.OnRelease(func() error {
@@ -20,9 +21,11 @@ func TestScopeReleasesInReverseOrder(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+
 	if scope.Len() != 3 {
 		t.Fatalf("Len = %d", scope.Len())
 	}
+
 	if err := scope.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -44,9 +47,11 @@ func TestScopeContinuesPastFailuresAndJoinsErrors(t *testing.T) {
 	_ = scope.OnRelease(func() error { released++; return thirdErr })
 
 	err := scope.Close()
+
 	if released != 3 {
 		t.Fatalf("released %d of 3", released)
 	}
+
 	if !errors.Is(err, firstErr) || !errors.Is(err, thirdErr) {
 		t.Fatalf("Close = %v, want both errors", err)
 	}
@@ -54,6 +59,7 @@ func TestScopeContinuesPastFailuresAndJoinsErrors(t *testing.T) {
 
 func TestScopeDisarmTransfersResponsibility(t *testing.T) {
 	closer := &fakeCloser{}
+
 	scope := ownership.NewScope()
 	if err := scope.OwnCloser(closer); err != nil {
 		t.Fatal(err)
@@ -66,6 +72,7 @@ func TestScopeDisarmTransfersResponsibility(t *testing.T) {
 	if err := scope.Close(); err != nil {
 		t.Fatal(err)
 	}
+
 	if closer.closed != 0 {
 		t.Fatalf("disarmed scope still closed the resource: %d", closer.closed)
 	}
@@ -81,6 +88,7 @@ func TestScopeCloseIsIdempotent(t *testing.T) {
 			t.Fatalf("Close = %v", err)
 		}
 	}
+
 	if closer.closed != 1 {
 		t.Fatalf("closed %d times, want 1", closer.closed)
 	}
@@ -101,17 +109,21 @@ func TestScopeRejectsEnrolmentAfterCloseOrDisarm(t *testing.T) {
 			tc.finish(scope)
 
 			late := &fakeCloser{}
+
 			err := scope.OwnCloser(late)
 			if !errors.Is(err, ownership.ErrScopeClosed) {
 				t.Fatalf("OwnCloser after finish = %v", err)
 			}
+
 			var scopeErr *ownership.ScopeError
 			if !errors.As(err, &scopeErr) {
 				t.Fatalf("error = %T, want *ScopeError", err)
 			}
+
 			if late.closed != 0 {
 				t.Fatal("rejected resource was closed anyway")
 			}
+
 			if err := scope.OnRelease(func() error { return nil }); !errors.Is(err, ownership.ErrScopeClosed) {
 				t.Fatalf("OnRelease after finish = %v", err)
 			}
@@ -131,12 +143,15 @@ func TestScopeOwnMovesTheOwner(t *testing.T) {
 	if state := owner.State(); !state.Moved {
 		t.Fatalf("owner after Own = %+v", state)
 	}
+
 	if _, err := owner.Borrow(); !errors.Is(err, ownership.ErrMoved) {
 		t.Fatalf("Borrow after Own = %v", err)
 	}
+
 	if err := owner.Release(); err != nil {
 		t.Fatalf("Release of moved handle = %v", err)
 	}
+
 	if closer.closed != 0 {
 		t.Fatal("moved-away handle ran Drop")
 	}
@@ -144,6 +159,7 @@ func TestScopeOwnMovesTheOwner(t *testing.T) {
 	if err := scope.Close(); err != nil {
 		t.Fatal(err)
 	}
+
 	if closer.closed != 1 {
 		t.Fatalf("scope closed %d times, want 1", closer.closed)
 	}
@@ -152,6 +168,7 @@ func TestScopeOwnMovesTheOwner(t *testing.T) {
 func TestScopeOwnRejectsBorrowedOwner(t *testing.T) {
 	owner := mustOwner(t, 1)
 	defer owner.Release()
+
 	borrow, err := owner.Borrow()
 	if err != nil {
 		t.Fatal(err)
@@ -166,6 +183,7 @@ func TestScopeOwnRejectsBorrowedOwner(t *testing.T) {
 	if scope.Len() != 0 {
 		t.Fatalf("Len = %d, want 0", scope.Len())
 	}
+
 	if state := owner.State(); state.Moved {
 		t.Fatal("rejected Own still moved the handle")
 	}
@@ -176,9 +194,11 @@ func TestScopeNilInputs(t *testing.T) {
 	if err := scope.OwnCloser(nil); !errors.Is(err, ownership.ErrReleased) {
 		t.Fatalf("OwnCloser(nil) = %v", err)
 	}
+
 	if err := scope.OnRelease(nil); !errors.Is(err, ownership.ErrReleased) {
 		t.Fatalf("OnRelease(nil) = %v", err)
 	}
+
 	if err := scope.Own[int](nil); !errors.Is(err, ownership.ErrReleased) {
 		t.Fatalf("Own(nil) = %v", err)
 	}
@@ -186,14 +206,18 @@ func TestScopeNilInputs(t *testing.T) {
 
 func TestScopeConcurrentEnrolment(t *testing.T) {
 	scope := ownership.NewScope()
+
 	var wg sync.WaitGroup
 	for range 50 {
 		wg.Go(func() { _ = scope.OnRelease(func() error { return nil }) })
 	}
+
 	wg.Wait()
+
 	if scope.Len() != 50 {
 		t.Fatalf("Len = %d, want 50", scope.Len())
 	}
+
 	if err := scope.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -206,6 +230,7 @@ func ExampleScope() {
 		if fail {
 			return nil, fmt.Errorf("dial %s", name)
 		}
+
 		return &fakeCloser{}, nil
 	}
 
@@ -221,12 +246,14 @@ func ExampleScope() {
 		if err != nil {
 			return err
 		}
+
 		_ = scope.OwnCloser(conn)
 
 		raw, err := open("raw", false)
 		if err != nil {
 			return err
 		}
+
 		_ = scope.OwnCloser(raw)
 
 		// This one fails, so the scope closes conn and raw on the way out.
@@ -235,6 +262,7 @@ func ExampleScope() {
 		}
 
 		scope.Disarm()
+
 		return nil
 	}
 

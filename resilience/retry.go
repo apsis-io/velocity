@@ -43,33 +43,42 @@ func Retry[T any](ctx context.Context, policy Policy, fn func(context.Context) (
 	if ctx == nil {
 		return zero, &PolicyError{Cause: context.Canceled}
 	}
+
 	if fn == nil {
 		return zero, &PolicyError{Cause: ErrNilFunction}
 	}
+
 	if err := validBound(ctx, policy.MaxAttempts); err != nil {
 		return zero, err
 	}
+
 	clock := policy.Clock
 	if clock == nil {
 		clock = RealClock()
 	}
+
 	for attempt := 1; ; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return zero, &RetryError{Attempts: attempt - 1, Last: context.Cause(ctx)}
 		}
+
 		value, err := fn(ctx)
 		if err == nil {
 			return value, nil
 		}
+
 		if policy.Retryable != nil && !policy.Retryable(err) {
 			return zero, err
 		}
+
 		if policy.MaxAttempts > 0 && attempt == policy.MaxAttempts {
 			return zero, &RetryError{Attempts: attempt, Last: err}
 		}
+
 		if policy.Backoff == nil {
 			continue
 		}
+
 		delay := policy.Backoff(attempt)
 		if err := clock.Sleep(ctx, delay); err != nil {
 			return zero, &RetryError{Attempts: attempt, Last: err}
@@ -85,11 +94,14 @@ func validBound(ctx context.Context, maxAttempts int) error {
 	if maxAttempts < 0 {
 		return &PolicyError{Cause: ErrInvalidPolicy}
 	}
+
 	if maxAttempts > 0 {
 		return nil
 	}
+
 	if _, ok := ctx.Deadline(); !ok {
 		return &PolicyError{Cause: ErrNoBound}
 	}
+
 	return nil
 }

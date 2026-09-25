@@ -21,6 +21,7 @@ func (c *fakeClock) Sleep(ctx context.Context, delay time.Duration) error {
 	c.mu.Lock()
 	c.delays = append(c.delays, delay)
 	c.mu.Unlock()
+
 	return nil
 }
 func (c *fakeClock) AfterFunc(time.Duration, func()) resilience.Timer { return neverTimer{} }
@@ -33,6 +34,7 @@ func TestRetryRetriesAndPreservesLastError(t *testing.T) {
 	want := errors.New("failed")
 	clock := &fakeClock{}
 	attempts := 0
+
 	got, err := resilience.Retry(context.Background(), resilience.Policy{
 		MaxAttempts: 3,
 		Clock:       clock,
@@ -44,6 +46,7 @@ func TestRetryRetriesAndPreservesLastError(t *testing.T) {
 	if got != 0 || attempts != 3 || !errors.Is(err, want) {
 		t.Fatalf("Retry = (%d, %v), attempts=%d", got, err, attempts)
 	}
+
 	var retryErr *resilience.RetryError
 	if !errors.As(err, &retryErr) || retryErr.Attempts != 3 {
 		t.Fatalf("Retry error = %#v", err)
@@ -53,6 +56,7 @@ func TestRetryRetriesAndPreservesLastError(t *testing.T) {
 func TestRetryClassifierStopsImmediately(t *testing.T) {
 	want := errors.New("stop")
 	attempts := 0
+
 	_, err := resilience.Retry(context.Background(), resilience.Policy{
 		MaxAttempts: 5,
 		Retryable:   func(error) bool { return false },
@@ -68,7 +72,9 @@ func TestRetryClassifierStopsImmediately(t *testing.T) {
 func TestRetryCancellationDuringBackoff(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
 	want := context.Canceled
+
 	_, err := resilience.Retry(ctx, resilience.Policy{
 		MaxAttempts: 2,
 		Clock:       blockingClock{cancel: cancel},
@@ -86,6 +92,7 @@ func (blockingClock) AfterFunc(time.Duration, func()) resilience.Timer { return 
 func (c blockingClock) Sleep(ctx context.Context, _ time.Duration) error {
 	c.cancel()
 	<-ctx.Done()
+
 	return context.Cause(ctx)
 }
 
@@ -94,6 +101,7 @@ func TestExponentialBackoffCapsAndIsRepeatable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if got := backoff(1); got != time.Second || backoff(2) != 2*time.Second || backoff(2) != 2*time.Second || backoff(3) != 4*time.Second || backoff(4) != 8*time.Second {
 		t.Fatalf("backoff sequence unexpected")
 	}
@@ -101,10 +109,12 @@ func TestExponentialBackoffCapsAndIsRepeatable(t *testing.T) {
 
 func TestManualClockDrivesRetryDeterministically(t *testing.T) {
 	clock := resilience.NewManualClock(time.Unix(0, 0))
+
 	backoff, err := resilience.ExponentialBackoff(time.Second, 8*time.Second, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	attempts := 0
 	_, err = resilience.Retry(context.Background(), resilience.Policy{
 		MaxAttempts: 4,
@@ -114,6 +124,7 @@ func TestManualClockDrivesRetryDeterministically(t *testing.T) {
 		attempts++
 		return 0, errors.New("still failing")
 	})
+
 	var re *resilience.RetryError
 	if !errors.As(err, &re) || re.Attempts != 4 {
 		t.Fatalf("Retry = %v", err)
@@ -126,6 +137,7 @@ func TestManualClockDrivesRetryDeterministically(t *testing.T) {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	cause := errors.New("gave up")
 	cancel(cause)
+
 	_, err = resilience.Retry(ctx, resilience.Policy{MaxAttempts: 2, Backoff: backoff, Clock: clock},
 		func(context.Context) (int, error) { return 0, errors.New("fail") })
 	if !errors.Is(err, cause) {
@@ -135,7 +147,9 @@ func TestManualClockDrivesRetryDeterministically(t *testing.T) {
 
 func TestManualClockAfterFuncOrderAndStop(t *testing.T) {
 	clock := resilience.NewManualClock(time.Unix(0, 0))
+
 	var fired []string
+
 	clock.AfterFunc(3*time.Second, func() { fired = append(fired, "c") })
 	clock.AfterFunc(time.Second, func() { fired = append(fired, "a") })
 	stopped := clock.AfterFunc(2*time.Second, func() { fired = append(fired, "b") })
@@ -143,16 +157,21 @@ func TestManualClockAfterFuncOrderAndStop(t *testing.T) {
 	clock.AfterFunc(time.Second, func() {
 		clock.AfterFunc(time.Second, func() { fired = append(fired, "nested") })
 	})
+
 	if !stopped.Stop() || stopped.Stop() {
 		t.Fatal("Stop should succeed once")
 	}
+
 	clock.Advance(10 * time.Second)
+
 	if want := []string{"a", "nested", "c"}; !slices.Equal(fired, want) {
 		t.Fatalf("fired = %v, want %v", fired, want)
 	}
 	// Non-positive delay runs immediately.
 	ran := false
+
 	clock.AfterFunc(0, func() { ran = true })
+
 	if !ran {
 		t.Fatal("zero-delay AfterFunc did not run")
 	}
@@ -171,6 +190,7 @@ func TestRetryZeroMaxAttemptsIsBoundedByTheContext(t *testing.T) {
 	}
 
 	attempts := 0
+
 	_, err = resilience.Retry(ctx, resilience.Policy{Backoff: backoff},
 		func(context.Context) (int, error) {
 			attempts++
@@ -179,6 +199,7 @@ func TestRetryZeroMaxAttemptsIsBoundedByTheContext(t *testing.T) {
 	if !errors.Is(err, resilience.ErrGaveUp) {
 		t.Fatalf("Retry = %v, want a give-up", err)
 	}
+
 	if attempts < 2 {
 		t.Fatalf("attempted %d times; the context should bound it", attempts)
 	}
@@ -207,10 +228,12 @@ func TestGiveUpIsOneErrorWhicheverBoundBinds(t *testing.T) {
 	// The context binds first, with no count to outrun it.
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
+
 	backoff, err := resilience.ExponentialBackoff(5*time.Millisecond, 5*time.Millisecond, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	_, byContext := resilience.Retry(ctx, resilience.Policy{Backoff: backoff},
 		func(context.Context) (int, error) { return 0, errors.New("failing") })
 
@@ -218,6 +241,7 @@ func TestGiveUpIsOneErrorWhicheverBoundBinds(t *testing.T) {
 		if !errors.Is(err, resilience.ErrGaveUp) {
 			t.Fatalf("%s: %v does not report ErrGaveUp", name, err)
 		}
+
 		var giveUp *resilience.RetryError
 		if !errors.As(err, &giveUp) {
 			t.Fatalf("%s: %v is not a *RetryError", name, err)
@@ -234,6 +258,7 @@ func TestGiveUpIsOneErrorWhicheverBoundBinds(t *testing.T) {
 	if !errors.Is(byCount, boom) {
 		t.Fatalf("count give-up = %v, want the last failure reachable", byCount)
 	}
+
 	if !errors.Is(byContext, context.DeadlineExceeded) {
 		t.Fatalf("context give-up = %v, want the deadline reachable underneath", byContext)
 	}

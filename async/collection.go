@@ -49,9 +49,11 @@ func (r *Runner) Map[T, R any](ctx context.Context, items []T, fn func(context.C
 	if r == nil {
 		return nil, &PlanError{Index: -1, Cause: ErrNilRunner}
 	}
+
 	if fn == nil {
 		return nil, &PlanError{Index: -1, Cause: ErrNilTask}
 	}
+
 	results := make([]R, len(items))
 	if len(items) == 0 {
 		return results, nil
@@ -60,9 +62,12 @@ func (r *Runner) Map[T, R any](ctx context.Context, items []T, fn func(context.C
 	start := time.Now()
 	done := ctx.Done()
 	hook := r.hooks.OnTaskComplete
-	var next atomic.Int64
-	var failures itemErrors
-	var wg sync.WaitGroup
+
+	var (
+		next     atomic.Int64
+		failures itemErrors
+		wg       sync.WaitGroup
+	)
 	for range r.limit.workers(len(items)) {
 		wg.Go(func() {
 			for {
@@ -73,10 +78,12 @@ func (r *Runner) Map[T, R any](ctx context.Context, items []T, fn func(context.C
 					return
 				default:
 				}
+
 				i := int(next.Add(1) - 1)
 				if i >= len(items) {
 					return
 				}
+
 				var err error
 				if hook == nil {
 					// Per-item clock reads are most of the dispatch cost, so
@@ -88,14 +95,17 @@ func (r *Runner) Map[T, R any](ctx context.Context, items []T, fn func(context.C
 					results[i], err = fn(ctx, items[i])
 					hook(i, "", waited, time.Since(runStart), err)
 				}
+
 				if err != nil {
 					var zero R
+
 					results[i] = zero
 					failures.add(i, err)
 				}
 			}
 		})
 	}
+
 	wg.Wait()
 
 	// Every index below next was claimed and therefore ran; the counter can
@@ -103,13 +113,16 @@ func (r *Runner) Map[T, R any](ctx context.Context, items []T, fn func(context.C
 	if claimed := min(int(next.Load()), len(items)); claimed < len(items) {
 		cause := context.Cause(ctx)
 		waited := time.Since(start)
+
 		for i := claimed; i < len(items); i++ {
 			failures.add(i, cause)
+
 			if hook != nil {
 				hook(i, "", waited, 0, cause)
 			}
 		}
 	}
+
 	return results, failures.join()
 }
 
@@ -119,9 +132,11 @@ func (r *Runner) ForEach[T any](ctx context.Context, items []T, fn func(context.
 	if fn == nil {
 		return &PlanError{Index: -1, Cause: ErrNilTask}
 	}
+
 	_, err := r.Map(ctx, items, func(ctx context.Context, item T) (struct{}, error) {
 		return struct{}{}, fn(ctx, item)
 	})
+
 	return err
 }
 
@@ -144,8 +159,10 @@ func (e *itemErrors) join() error {
 	if len(e.errs) == 0 {
 		return nil
 	}
+
 	slices.SortFunc(e.errs, func(a, b error) int {
 		return a.(*ItemError).Index - b.(*ItemError).Index
 	})
+
 	return errors.Join(e.errs...)
 }

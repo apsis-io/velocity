@@ -69,8 +69,10 @@ func (c *cell[T]) stateFor(h *handle) State {
 	if c == nil {
 		return State{Released: true}
 	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
 	state := State{
 		Shared:    c.mode == modeShared,
 		Frozen:    c.mode == modeFrozen,
@@ -85,12 +87,14 @@ func (c *cell[T]) stateFor(h *handle) State {
 		state.Moved = h.state == handleMoved
 		state.Released = state.Released || h.state == handleReleased
 	}
+
 	return state
 }
 
 func (c *cell[T]) conflict(op Operation) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
 	return c.conflictLocked(op)
 }
 
@@ -102,15 +106,18 @@ func (c *cell[T]) checkHandle(h *handle, op Operation) error {
 	if c == nil || h == nil {
 		return &ReleasedError{Operation: op}
 	}
+
 	switch h.state {
 	case handleMoved:
 		return &MovedError{Operation: op}
 	case handleReleased:
 		return &ReleasedError{Operation: op}
 	}
+
 	if c.mode == modeReleased {
 		return &ReleasedError{Operation: op}
 	}
+
 	return nil
 }
 
@@ -121,17 +128,22 @@ func (c *cell[T]) admitReadLocked(h *handle, expected mode) error {
 	if err := c.checkHandle(h, OpBorrow); err != nil {
 		return err
 	}
+
 	if c.mode != expected {
 		return &MovedError{Operation: OpBorrow}
 	}
+
 	if c.sealed {
 		return &SealedError{Operation: OpBorrow}
 	}
+
 	if c.writer {
 		return c.conflictLocked(OpBorrow)
 	}
+
 	c.readers++
 	h.borrows++
+
 	return nil
 }
 
@@ -140,17 +152,22 @@ func (c *cell[T]) admitWriteLocked(h *handle, expected mode) error {
 	if err := c.checkHandle(h, OpBorrowMut); err != nil {
 		return err
 	}
+
 	if c.mode != expected {
 		return &MovedError{Operation: OpBorrowMut}
 	}
+
 	if c.sealed {
 		return &SealedError{Operation: OpBorrowMut}
 	}
+
 	if c.writer || c.readers != 0 {
 		return c.conflictLocked(OpBorrowMut)
 	}
+
 	c.writer = true
 	h.borrows++
+
 	return nil
 }
 
@@ -158,38 +175,47 @@ func (c *cell[T]) admitWriteLocked(h *handle, expected mode) error {
 func (c *cell[T]) endReadLocked(h *handle) {
 	c.readers--
 	h.borrows--
+
 	c.signalDrainedLocked()
 }
 
 func (c *cell[T]) endWriteLocked(h *handle) {
 	c.writer = false
 	h.borrows--
+
 	c.signalDrainedLocked()
 }
 
 func (c *cell[T]) acquireRead(h *handle, expected mode) (*lease[T], error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
 	if err := c.admitReadLocked(h, expected); err != nil {
 		return nil, err
 	}
+
 	c.nextID++
+
 	return &lease[T]{cell: c, issuer: h, id: c.nextID, kind: borrowRead}, nil
 }
 
 func (c *cell[T]) acquireWrite(h *handle, expected mode) (*lease[T], error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
 	if err := c.admitWriteLocked(h, expected); err != nil {
 		return nil, err
 	}
+
 	c.nextID++
+
 	return &lease[T]{cell: c, issuer: h, id: c.nextID, kind: borrowWrite}, nil
 }
 
 func (c *cell[T]) releaseLease(l *lease[T]) bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
 	return c.releaseLeaseLocked(l)
 }
 
@@ -200,6 +226,7 @@ func (c *cell[T]) releaseLeaseLocked(l *lease[T]) bool {
 	if l.released {
 		return false
 	}
+
 	l.released = true
 	switch l.kind {
 	case borrowRead:
@@ -207,6 +234,7 @@ func (c *cell[T]) releaseLeaseLocked(l *lease[T]) bool {
 	case borrowWrite:
 		c.endWriteLocked(l.issuer)
 	}
+
 	return true
 }
 
@@ -215,6 +243,7 @@ func (c *cell[T]) drainedChanLocked() chan struct{} {
 	if c.drained == nil {
 		c.drained = make(chan struct{})
 	}
+
 	return c.drained
 }
 
@@ -226,6 +255,7 @@ func (c *cell[T]) signalDrainedLocked() {
 	if c.drainedClosed || !c.sealed || c.readers != 0 || c.writer {
 		return
 	}
+
 	c.drainedClosed = true
 	close(c.drainedChanLocked())
 }
@@ -234,16 +264,20 @@ func (c *cell[T]) signalDrainedLocked() {
 func (c *cell[T]) seal(h *handle) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
 	if err := c.checkHandle(h, OpSeal); err != nil {
 		return err
 	}
+
 	c.sealed = true
 	c.signalDrainedLocked()
+
 	return nil
 }
 
 func (c *cell[T]) drainedChan() <-chan struct{} {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
 	return c.drainedChanLocked()
 }

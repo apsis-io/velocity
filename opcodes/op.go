@@ -15,5 +15,6 @@ func (o Op) String() string {
 	if o == OpNop {
 		return "nop"
 	}
+
 	return "Op(" + strconv.FormatUint(uint64(o), 10) + ")"
 }

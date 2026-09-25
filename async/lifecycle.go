@@ -18,6 +18,7 @@ func (p *Panic) Unwrap() error {
 	if err, ok := p.Value.(error); ok {
 		return err
 	}
+
 	return nil
 }
 
@@ -37,14 +38,17 @@ func (g *Group) Go(f func()) error {
 	if f == nil {
 		return ErrNilTask
 	}
+
 	g.mu.Lock()
 	if g.closing {
 		g.mu.Unlock()
 		return ErrClosed
 	}
+
 	if g.done == nil {
 		g.done = make(chan struct{})
 	}
+
 	g.active++
 	g.wg.Go(func() {
 		defer g.finish()
@@ -53,9 +57,11 @@ func (g *Group) Go(f func()) error {
 				g.capture(value)
 			}
 		}()
+
 		f()
 	})
 	g.mu.Unlock()
+
 	return nil
 }
 
@@ -69,6 +75,7 @@ func (g *Group) capture(value any) {
 
 func (g *Group) finish() {
 	g.mu.Lock()
+
 	g.active--
 	if g.closing && g.active == 0 {
 		close(g.done)
@@ -82,6 +89,7 @@ func (g *Group) Wait() {
 	g.mu.Lock()
 	panicValue := g.panic
 	g.mu.Unlock()
+
 	if panicValue != nil {
 		panic(panicValue)
 	}
@@ -93,10 +101,12 @@ func (g *Group) Close(ctx context.Context) error {
 	if ctx == nil {
 		return context.Canceled
 	}
+
 	g.mu.Lock()
 	if g.done == nil {
 		g.done = make(chan struct{})
 	}
+
 	g.closing = true
 	if g.active == 0 {
 		select {
@@ -105,8 +115,10 @@ func (g *Group) Close(ctx context.Context) error {
 			close(g.done)
 		}
 	}
+
 	done := g.done
 	g.mu.Unlock()
+
 	select {
 	case <-done:
 		g.Wait()

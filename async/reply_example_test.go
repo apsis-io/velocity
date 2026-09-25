@@ -36,6 +36,7 @@ func (r *replyRegistry[V]) listen(key string) (<-chan V, func()) {
 	r.mu.Unlock()
 
 	var once sync.Once
+
 	return replies, func() {
 		once.Do(func() {
 			r.mu.Lock()
@@ -55,9 +56,11 @@ func (r *replyRegistry[V]) send(key string, v V) {
 	r.mu.Lock()
 	replies, ok := r.waiters[key]
 	r.mu.Unlock()
+
 	if !ok {
 		return
 	}
+
 	select {
 	case replies <- v:
 	default:
@@ -67,6 +70,7 @@ func (r *replyRegistry[V]) send(key string, v V) {
 func (r *replyRegistry[V]) size() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
 	return len(r.waiters)
 }
 
@@ -86,6 +90,7 @@ func Example_requestReply() {
 	go func() {
 		defer close(responderDone)
 		defer remove()
+
 		registry.send("order-1", "accepted")
 		registry.send("order-1", "duplicate") // nobody is listening; dropped
 	}()
@@ -130,9 +135,13 @@ func Example_requestReply_bounded() {
 		return func(ctx context.Context) error {
 			_, remove := registry.listen(key)
 			defer remove()
+
 			registry.send(key, "accepted")
+
 			registered <- struct{}{}
+
 			<-ctx.Done() // the caller is still reading
+
 			return nil
 		}
 	}
@@ -149,6 +158,7 @@ func Example_requestReply_bounded() {
 	waiting := make(chan struct{})
 	go func() {
 		defer close(waiting)
+
 		eg.GoContext(ctx, responder("order-3"))
 	}()
 
@@ -196,6 +206,7 @@ func TestRequestReplyAbandonmentLeavesNothingBehind(t *testing.T) {
 	for range calls {
 		<-done
 	}
+
 	if got := registry.size(); got != 0 {
 		t.Fatalf("%d waiters left registered after %d abandoned calls", got, calls)
 	}

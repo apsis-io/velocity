@@ -47,6 +47,7 @@ type execution struct {
 func newExecution(ctx context.Context) *execution {
 	e := &execution{}
 	e.init(ctx)
+
 	return e
 }
 
@@ -62,6 +63,7 @@ func (e *execution) add() {
 
 func (e *execution) abandon() {
 	e.mu.Lock()
+
 	e.active--
 	if e.active == 0 {
 		e.cancel()
@@ -99,7 +101,9 @@ func New[K comparable, V any](opts ...Option[K, V]) (*Group[K, V], error) {
 	if err != nil {
 		return nil, err
 	}
+
 	g.once.Do(func() {}) // configured: never apply defaults over it
+
 	return g, nil
 }
 
@@ -110,6 +114,7 @@ func Must[K comparable, V any](g *Group[K, V], err error) *Group[K, V] {
 	if err != nil {
 		panic(err)
 	}
+
 	return g
 }
 
@@ -123,15 +128,19 @@ func (g *Group[K, V]) ready() {
 
 func build[K comparable, V any](opts []Option[K, V]) (*Group[K, V], error) {
 	cfg := config[K, V]{baseCtx: context.Background()}
+
 	for i, opt := range opts {
 		if opt == nil {
 			return nil, &ConfigError{Option: "option " + formatIndex(i), Cause: ErrNilOption}
 		}
+
 		if err := opt.apply(&cfg); err != nil {
 			return nil, err
 		}
 	}
+
 	var b backend[K, V]
+
 	switch cfg.backendKind {
 	case backendMutex:
 		b = newMutexBackend[K, V]()
@@ -142,6 +151,7 @@ func build[K comparable, V any](opts []Option[K, V]) (*Group[K, V], error) {
 	default:
 		return nil, &ConfigError{Option: "backend", Cause: ErrUnsupportedBackend}
 	}
+
 	return &Group[K, V]{
 		baseCtx: cfg.baseCtx,
 		backend: b,
@@ -154,15 +164,19 @@ func build[K comparable, V any](opts []Option[K, V]) (*Group[K, V], error) {
 
 func formatIndex(i int) string {
 	var buf [20]byte
+
 	pos := len(buf)
+
 	if i == 0 {
 		return "0"
 	}
+
 	for i > 0 {
 		pos--
 		buf[pos] = byte('0' + i%10)
 		i /= 10
 	}
+
 	return string(buf[pos:])
 }
 
@@ -199,13 +213,16 @@ func (g *Group[K, V]) Do(ctx context.Context, key K, fn func(context.Context) (V
 	if err := g.checkPlain(ctx, fn); err != nil {
 		return zero, err
 	}
+
 	c, leader, err := g.join(ctx, key)
 	if err != nil {
 		return zero, err
 	}
+
 	if leader {
 		go g.run(key, c, fn)
 	}
+
 	return g.wait(ctx, key, c)
 }
 
@@ -217,24 +234,30 @@ func (g *Group[K, V]) DoShared(ctx context.Context, key K, fn func(context.Conte
 	if err := g.check(ctx, fn); err != nil {
 		return nil, err
 	}
+
 	c, leader, err := g.join(ctx, key)
 	if err != nil {
 		return nil, err
 	}
+
 	if leader {
 		go g.run(key, c, fn)
 	}
+
 	return g.waitShared(ctx, key, c)
 }
 
 func (g *Group[K, V]) check(ctx context.Context, fn func(context.Context) (V, error)) error {
 	g.ready()
+
 	if ctx == nil {
 		return ErrNilContext
 	}
+
 	if fn == nil {
 		return ErrNilFunction
 	}
+
 	return ctx.Err()
 }
 
@@ -242,6 +265,7 @@ func (g *Group[K, V]) checkPlain(ctx context.Context, fn func(context.Context) (
 	if g.owned {
 		return ErrOwnedResult
 	}
+
 	return g.check(ctx, fn)
 }
 
@@ -269,40 +293,51 @@ func (g *Group[K, V]) joinWithExecution(ctx context.Context, key K, shared *exec
 			if joined := g.tryJoin(key, actual); joined {
 				return actual, false, nil
 			}
+
 			adopted, err := g.awaitRetired(ctx, key, actual)
 			if err != nil {
 				return nil, false, err
 			}
+
 			if adopted {
 				return actual, false, nil
 			}
+
 			continue
 		}
+
 		candidate := &call[V]{done: make(chan struct{}), exec: shared, accepting: true, waiting: 1}
 		if shared == nil {
 			candidate.own.init(g.baseCtx)
 			candidate.exec = &candidate.own
 		}
+
 		actual, loaded = g.backend.loadOrStore(key, candidate)
 		if !loaded {
 			candidate.exec.add()
+
 			if g.hooks.OnJoin != nil {
 				g.hooks.OnJoin(key, true)
 			}
+
 			return candidate, true, nil
 		}
+
 		if shared == nil {
 			// Lost the race to register: the context derived for this
 			// candidate would otherwise stay registered with baseCtx.
 			candidate.own.cancel()
 		}
+
 		if joined := g.tryJoin(key, actual); joined {
 			return actual, false, nil
 		}
+
 		adopted, err := g.awaitRetired(ctx, key, actual)
 		if err != nil {
 			return nil, false, err
 		}
+
 		if adopted {
 			return actual, false, nil
 		}
@@ -316,11 +351,14 @@ func (g *Group[K, V]) tryJoin(key K, c *call[V]) bool {
 		c.mu.Unlock()
 		return false
 	}
+
 	c.waiting++
 	c.mu.Unlock()
+
 	if g.hooks.OnJoin != nil {
 		g.hooks.OnJoin(key, false)
 	}
+
 	return true
 }
 
@@ -336,47 +374,57 @@ func (g *Group[K, V]) awaitRetired(ctx context.Context, key K, c *call[V]) (adop
 	case <-ctx.Done():
 		return false, context.Cause(ctx)
 	}
+
 	if g.owned {
 		return false, nil
 	}
+
 	c.mu.Lock()
 	if c.err == nil && c.panicErr == nil {
 		c.waiting++
 		adopted = true
 	}
 	c.mu.Unlock()
+
 	if adopted && g.hooks.OnJoin != nil {
 		g.hooks.OnJoin(key, false)
 	}
+
 	return adopted, nil
 }
 
 func (g *Group[K, V]) runBatch(keys []K, calls map[K]*call[V], fn func(context.Context, []K) (map[K]V, error)) {
 	ctx := calls[keys[0]].exec.ctx
 	start := time.Now()
+
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			for _, key := range keys {
 				calls[key].panicErr = &PanicError{Value: recovered, Stack: debug.Stack()}
 			}
 		}
+
 		for _, key := range keys {
 			g.complete(key, calls[key], start)
 		}
 	}()
+
 	values, err := fn(ctx, keys)
 	if err != nil {
 		for _, key := range keys {
 			calls[key].err = err
 		}
+
 		return
 	}
+
 	for _, key := range keys {
 		value, ok := values[key]
 		if !ok {
 			calls[key].err = ErrMissingResult
 			continue
 		}
+
 		calls[key].value = value
 	}
 }
@@ -384,11 +432,13 @@ func (g *Group[K, V]) runBatch(keys []K, calls map[K]*call[V], fn func(context.C
 func (g *Group[K, V]) run(key K, c *call[V], fn func(context.Context) (V, error)) {
 	start := time.Now()
 	normal := false
+
 	var panicErr *PanicError
 	defer func() {
 		if !normal && panicErr == nil {
 			c.err = ErrCallbackExit
 		}
+
 		c.panicErr = panicErr
 		g.complete(key, c, start)
 	}()
@@ -398,12 +448,15 @@ func (g *Group[K, V]) run(key K, c *call[V], fn func(context.Context) (V, error)
 	if err != nil {
 		c.err = err
 		normal = true
+
 		return
 	}
+
 	c.value = value
 	if g.owned {
 		c.cell, c.err = g.share(value)
 	}
+
 	normal = true
 }
 
@@ -422,9 +475,11 @@ func (g *Group[K, V]) resultOptions() []ownership.Option[V] {
 	if g.drop != nil {
 		opts = append(opts, ownership.WithDrop(g.drop))
 	}
+
 	if g.clone != nil {
 		opts = append(opts, ownership.WithClone(g.clone))
 	}
+
 	return opts
 }
 
@@ -432,10 +487,12 @@ func (g *Group[K, V]) complete(key K, c *call[V], start time.Time) {
 	c.mu.Lock()
 	c.accepting = false
 	c.finished = true
+
 	var release *ownership.Shared[V]
 	if c.left == c.waiting && c.cell != nil {
 		release, c.cell = c.cell, nil
 	}
+
 	hookErr := c.err
 	if hookErr == nil && c.panicErr != nil {
 		hookErr = c.panicErr
@@ -444,9 +501,11 @@ func (g *Group[K, V]) complete(key K, c *call[V], start time.Time) {
 	g.backend.compareAndDelete(key, c)
 	close(c.done)
 	c.exec.cancel()
+
 	if g.hooks.OnComplete != nil {
 		g.hooks.OnComplete(key, time.Since(start), hookErr)
 	}
+
 	if release != nil {
 		_ = release.Release()
 	}
@@ -478,12 +537,15 @@ func (g *Group[K, V]) wait(ctx context.Context, key K, c *call[V]) (V, error) {
 	// copied before leaving, since leaving may release the round.
 	panicErr, err, value := c.panicErr, c.err, c.value
 	g.leave(key, c)
+
 	if panicErr != nil {
 		panic(panicErr)
 	}
+
 	if err != nil {
 		return zero, err
 	}
+
 	return value, nil
 }
 
@@ -491,8 +553,11 @@ func (g *Group[K, V]) waitShared(ctx context.Context, key K, c *call[V]) (*owner
 	if !g.await(ctx, key, c) {
 		return nil, ctx.Err()
 	}
+
 	panicErr, err := c.panicErr, c.err
+
 	var result *ownership.Shared[V]
+
 	if err == nil && panicErr == nil {
 		if c.cell != nil {
 			// Clone under the lock: leave may release the cell concurrently
@@ -508,33 +573,41 @@ func (g *Group[K, V]) waitShared(ctx context.Context, key K, c *call[V]) (*owner
 			result, err = ownership.NewShared(c.value)
 		}
 	}
+
 	g.leave(key, c)
+
 	if panicErr != nil {
 		panic(panicErr)
 	}
+
 	return result, err
 }
 
 func (g *Group[K, V]) leave(key K, c *call[V]) {
 	abandon := false
+
 	c.mu.Lock()
+
 	c.left++
 	if c.left == c.waiting && !c.finished && !c.abandoned {
 		c.abandoned = true
 		c.accepting = false
 		abandon = true
 	}
+
 	var release *ownership.Shared[V]
 	if c.finished && c.left == c.waiting && c.cell != nil {
 		release, c.cell = c.cell, nil
 	}
 	c.mu.Unlock()
+
 	if abandon {
 		// Cancel the work but leave the key registered: complete removes it
 		// once the callback returns, and until then a new caller waits in
 		// join rather than starting a second callback for the same key.
 		c.exec.abandon()
 	}
+
 	if release != nil {
 		_ = release.Release()
 	}
@@ -546,16 +619,20 @@ func (g *Group[K, V]) leave(key K, c *call[V]) {
 func (g *Group[K, V]) Forget(key K) bool {
 	g.ready()
 	_, ok := g.backend.delete(key)
+
 	return ok
 }
 
 // Cancel asks the in-flight operation for a key to stop.
 func (g *Group[K, V]) Cancel(key K) bool {
 	g.ready()
+
 	c, ok := g.backend.load(key)
 	if !ok {
 		return false
 	}
+
 	c.exec.cancel()
+
 	return true
 }

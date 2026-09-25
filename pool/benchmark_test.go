@@ -16,14 +16,18 @@ func BenchmarkGetRelease(b *testing.B) {
 		b.Fatal(err)
 	}
 	defer p.Close()
+
 	ctx := context.Background()
+
 	b.Run("sequential", func(b *testing.B) {
 		b.ReportAllocs()
+
 		for b.Loop() {
 			c, err := p.Get(ctx)
 			if err != nil {
 				b.Fatal(err)
 			}
+
 			_ = c.Release()
 		}
 	})
@@ -35,6 +39,7 @@ func BenchmarkGetRelease(b *testing.B) {
 				if err != nil {
 					b.Fatal(err)
 				}
+
 				_ = c.Release()
 			}
 		})

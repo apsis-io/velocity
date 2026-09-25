@@ -41,9 +41,11 @@ func isSubmissionPath(m reflect.Method) bool {
 	if t.NumIn() < 2 { // receiver plus at least the function
 		return false
 	}
+
 	if t.In(t.NumIn()-1).String() != "func(context.Context) error" {
 		return false
 	}
+
 	return t.NumOut() <= 1
 }
 
@@ -62,6 +64,7 @@ func TestErrGroupSubmissionPathsAreSpecified(t *testing.T) {
 		if !isSubmissionPath(m) {
 			continue
 		}
+
 		seen[m.Name] = true
 		if !specifiedSubmissionPaths[m.Name] {
 			t.Errorf("ErrGroup.%s submits a function but the hook contract does not specify its reporting.\n"+
@@ -135,6 +138,7 @@ func TestErrGroupHookCountsMatchTheContract(t *testing.T) {
 			run: func(t *testing.T, eg *async.ErrGroup, _ chan struct{}) {
 				ctx, cancel := context.WithCancel(context.Background())
 				cancel()
+
 				if eg.GoContext(ctx, func(context.Context) error {
 					t.Error("a function ran against a finished context")
 					return nil
@@ -162,12 +166,15 @@ func TestErrGroupHookCountsMatchTheContract(t *testing.T) {
 			want: 1,
 			run: func(t *testing.T, eg *async.ErrGroup, released chan struct{}) {
 				started := make(chan struct{})
+
 				eg.Go(func(context.Context) error {
 					close(started)
 					<-released
+
 					return nil
 				})
 				<-started
+
 				if eg.TryGo(func(context.Context) error {
 					t.Error("TryGo submitted with no permit free")
 					return nil
@@ -195,15 +202,18 @@ func TestErrGroupHookCountsMatchTheContract(t *testing.T) {
 				mu      sync.Mutex
 				reports int
 			)
+
 			hooks := async.Hooks{OnTaskComplete: func(_ int, _ string, _, _ time.Duration, _ error) {
 				mu.Lock()
 				reports++
 				mu.Unlock()
 			}}
+
 			run, err := async.New(async.Limited(1), async.WithHooks(hooks))
 			if err != nil {
 				t.Fatal(err)
 			}
+
 			eg, _ := run.ErrGroup(context.Background())
 
 			released := make(chan struct{})
@@ -212,10 +222,12 @@ func TestErrGroupHookCountsMatchTheContract(t *testing.T) {
 			// it by blocking on this channel, so joining first would deadlock
 			// the test rather than fail it.
 			close(released)
+
 			_ = eg.Wait()
 
 			mu.Lock()
 			defer mu.Unlock()
+
 			if reports != tt.want {
 				t.Fatalf("hook fired %d times, want %d", reports, tt.want)
 			}

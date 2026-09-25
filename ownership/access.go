@@ -11,23 +11,30 @@ func scopedView[T, R any](c *cell[T], h *handle, mode mode, fn func(T) (R, error
 		var zero R
 		return zero, &ProjectionError{Operation: OpProject}
 	}
+
 	if c == nil {
 		var zero R
 		return zero, &ReleasedError{Operation: OpBorrow}
 	}
+
 	c.mu.Lock()
 	if err := c.admitReadLocked(h, mode); err != nil {
 		c.mu.Unlock()
+
 		var zero R
+
 		return zero, err
 	}
+
 	value := c.value
+
 	c.mu.Unlock()
 	defer func() {
 		c.mu.Lock()
 		c.endReadLocked(h)
 		c.mu.Unlock()
 	}()
+
 	return fn(value)
 }
 
@@ -38,16 +45,21 @@ func scopedMutate[T, R any](c *cell[T], h *handle, mode mode, fn func(*T) (R, er
 		var zero R
 		return zero, &ProjectionError{Operation: OpUpdate}
 	}
+
 	if c == nil {
 		var zero R
 		return zero, &ReleasedError{Operation: OpBorrowMut}
 	}
+
 	c.mu.Lock()
 	if err := c.admitWriteLocked(h, mode); err != nil {
 		c.mu.Unlock()
+
 		var zero R
+
 		return zero, err
 	}
+
 	c.mu.Unlock()
 	defer func() {
 		c.mu.Lock()
@@ -64,5 +76,6 @@ func errOnly[T any](fn func(T) error) func(T) (struct{}, error) {
 	if fn == nil {
 		return nil
 	}
+
 	return func(value T) (struct{}, error) { return struct{}{}, fn(value) }
 }

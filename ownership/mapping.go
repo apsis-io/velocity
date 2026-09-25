@@ -21,9 +21,11 @@ func (o *Owner[T]) Map[U any](fn func(T) (U, error), opts ...Option[U]) (*Owner[
 	if fn == nil {
 		return nil, &ProjectionError{Operation: OpMap}
 	}
+
 	if o == nil || o.c == nil {
 		return nil, &ReleasedError{Operation: OpMap}
 	}
+
 	cfg, err := buildConfig(opts)
 	if err != nil {
 		return nil, err
@@ -32,6 +34,7 @@ func (o *Owner[T]) Map[U any](fn func(T) (U, error), opts ...Option[U]) (*Owner[
 	// An exclusive lease reuses every precondition check and, unlike taking
 	// the value outright, keeps the Owner recoverable if fn fails.
 	c := o.c
+
 	lease, err := c.acquireWrite(&o.h, modeUnique)
 	if err != nil {
 		return nil, err
@@ -53,8 +56,11 @@ func (o *Owner[T]) Map[U any](fn func(T) (U, error), opts ...Option[U]) (*Owner[
 
 	c.mu.Lock()
 	c.releaseLeaseLocked(lease)
+
 	o.h.state = handleMoved
+
 	var zero T
+
 	c.value = zero
 	c.mode = modeReleased
 	c.mu.Unlock()

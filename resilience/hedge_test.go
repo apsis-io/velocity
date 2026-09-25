@@ -20,23 +20,29 @@ func fixedDelay(d time.Duration) resilience.Backoff {
 // is discarded rather than leaked when it finally arrives.
 func TestHedgeSecondAttemptWinsAndFirstIsDiscarded(t *testing.T) {
 	release := make(chan struct{})
+
 	var discarded chan int = make(chan int, 1)
+
 	policy := resilience.HedgePolicy[int]{
 		MaxAttempts: 2,
 		Delay:       fixedDelay(5 * time.Millisecond),
 		Discard:     func(v int) error { discarded <- v; return nil },
 	}
+
 	value, err := resilience.Hedge(context.Background(), policy, func(ctx context.Context, attempt int) (int, error) {
 		if attempt == 0 {
 			<-release
 			return 100, nil // arrives after the hedge has already won
 		}
+
 		return 200, nil
 	})
 	if err != nil || value != 200 {
 		t.Fatalf("Hedge = (%d, %v), want the hedge's 200", value, err)
 	}
+
 	close(release)
+
 	select {
 	case got := <-discarded:
 		if got != 100 {
@@ -51,10 +57,12 @@ func TestHedgeSecondAttemptWinsAndFirstIsDiscarded(t *testing.T) {
 // execution: no hedge is ever started.
 func TestHedgeFastFirstAttemptStartsNoHedge(t *testing.T) {
 	var attempts atomic.Int32
+
 	policy := resilience.HedgePolicy[int]{
 		MaxAttempts: 4,
 		Delay:       fixedDelay(time.Hour),
 	}
+
 	value, err := resilience.Hedge(context.Background(), policy, func(context.Context, int) (int, error) {
 		attempts.Add(1)
 		return 7, nil
@@ -68,21 +76,26 @@ func TestHedgeFastFirstAttemptStartsNoHedge(t *testing.T) {
 // waiting out a delay that exists to detect slowness.
 func TestHedgeFailureStartsNextAttemptWithoutWaiting(t *testing.T) {
 	boom := errors.New("boom")
+
 	var attempts atomic.Int32
+
 	start := time.Now()
 	policy := resilience.HedgePolicy[string]{
 		MaxAttempts: 3,
 		Delay:       fixedDelay(30 * time.Second),
 	}
+
 	value, err := resilience.Hedge(context.Background(), policy, func(_ context.Context, attempt int) (string, error) {
 		if attempts.Add(1) < 3 {
 			return "", boom
 		}
+
 		return "third", nil
 	})
 	if err != nil || value != "third" {
 		t.Fatalf("Hedge = (%q, %v)", value, err)
 	}
+
 	if elapsed := time.Since(start); elapsed > 5*time.Second {
 		t.Fatalf("took %v; failures waited out the hedge delay", elapsed)
 	}
@@ -95,10 +108,12 @@ func TestHedgeAllAttemptsFailJoinsErrors(t *testing.T) {
 	_, err := resilience.Hedge(context.Background(), policy, func(_ context.Context, attempt int) (int, error) {
 		return 0, errs[attempt]
 	})
+
 	var re *resilience.RetryError
 	if !errors.As(err, &re) || re.Attempts != 2 {
 		t.Fatalf("Hedge = %v, want a RetryError over 2 attempts", err)
 	}
+
 	if !errors.Is(err, first) || !errors.Is(err, second) {
 		t.Fatalf("error = %v, want both causes", err)
 	}
@@ -107,12 +122,15 @@ func TestHedgeAllAttemptsFailJoinsErrors(t *testing.T) {
 // A non-retryable error is the answer, not something to hedge past.
 func TestHedgeStopsOnNonRetryableError(t *testing.T) {
 	fatal := errors.New("bad request")
+
 	var attempts atomic.Int32
+
 	policy := resilience.HedgePolicy[int]{
 		MaxAttempts: 4,
 		Delay:       fixedDelay(time.Millisecond),
 		Retryable:   func(err error) bool { return !errors.Is(err, fatal) },
 	}
+
 	_, err := resilience.Hedge(context.Background(), policy, func(context.Context, int) (int, error) {
 		attempts.Add(1)
 		return 0, fatal
@@ -120,6 +138,7 @@ func TestHedgeStopsOnNonRetryableError(t *testing.T) {
 	if !errors.Is(err, fatal) || attempts.Load() != 1 {
 		t.Fatalf("Hedge = %v after %d attempts, want the fatal error after 1", err, attempts.Load())
 	}
+
 	var re *resilience.RetryError
 	if errors.As(err, &re) {
 		t.Fatal("a non-retryable error was wrapped as a RetryError")
@@ -131,17 +150,21 @@ func TestHedgeStopsOnNonRetryableError(t *testing.T) {
 func TestHedgeCancelsLosingAttempts(t *testing.T) {
 	stopped := make(chan struct{})
 	policy := resilience.HedgePolicy[int]{MaxAttempts: 2, Delay: fixedDelay(5 * time.Millisecond)}
+
 	value, err := resilience.Hedge(context.Background(), policy, func(ctx context.Context, attempt int) (int, error) {
 		if attempt == 0 {
 			<-ctx.Done()
 			close(stopped)
+
 			return 0, ctx.Err()
 		}
+
 		return 1, nil
 	})
 	if err != nil || value != 1 {
 		t.Fatalf("Hedge = (%d, %v)", value, err)
 	}
+
 	select {
 	case <-stopped:
 	case <-time.After(time.Second):
@@ -152,8 +175,10 @@ func TestHedgeCancelsLosingAttempts(t *testing.T) {
 func TestHedgeHonoursCallerContext(t *testing.T) {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	cause := errors.New("caller gave up")
+
 	policy := resilience.HedgePolicy[int]{MaxAttempts: 3, Delay: fixedDelay(time.Millisecond)}
 	go func() { time.Sleep(10 * time.Millisecond); cancel(cause) }()
+
 	_, err := resilience.Hedge(ctx, policy, func(ctx context.Context, _ int) (int, error) {
 		<-ctx.Done()
 		return 0, ctx.Err()
@@ -181,6 +206,7 @@ func TestHedgeValidation(t *testing.T) {
 			}
 		})
 	}
+
 	var nilCtx context.Context // a literal nil trips SA1012
 	if _, err := resilience.Hedge(nilCtx, resilience.HedgePolicy[int]{MaxAttempts: 2, Delay: fixedDelay(0)}, valid); !errors.Is(err, resilience.ErrInvalidPolicy) {
 		t.Fatalf("nil ctx = %v", err)
@@ -194,9 +220,11 @@ func TestHedgeBudgetBoundsExtraLoad(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := resilience.NewHedgeBudget(0, 1); !errors.Is(err, resilience.ErrInvalidBudget) {
 		t.Fatalf("zero ratio = %v", err)
 	}
+
 	if _, err := resilience.NewHedgeBudget(0.5, 0); !errors.Is(err, resilience.ErrInvalidBudget) {
 		t.Fatalf("zero burst = %v", err)
 	}
@@ -211,8 +239,10 @@ func TestHedgeBudgetBoundsExtraLoad(t *testing.T) {
 	// observe the scheduler, since a losing attempt may not have run by the
 	// time the winner returns.
 	var launched atomic.Int64
+
 	policy.Hooks = resilience.HedgeHooks{OnAttempt: func(int, bool) { launched.Add(1) }}
 	release := make(chan struct{})
+
 	var wg sync.WaitGroup
 	// Twenty executions at a 0.25 ratio fund five hedges, so the dependency
 	// sees at most 25 attempts rather than 40.
@@ -225,10 +255,12 @@ func TestHedgeBudgetBoundsExtraLoad(t *testing.T) {
 					case <-ctx.Done():
 					}
 				}
+
 				return attempt, nil
 			})
 		})
 	}
+
 	time.Sleep(50 * time.Millisecond)
 	close(release)
 	wg.Wait()
@@ -237,6 +269,7 @@ func TestHedgeBudgetBoundsExtraLoad(t *testing.T) {
 	if total > 25 {
 		t.Fatalf("attempts = %d for 20 executions at ratio 0.25, want at most 25", total)
 	}
+
 	if total <= 20 {
 		t.Fatalf("attempts = %d, want some hedges to have been funded", total)
 	}
@@ -249,8 +282,11 @@ func TestHedgeEmptyBudgetDoesNotHang(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	boom := errors.New("boom")
+
 	var launched atomic.Int32
+
 	policy := resilience.HedgePolicy[int]{
 		MaxAttempts: 5,
 		Delay:       fixedDelay(0),
@@ -258,12 +294,14 @@ func TestHedgeEmptyBudgetDoesNotHang(t *testing.T) {
 		Hooks:       resilience.HedgeHooks{OnAttempt: func(int, bool) { launched.Add(1) }},
 	}
 	done := make(chan error, 1)
+
 	go func() {
 		_, err := resilience.Hedge(context.Background(), policy, func(context.Context, int) (int, error) {
 			return 0, boom
 		})
 		done <- err
 	}()
+
 	select {
 	case err := <-done:
 		if !errors.Is(err, boom) {
@@ -272,9 +310,11 @@ func TestHedgeEmptyBudgetDoesNotHang(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("Hedge hung waiting for a hedge the budget would never fund")
 	}
+
 	if got := launched.Load(); got != 1 {
 		t.Fatalf("launched = %d attempts, want the single funded one", got)
 	}
+
 	if tokens := budget.Tokens(); tokens < 0 || tokens > 1 {
 		t.Fatalf("tokens = %v, want within the burst", tokens)
 	}
@@ -286,7 +326,9 @@ func TestNilHedgeBudgetPermits(t *testing.T) {
 	if budget.Tokens() != 0 {
 		t.Fatal("nil budget reported tokens")
 	}
+
 	var launched atomic.Int32
+
 	policy := resilience.HedgePolicy[int]{
 		MaxAttempts: 3,
 		Delay:       fixedDelay(0),
@@ -302,25 +344,33 @@ func TestNilHedgeBudgetPermits(t *testing.T) {
 			case <-release:
 			case <-ctx.Done():
 			}
+
 			return 0, ctx.Err()
 		}
+
 		return attempt, nil
 	})
+
 	close(release)
+
 	if err != nil || value != 2 {
 		t.Fatalf("Hedge = (%d, %v), want the third attempt", value, err)
 	}
+
 	if got := launched.Load(); got != 3 {
 		t.Fatalf("launched = %d attempts, want all 3 funded by a nil budget", got)
 	}
 }
 
 func TestHedgeHooksReportEveryAttempt(t *testing.T) {
-	var mu sync.Mutex
-	var started []int
-	var hedges []bool
-	var wonBy int = -1
-	var discards int
+	var (
+		mu       sync.Mutex
+		started  []int
+		hedges   []bool
+		wonBy    int = -1
+		discards int
+	)
+
 	policy := resilience.HedgePolicy[int]{
 		MaxAttempts: 2,
 		Delay:       fixedDelay(5 * time.Millisecond),
@@ -328,6 +378,7 @@ func TestHedgeHooksReportEveryAttempt(t *testing.T) {
 		Hooks: resilience.HedgeHooks{
 			OnAttempt: func(attempt int, hedge bool) {
 				mu.Lock()
+
 				started = append(started, attempt)
 				hedges = append(hedges, hedge)
 				mu.Unlock()
@@ -349,25 +400,32 @@ func TestHedgeHooksReportEveryAttempt(t *testing.T) {
 		},
 	}
 	release := make(chan struct{})
+
 	_, err := resilience.Hedge(context.Background(), policy, func(_ context.Context, attempt int) (int, error) {
 		if attempt == 0 {
 			<-release
 			return 1, nil
 		}
+
 		return 2, nil
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	close(release)
+
 	deadline := time.After(time.Second)
+
 	for {
 		mu.Lock()
 		seen := discards
 		mu.Unlock()
+
 		if seen == 1 {
 			break
 		}
+
 		select {
 		case <-deadline:
 			t.Fatal("the failed discard was never reported")
@@ -375,11 +433,14 @@ func TestHedgeHooksReportEveryAttempt(t *testing.T) {
 			time.Sleep(time.Millisecond)
 		}
 	}
+
 	mu.Lock()
 	defer mu.Unlock()
+
 	if !slices.Equal(started, []int{0, 1}) || !slices.Equal(hedges, []bool{false, true}) {
 		t.Fatalf("attempts = %v, hedge flags = %v", started, hedges)
 	}
+
 	if wonBy != 1 {
 		t.Fatalf("won by attempt %d, want 1", wonBy)
 	}
@@ -389,6 +450,7 @@ func TestHedgeHooksReportEveryAttempt(t *testing.T) {
 // dependency that is failing trips it rather than being hedged harder.
 func TestHedgeInsideBreaker(t *testing.T) {
 	clock := resilience.NewManualClock(time.Unix(0, 0))
+
 	breaker, err := resilience.NewBreaker(resilience.BreakerPolicy{
 		Trip:    resilience.ConsecutiveFailures(2),
 		OpenFor: time.Minute,
@@ -397,14 +459,17 @@ func TestHedgeInsideBreaker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	boom := errors.New("boom")
 	policy := resilience.HedgePolicy[int]{MaxAttempts: 2, Delay: fixedDelay(0)}
+
 	_, err = resilience.Hedge(context.Background(), policy, func(ctx context.Context, _ int) (int, error) {
 		return breaker.Do(ctx, func(context.Context) (int, error) { return 0, boom })
 	})
 	if !errors.Is(err, boom) {
 		t.Fatalf("Hedge = %v", err)
 	}
+
 	if got := breaker.State(); got != resilience.Open {
 		t.Fatalf("breaker = %v after two failed attempts, want open", got)
 	}
@@ -412,6 +477,7 @@ func TestHedgeInsideBreaker(t *testing.T) {
 
 func TestLatencyDelayEstimatesFromObservedDurations(t *testing.T) {
 	warmup := 5 * time.Second
+
 	d, err := resilience.NewLatencyDelay(0.9, 100, 10, warmup)
 	if err != nil {
 		t.Fatal(err)
@@ -420,9 +486,11 @@ func TestLatencyDelayEstimatesFromObservedDurations(t *testing.T) {
 	for range 9 {
 		d.Observe(0, 10*time.Millisecond, nil, false)
 	}
+
 	if got := d.Delay(1); got != warmup {
 		t.Fatalf("delay = %v before minSamples, want the warmup %v", got, warmup)
 	}
+
 	if got := d.Samples(); got != 9 {
 		t.Fatalf("samples = %d", got)
 	}
@@ -432,9 +500,11 @@ func TestLatencyDelayEstimatesFromObservedDurations(t *testing.T) {
 	for i := 1; i <= 100; i++ {
 		d.Observe(0, time.Duration(i)*time.Millisecond, nil, false)
 	}
+
 	if got := d.Delay(1); got != 90*time.Millisecond {
 		t.Fatalf("p90 = %v, want 90ms", got)
 	}
+
 	if got := d.Samples(); got != 100 {
 		t.Fatalf("samples = %d, want the full window", got)
 	}
@@ -443,6 +513,7 @@ func TestLatencyDelayEstimatesFromObservedDurations(t *testing.T) {
 	for range 100 {
 		d.Observe(0, time.Millisecond, nil, false)
 	}
+
 	if got := d.Delay(1); got != time.Millisecond {
 		t.Fatalf("p90 after the window turned over = %v, want 1ms", got)
 	}
@@ -455,8 +526,10 @@ func TestLatencyDelayIgnoresFailuresAndInvalidConfig(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	d.Observe(0, time.Hour, errors.New("broke"), false)
 	d.Observe(0, -time.Second, nil, false)
+
 	if got := d.Samples(); got != 0 {
 		t.Fatalf("samples = %d, want failures and negatives ignored", got)
 	}
@@ -474,6 +547,7 @@ func TestLatencyDelayIgnoresFailuresAndInvalidConfig(t *testing.T) {
 
 	var nilDelay *resilience.LatencyDelay
 	nilDelay.Observe(0, time.Second, nil, false)
+
 	if nilDelay.Delay(1) != 0 || nilDelay.Samples() != 0 {
 		t.Fatal("a nil LatencyDelay is not inert")
 	}
@@ -486,6 +560,7 @@ func TestHedgeWithLatencyDelay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	policy := resilience.HedgePolicy[int]{
 		MaxAttempts: 2,
 		Delay:       latency.Delay,
@@ -499,9 +574,11 @@ func TestHedgeWithLatencyDelay(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+
 	if latency.Samples() != 4 {
 		t.Fatalf("samples = %d, want the four completed attempts", latency.Samples())
 	}
+
 	if got := latency.Delay(1); got >= time.Hour {
 		t.Fatalf("delay = %v, still the warmup after warming", got)
 	}
@@ -514,11 +591,15 @@ func TestHedgeWithLatencyDelay(t *testing.T) {
 			case <-release:
 			case <-ctx.Done():
 			}
+
 			return 0, ctx.Err()
 		}
+
 		return 2, nil
 	})
+
 	close(release)
+
 	if err != nil || value != 2 {
 		t.Fatalf("Hedge = (%d, %v), want the hedge to have overtaken", value, err)
 	}

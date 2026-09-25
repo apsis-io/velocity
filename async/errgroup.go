@@ -65,10 +65,12 @@ type indexedErr struct {
 // function has returned, and by the parent.
 func (r *Runner) ErrGroup(ctx context.Context) (*ErrGroup, context.Context) {
 	ctx, cancel := context.WithCancelCause(ctx)
+
 	g := &ErrGroup{run: r, ctx: ctx, cancel: cancel, done: make(chan struct{})}
 	if r != nil && !r.limit.unlimited {
 		g.permits = make(chan struct{}, r.limit.value)
 	}
+
 	return g, ctx
 }
 
@@ -95,7 +97,9 @@ func (g *ErrGroup) Go(fn func(context.Context) error) {
 	if !g.admissible(fn) {
 		return
 	}
+
 	var waited time.Duration
+
 	if g.permits != nil {
 		var start time.Time
 		if g.run.hooks.OnTaskComplete != nil {
@@ -107,15 +111,19 @@ func (g *ErrGroup) Go(fn func(context.Context) error) {
 		// functions that ignore their cancellation, which x/sync does not
 		// offer either.
 		g.permits <- struct{}{}
+
 		if !start.IsZero() {
 			waited = time.Since(start)
 		}
+
 		if g.ctx.Err() != nil {
 			<-g.permits
 			g.skipped(waited)
+
 			return
 		}
 	}
+
 	g.start(fn, waited)
 }
 
@@ -142,43 +150,56 @@ func (g *ErrGroup) GoContext(ctx context.Context, fn func(context.Context) error
 			g.record(-1, &PlanError{Index: -1, Cause: ErrNilRunner})
 			return false
 		}
+
 		index := g.next()
 		g.record(index, &PlanError{Index: index, Cause: ErrNilContext})
+
 		return false
 	}
+
 	if !g.admissible(fn) {
 		return false
 	}
+
 	if err := ctx.Err(); err != nil {
 		g.skipped(0)
 		return false
 	}
 
 	var waited time.Duration
+
 	if g.permits != nil {
 		var start time.Time
 		if g.run.hooks.OnTaskComplete != nil {
 			start = time.Now()
 		}
+
 		select {
 		case g.permits <- struct{}{}:
 		case <-ctx.Done():
 			if !start.IsZero() {
 				waited = time.Since(start)
 			}
+
 			g.skipped(waited)
+
 			return false
 		}
+
 		if !start.IsZero() {
 			waited = time.Since(start)
 		}
+
 		if g.ctx.Err() != nil {
 			<-g.permits
 			g.skipped(waited)
+
 			return false
 		}
 	}
+
 	g.start(fn, waited)
+
 	return true
 }
 
@@ -190,11 +211,14 @@ func (g *ErrGroup) admissible(fn func(context.Context) error) bool {
 		g.record(-1, &PlanError{Index: -1, Cause: ErrNilRunner})
 		return false
 	}
+
 	if fn == nil {
 		index := g.next()
 		g.record(index, &PlanError{Index: index, Cause: ErrNilTask})
+
 		return false
 	}
+
 	return true
 }
 
@@ -216,10 +240,12 @@ func (g *ErrGroup) TryGo(fn func(context.Context) error) bool {
 		g.Go(fn)
 		return false
 	}
+
 	if g.ctx.Err() != nil {
 		g.skipped(0)
 		return false
 	}
+
 	if g.permits != nil {
 		select {
 		case g.permits <- struct{}{}:
@@ -230,7 +256,9 @@ func (g *ErrGroup) TryGo(fn func(context.Context) error) bool {
 			return false
 		}
 	}
+
 	g.start(fn, 0)
+
 	return true
 }
 
@@ -244,15 +272,20 @@ func (g *ErrGroup) start(fn func(context.Context) error, waited time.Duration) {
 
 func (g *ErrGroup) exec(fn func(context.Context) error, index int, waited time.Duration) {
 	hook := g.run.hooks.OnTaskComplete
-	var err error
-	var runStart time.Time
+
+	var (
+		err      error
+		runStart time.Time
+	)
 	if hook != nil {
 		runStart = time.Now()
 	}
+
 	defer func() {
 		if value := recover(); value != nil {
 			err = &Panic{Value: value, Stack: debug.Stack()}
 		}
+
 		if err != nil {
 			g.record(index, err)
 		}
@@ -262,11 +295,14 @@ func (g *ErrGroup) exec(fn func(context.Context) error, index int, waited time.D
 		if g.permits != nil {
 			<-g.permits
 		}
+
 		if hook != nil {
 			hook(index, "", waited, time.Since(runStart), err)
 		}
+
 		g.wg.Done()
 	}()
+
 	err = fn(g.ctx)
 }
 
@@ -278,6 +314,7 @@ func (g *ErrGroup) record(index int, err error) {
 	first := len(g.errs) == 0
 	g.errs = append(g.errs, indexedErr{index, err})
 	g.mu.Unlock()
+
 	if first {
 		g.cancel(err)
 	}
@@ -286,9 +323,11 @@ func (g *ErrGroup) record(index int, err error) {
 func (g *ErrGroup) first() error {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+
 	if len(g.errs) == 0 {
 		return nil
 	}
+
 	return g.errs[0].err
 }
 
@@ -298,6 +337,7 @@ func (g *ErrGroup) Wait() error {
 	g.wg.Wait()
 	err := g.first()
 	g.cancel(err)
+
 	return err
 }
 
@@ -307,6 +347,7 @@ func (g *ErrGroup) Wait() error {
 // still collects it.
 func (g *ErrGroup) WaitContext(ctx context.Context) error {
 	g.settle()
+
 	select {
 	case <-g.done:
 		return g.Wait()
@@ -324,6 +365,7 @@ func (g *ErrGroup) settle() {
 	spawn := !g.watching
 	g.watching = true
 	g.mu.Unlock()
+
 	if spawn {
 		go func() { g.wg.Wait(); close(g.done) }()
 	}
@@ -337,13 +379,17 @@ func (g *ErrGroup) Errors() error {
 	errs := make([]indexedErr, len(g.errs))
 	copy(errs, g.errs)
 	g.mu.Unlock()
+
 	if len(errs) == 0 {
 		return nil
 	}
+
 	slices.SortStableFunc(errs, func(a, b indexedErr) int { return a.index - b.index })
+
 	joined := make([]error, len(errs))
 	for i, e := range errs {
 		joined[i] = e.err
 	}
+
 	return errors.Join(joined...)
 }

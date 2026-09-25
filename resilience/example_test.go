@@ -21,6 +21,7 @@ func ExampleRetry() {
 		if attempts < 2 {
 			return "", errors.New("try again")
 		}
+
 		return "ok", nil
 	})
 	fmt.Println(value, err)
@@ -79,6 +80,7 @@ func ExampleHedge() {
 			return o.Release() // runs the loser's Drop
 		},
 	}
+
 	winner, err := resilience.Hedge(context.Background(), policy,
 		func(ctx context.Context, attempt int) (*ownership.Owner[string], error) {
 			name := fmt.Sprintf("conn-%d", attempt)
@@ -86,14 +88,17 @@ func ExampleHedge() {
 				fmt.Println("closed", name)
 				return nil
 			}))
+
 			if attempt == 0 {
 				<-slow // overtaken by the hedge
 			}
+
 			return conn, nil
 		})
 	if err != nil {
 		return
 	}
+
 	name, _ := winner.View(func(s string) (string, error) { return s, nil })
 	fmt.Println("using", name)
 
@@ -101,6 +106,7 @@ func ExampleHedge() {
 	// The loser's connection is closed by Discard once it arrives, so wait
 	// for that before releasing ours.
 	time.Sleep(50 * time.Millisecond)
+
 	_ = winner.Release()
 	// Output:
 	// using conn-1

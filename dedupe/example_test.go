@@ -31,6 +31,7 @@ func ExampleGroup_DoShared() {
 	})
 	n, _ := handle.View(func(buf []byte) (int, error) { return len(buf), nil })
 	fmt.Println("read", n)
+
 	_ = handle.Release()
 	// Output:
 	// read 1024
@@ -39,8 +40,10 @@ func ExampleGroup_DoShared() {
 
 func ExampleGroup_DoBorrowed() {
 	group, _ := dedupe.New[string, int]()
+
 	input := ownership.Own(21)
 	defer input.Release()
+
 	value, _ := group.DoBorrowed(context.Background(), "answer", input, func(_ context.Context, value int) (int, error) {
 		return value * 2, nil
 	})

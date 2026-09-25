@@ -13,6 +13,7 @@ type client struct{ id int }
 
 func ExamplePool() {
 	made := 0
+
 	clients, _ := pool.New(pool.Config[*client]{
 		New:   func(context.Context) (*client, error) { made++; return &client{id: made}, nil },
 		Close: func(c *client) error { fmt.Println("closed", c.id); return nil },
@@ -24,6 +25,7 @@ func ExamplePool() {
 	first, _ := clients.Get(ctx)
 	c, _ := first.Value()
 	fmt.Println("got", c.id)
+
 	_ = first.Release()
 
 	// Returned most recently, so reused next; nothing new is made.
@@ -44,6 +46,7 @@ func ExamplePool() {
 
 func ExampleCheckout_Discard() {
 	made := 0
+
 	clients, _ := pool.New(pool.Config[*client]{
 		New:   func(context.Context) (*client, error) { made++; return &client{id: made}, nil },
 		Close: func(c *client) error { fmt.Println("closed", c.id); return nil },
@@ -56,6 +59,7 @@ func ExampleCheckout_Discard() {
 
 	fresh, _ := clients.Get(context.Background())
 	defer fresh.Release()
+
 	c, _ := fresh.Value()
 	fmt.Println("got", c.id)
 	// Output:

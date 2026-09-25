@@ -28,6 +28,7 @@ func (e *PlanError) Error() string {
 	if e.Index < 0 {
 		return fmt.Sprintf("async plan: %v", e.Cause)
 	}
+
 	return fmt.Sprintf("async plan: task %d: %v", e.Index, e.Cause)
 }
 
@@ -56,8 +57,11 @@ func (e *ItemError) Unwrap() error { return e.Err }
 // order, or nil if err carries none. At a boundary that wants one message —
 // a status field, an event — Failures(err)[0] is the lowest failed item.
 func Failures(err error) []*ItemError {
-	var items []*ItemError
-	var walk func(error)
+	var (
+		items []*ItemError
+		walk  func(error)
+	)
+
 	walk = func(err error) {
 		switch e := err.(type) {
 		case nil:
@@ -72,5 +76,6 @@ func Failures(err error) []*ItemError {
 		}
 	}
 	walk(err)
+
 	return items
 }

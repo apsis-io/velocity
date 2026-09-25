@@ -37,24 +37,29 @@ func (r *recorder) hooks() resilience.BreakerHooks {
 func (r *recorder) all() []transition {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+
 	return append([]transition(nil), r.transitions...)
 }
 
 func newBreaker(t *testing.T, clock *resilience.ManualClock, rec *recorder, policy resilience.BreakerPolicy) *resilience.Breaker {
 	t.Helper()
+
 	policy.Clock = clock
 	if rec != nil {
 		policy.Hooks = rec.hooks()
 	}
+
 	b, err := resilience.NewBreaker(policy)
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	return b
 }
 
 func TestNewBreakerValidation(t *testing.T) {
 	trip := resilience.ConsecutiveFailures(1)
+
 	tests := []struct {
 		name   string
 		policy resilience.BreakerPolicy
@@ -77,7 +82,9 @@ func TestNewBreakerValidation(t *testing.T) {
 
 func TestBreakerLifecycle(t *testing.T) {
 	clock := resilience.NewManualClock(time.Unix(0, 0))
+
 	var rec recorder
+
 	b := newBreaker(t, clock, &rec, resilience.BreakerPolicy{
 		Trip:    resilience.ConsecutiveFailures(2),
 		OpenFor: time.Minute,
@@ -88,48 +95,60 @@ func TestBreakerLifecycle(t *testing.T) {
 	if _, err := b.Do(ctx, fail); !errors.Is(err, errBoom) {
 		t.Fatalf("first failure = %v", err)
 	}
+
 	if got := b.State(); got != resilience.Closed {
 		t.Fatalf("state after one failure = %v", got)
 	}
+
 	if _, err := b.Do(ctx, fail); !errors.Is(err, errBoom) {
 		t.Fatalf("second failure = %v", err)
 	}
+
 	if got := b.State(); got != resilience.Open {
 		t.Fatalf("state after trip = %v", got)
 	}
 
 	// Open: rejected without running, with the remaining wait.
 	clock.Advance(20 * time.Second)
+
 	ran := false
 	_, err := b.Do(ctx, func(context.Context) (int, error) { ran = true; return 1, nil })
+
 	var be *resilience.BreakerError
 	if !errors.Is(err, resilience.ErrOpen) || !errors.As(err, &be) || ran {
 		t.Fatalf("open Do = %v, ran=%t", err, ran)
 	}
+
 	if be.State != resilience.Open || be.RetryAfter != 40*time.Second {
 		t.Fatalf("rejection = %+v", be)
 	}
 
 	// After OpenFor: half-open, one probe admitted; a failed probe reopens.
 	clock.Advance(40 * time.Second)
+
 	if got := b.State(); got != resilience.HalfOpen {
 		t.Fatalf("state after OpenFor = %v", got)
 	}
+
 	if _, err := b.Do(ctx, fail); !errors.Is(err, errBoom) {
 		t.Fatalf("failed probe = %v", err)
 	}
+
 	if got := b.State(); got != resilience.Open {
 		t.Fatalf("state after failed probe = %v", got)
 	}
 
 	// A successful probe closes and clears the counts.
 	clock.Advance(time.Minute)
+
 	if value, err := b.Do(ctx, succeed); err != nil || value != 1 {
 		t.Fatalf("successful probe = (%d, %v)", value, err)
 	}
+
 	if got := b.State(); got != resilience.Closed {
 		t.Fatalf("state after successful probe = %v", got)
 	}
+
 	if got := b.Counts(); got != (resilience.Counts{}) {
 		t.Fatalf("counts after close = %+v", got)
 	}
@@ -141,10 +160,12 @@ func TestBreakerLifecycle(t *testing.T) {
 		{resilience.Open, resilience.HalfOpen, resilience.Counts{}},
 		{resilience.HalfOpen, resilience.Closed, resilience.Counts{Requests: 1, Successes: 1, ConsecutiveSuccesses: 1}},
 	}
+
 	got := rec.all()
 	if len(got) != len(want) {
 		t.Fatalf("transitions = %+v, want %+v", got, want)
 	}
+
 	for i := range want {
 		if got[i] != want[i] {
 			t.Fatalf("transition %d = %+v, want %+v", i, got[i], want[i])
@@ -156,24 +177,31 @@ func TestBreakerLifecycle(t *testing.T) {
 // move on their own when OpenFor elapses, with no call to prompt them.
 func TestBreakerRecoversOnTheClockWithoutACall(t *testing.T) {
 	clock := resilience.NewManualClock(time.Unix(0, 0))
+
 	var rec recorder
+
 	b := newBreaker(t, clock, &rec, resilience.BreakerPolicy{
 		Trip:    resilience.ConsecutiveFailures(1),
 		OpenFor: time.Minute,
 	})
 	_, _ = b.Do(context.Background(), fail)
+
 	if got := rec.all(); len(got) != 1 || got[0].to != resilience.Open {
 		t.Fatalf("transitions after trip = %+v", got)
 	}
+
 	clock.Advance(59 * time.Second)
+
 	if got := rec.all(); len(got) != 1 {
 		t.Fatalf("recovered early: %+v", got)
 	}
 	// The hook fires from Advance itself; nothing has touched the breaker.
 	clock.Advance(time.Second)
+
 	if got := rec.all(); len(got) != 2 || got[1].from != resilience.Open || got[1].to != resilience.HalfOpen {
 		t.Fatalf("transitions after OpenFor = %+v", got)
 	}
+
 	if got := b.State(); got != resilience.HalfOpen {
 		t.Fatalf("state = %v", got)
 	}
@@ -182,10 +210,12 @@ func TestBreakerRecoversOnTheClockWithoutACall(t *testing.T) {
 	_, _ = b.Do(context.Background(), fail) // reopen
 	b.Reset()
 	clock.Advance(2 * time.Minute)
+
 	got := rec.all()
 	if last := got[len(got)-1]; last.to != resilience.Closed {
 		t.Fatalf("stale recovery fired after Reset: %+v", got)
 	}
+
 	if got := b.State(); got != resilience.Closed {
 		t.Fatalf("state after Reset and elapsed OpenFor = %v", got)
 	}
@@ -195,6 +225,7 @@ func TestBreakerRecoversOnTheClockWithoutACall(t *testing.T) {
 // must agree with it rather than transition twice.
 func TestBreakerRecoveryTimerAndLazyPathAgree(t *testing.T) {
 	var rec recorder
+
 	b, err := resilience.NewBreaker(resilience.BreakerPolicy{
 		Trip:    resilience.ConsecutiveFailures(1),
 		OpenFor: 5 * time.Millisecond,
@@ -203,15 +234,20 @@ func TestBreakerRecoveryTimerAndLazyPathAgree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	_, _ = b.Do(context.Background(), fail)
+
 	deadline := time.Now().Add(time.Second)
 	for b.State() != resilience.HalfOpen {
 		if time.Now().After(deadline) {
 			t.Fatal("never recovered")
 		}
+
 		time.Sleep(time.Millisecond)
 	}
+
 	time.Sleep(10 * time.Millisecond) // let a late timer, if any, fire
+
 	got := rec.all()
 	if len(got) != 2 || got[1].to != resilience.HalfOpen {
 		t.Fatalf("transitions = %+v, want exactly one recovery", got)
@@ -226,21 +262,26 @@ func TestBreakerHalfOpenBoundsProbes(t *testing.T) {
 		MaxProbes:        2,
 		SuccessesToClose: 2,
 	})
+
 	ctx := context.Background()
 	if _, err := b.Do(ctx, fail); !errors.Is(err, errBoom) {
 		t.Fatal(err)
 	}
+
 	clock.Advance(time.Second)
 
 	first, err := b.Allow()
 	if err != nil {
 		t.Fatalf("first probe = %v", err)
 	}
+
 	second, err := b.Allow()
 	if err != nil {
 		t.Fatalf("second probe = %v", err)
 	}
+
 	_, err = b.Allow()
+
 	var be *resilience.BreakerError
 	if !errors.Is(err, resilience.ErrOpen) || !errors.As(err, &be) || be.State != resilience.HalfOpen {
 		t.Fatalf("third probe = %v, want half-open rejection", err)
@@ -248,27 +289,34 @@ func TestBreakerHalfOpenBoundsProbes(t *testing.T) {
 
 	// One success is not enough to close; the slot it frees is reusable.
 	first(nil)
+
 	if got := b.State(); got != resilience.HalfOpen {
 		t.Fatalf("state after one success = %v", got)
 	}
+
 	third, err := b.Allow()
 	if err != nil {
 		t.Fatalf("probe after freed slot = %v", err)
 	}
 	// Reporting twice is ignored, so the count and slot do not double.
 	first(nil)
+
 	if got := b.Counts(); got.Successes != 1 {
 		t.Fatalf("counts after duplicate report = %+v", got)
 	}
+
 	third(nil)
+
 	if got := b.State(); got != resilience.Closed {
 		t.Fatalf("state after two successes = %v", got)
 	}
 	// A report from before the transition belongs to a judged window.
 	second(errBoom)
+
 	if got := b.State(); got != resilience.Closed {
 		t.Fatalf("stale failure reopened: %v", got)
 	}
+
 	if got := b.Counts(); got != (resilience.Counts{}) {
 		t.Fatalf("stale report counted: %+v", got)
 	}
@@ -276,6 +324,7 @@ func TestBreakerHalfOpenBoundsProbes(t *testing.T) {
 
 func TestBreakerHalfOpenProbeBoundHoldsUnderContention(t *testing.T) {
 	const probes = 3
+
 	clock := resilience.NewManualClock(time.Unix(0, 0))
 	b := newBreaker(t, clock, nil, resilience.BreakerPolicy{
 		Trip:             resilience.ConsecutiveFailures(1),
@@ -285,24 +334,33 @@ func TestBreakerHalfOpenProbeBoundHoldsUnderContention(t *testing.T) {
 	})
 	ctx := context.Background()
 	_, _ = b.Do(ctx, fail)
+
 	clock.Advance(time.Second)
 
 	var active, peak atomic.Int32
+
 	release := make(chan struct{})
-	var wg sync.WaitGroup
-	var admitted, rejected atomic.Int32
+
+	var (
+		wg                 sync.WaitGroup
+		admitted, rejected atomic.Int32
+	)
+
 	for range 50 {
 		wg.Go(func() {
 			_, err := b.Do(ctx, func(context.Context) (int, error) {
 				n := active.Add(1)
+
 				for {
 					old := peak.Load()
 					if n <= old || peak.CompareAndSwap(old, n) {
 						break
 					}
 				}
+
 				<-release
 				active.Add(-1)
+
 				return 1, nil
 			})
 			if err == nil {
@@ -327,6 +385,7 @@ func TestBreakerHalfOpenProbeBoundHoldsUnderContention(t *testing.T) {
 	if admitted.Load() < probes || admitted.Load()+rejected.Load() != 50 {
 		t.Fatalf("admitted %d, rejected %d", admitted.Load(), rejected.Load())
 	}
+
 	if got := b.State(); got != resilience.Closed {
 		t.Fatalf("state after %d successful probes = %v", probes, got)
 	}
@@ -339,14 +398,18 @@ func TestBreakerIntervalResetsClosedCounts(t *testing.T) {
 		OpenFor:  time.Second,
 		Interval: 10 * time.Second,
 	})
+
 	ctx := context.Background()
 	for range 3 {
 		_, _ = b.Do(ctx, fail)
 	}
+
 	if got := b.Counts(); got.Failures != 3 {
 		t.Fatalf("counts = %+v", got)
 	}
+
 	clock.Advance(10 * time.Second)
+
 	if got := b.Counts(); got != (resilience.Counts{}) {
 		t.Fatalf("counts after interval = %+v", got)
 	}
@@ -354,10 +417,12 @@ func TestBreakerIntervalResetsClosedCounts(t *testing.T) {
 	// request, but the old window's failures no longer count toward it.
 	_, _ = b.Do(ctx, succeed)
 	_, _ = b.Do(ctx, succeed)
+
 	_, _ = b.Do(ctx, fail)
 	if got := b.State(); got != resilience.Closed {
 		t.Fatalf("tripped on 1/3: %v", got)
 	}
+
 	_, _ = b.Do(ctx, fail)
 	if got := b.State(); got != resilience.Open {
 		t.Fatalf("did not trip on 2/4: %v", got)
@@ -371,10 +436,12 @@ func TestBreakerFailureClassifierAndDoneContext(t *testing.T) {
 		OpenFor: time.Second,
 		Failure: func(err error) bool { return !errors.Is(err, context.Canceled) },
 	})
+
 	_, err := b.Do(context.Background(), func(context.Context) (int, error) { return 0, context.Canceled })
 	if !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
+
 	if got := b.Counts(); got.Requests != 1 || got.Failures != 0 || got.Successes != 1 {
 		t.Fatalf("ignored error counted as failure: %+v", got)
 	}
@@ -382,11 +449,14 @@ func TestBreakerFailureClassifierAndDoneContext(t *testing.T) {
 	ctx, cancel := context.WithCancelCause(context.Background())
 	cause := errors.New("gone")
 	cancel(cause)
+
 	ran := false
+
 	_, err = b.Do(ctx, func(context.Context) (int, error) { ran = true; return 1, nil })
 	if !errors.Is(err, cause) || ran {
 		t.Fatalf("done context Do = %v, ran=%t", err, ran)
 	}
+
 	if got := b.Counts(); got.Requests != 1 {
 		t.Fatalf("done context counted: %+v", got)
 	}
@@ -400,6 +470,7 @@ func TestBreakerPanicReleasesProbeSlot(t *testing.T) {
 	})
 	ctx := context.Background()
 	_, _ = b.Do(ctx, fail)
+
 	clock.Advance(time.Second)
 	func() {
 		defer func() {
@@ -407,6 +478,7 @@ func TestBreakerPanicReleasesProbeSlot(t *testing.T) {
 				t.Fatal("panic did not propagate")
 			}
 		}()
+
 		_, _ = b.Do(ctx, func(context.Context) (int, error) { panic("boom") })
 	}()
 	// The panicking probe counted as a failure, so the breaker reopened
@@ -418,16 +490,20 @@ func TestBreakerPanicReleasesProbeSlot(t *testing.T) {
 
 func TestBreakerResetClosesAndNotifies(t *testing.T) {
 	clock := resilience.NewManualClock(time.Unix(0, 0))
+
 	var rec recorder
+
 	b := newBreaker(t, clock, &rec, resilience.BreakerPolicy{
 		Trip:    resilience.ConsecutiveFailures(1),
 		OpenFor: time.Hour,
 	})
 	_, _ = b.Do(context.Background(), fail)
 	b.Reset()
+
 	if got := b.State(); got != resilience.Closed {
 		t.Fatalf("state after Reset = %v", got)
 	}
+
 	if got := rec.all(); len(got) != 2 || got[1].from != resilience.Open || got[1].to != resilience.Closed {
 		t.Fatalf("transitions = %+v", got)
 	}
@@ -441,6 +517,7 @@ func TestBreakerDoValidation(t *testing.T) {
 	if _, err := b.Do(context.Background(), (func(context.Context) (int, error))(nil)); !errors.Is(err, resilience.ErrNilFunction) {
 		t.Fatalf("nil fn = %v", err)
 	}
+
 	var nilCtx context.Context // the case under test; a literal nil trips SA1012
 	if _, err := b.Do(nilCtx, succeed); !errors.Is(err, resilience.ErrInvalidPolicy) {
 		t.Fatalf("nil ctx = %v", err)
@@ -464,6 +541,7 @@ func TestRetryStopsOnOpenBreaker(t *testing.T) {
 		OpenFor: time.Minute,
 	})
 	calls := 0
+
 	_, err := resilience.Retry(context.Background(), resilience.Policy{
 		MaxAttempts: 10,
 		Retryable:   func(err error) bool { return !errors.Is(err, resilience.ErrOpen) },

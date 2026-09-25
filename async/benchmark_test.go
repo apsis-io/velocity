@@ -22,7 +22,9 @@ func BenchmarkGather(b *testing.B) {
 	}
 	b.Run("no hooks", func(b *testing.B) {
 		run, _ := async.New(async.Limited(4))
+
 		b.ReportAllocs()
+
 		for b.Loop() {
 			asyncSink, _ = run.Gather(context.Background(), tasks...)
 		}
@@ -31,7 +33,9 @@ func BenchmarkGather(b *testing.B) {
 		run, _ := async.New(async.Limited(4), async.WithHooks(async.Hooks{OnTaskComplete: func(_ int, _ string, waited, duration time.Duration, _ error) {
 			asyncHookSink = waited + duration
 		}}))
+
 		b.ReportAllocs()
+
 		for b.Loop() {
 			asyncSink, _ = run.Gather(context.Background(), tasks...)
 		}
@@ -44,13 +48,16 @@ func BenchmarkGather(b *testing.B) {
 func BenchmarkMapVersusGather(b *testing.B) {
 	square := func(_ context.Context, n int) (int, error) { return n * n, nil }
 	run, _ := async.New(async.Limited(8))
+
 	for _, size := range []int{8, 1024} {
 		items := make([]int, size)
 		for i := range items {
 			items[i] = i
 		}
+
 		b.Run(fmt.Sprintf("map/%d", size), func(b *testing.B) {
 			b.ReportAllocs()
+
 			for b.Loop() {
 				asyncMapSink, _ = run.Map(context.Background(), items, square)
 			}
@@ -60,7 +67,9 @@ func BenchmarkMapVersusGather(b *testing.B) {
 			for i, item := range items {
 				tasks[i] = async.Task[int]{Run: func(ctx context.Context) (int, error) { return square(ctx, item) }}
 			}
+
 			b.ReportAllocs()
+
 			for b.Loop() {
 				asyncSink, _ = run.Gather(context.Background(), tasks...)
 			}
@@ -79,7 +88,9 @@ func BenchmarkErrGroupGoVersusGoContext(b *testing.B) {
 
 	b.Run("Go", func(b *testing.B) {
 		run, _ := async.New(async.Limited(8))
+
 		b.ReportAllocs()
+
 		for b.Loop() {
 			eg, _ := run.ErrGroup(context.Background())
 			eg.Go(work)
@@ -89,7 +100,9 @@ func BenchmarkErrGroupGoVersusGoContext(b *testing.B) {
 	b.Run("GoContext", func(b *testing.B) {
 		run, _ := async.New(async.Limited(8))
 		ctx := context.Background()
+
 		b.ReportAllocs()
+
 		for b.Loop() {
 			eg, _ := run.ErrGroup(ctx)
 			eg.GoContext(ctx, work)

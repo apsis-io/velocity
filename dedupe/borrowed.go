@@ -19,10 +19,12 @@ func (g *Group[K, V]) DoBorrowed[I any](ctx context.Context, key K, input *owner
 	if err := g.checkBorrowed(ctx, input == nil, fn != nil); err != nil {
 		return zero, err
 	}
+
 	borrow, err := input.Borrow()
 	if err != nil {
 		return zero, err
 	}
+
 	return g.doBorrowed(ctx, key, func() error { return borrow.Release() }, func(workCtx context.Context) (V, error) {
 		return borrow.Project(func(value I) (V, error) { return fn(workCtx, value) })
 	})
@@ -37,10 +39,12 @@ func (g *Group[K, V]) DoBorrowedMut[I any](ctx context.Context, key K, input *ow
 	if err := g.checkBorrowed(ctx, input == nil, fn != nil); err != nil {
 		return zero, err
 	}
+
 	borrow, err := input.BorrowMut()
 	if err != nil {
 		return zero, err
 	}
+
 	return g.doBorrowed(ctx, key, func() error { return borrow.Release() }, func(workCtx context.Context) (V, error) {
 		return borrow.Update(func(value *I) (V, error) { return fn(workCtx, value) })
 	})
@@ -50,6 +54,7 @@ func (g *Group[K, V]) DoBorrowedMut[I any](ctx context.Context, key K, input *ow
 // pointer boxed into an interface would not compare equal to nil.
 func (g *Group[K, V]) checkBorrowed(ctx context.Context, nilInput, haveFn bool) error {
 	g.ready()
+
 	switch {
 	case g.owned:
 		return ErrOwnedResult
@@ -60,6 +65,7 @@ func (g *Group[K, V]) checkBorrowed(ctx context.Context, nilInput, haveFn bool) 
 	case !haveFn:
 		return ErrNilFunction
 	}
+
 	return ctx.Err()
 }
 
@@ -67,16 +73,21 @@ func (g *Group[K, V]) doBorrowed(ctx context.Context, key K, release func() erro
 	c, leader, err := g.join(ctx, key)
 	if err != nil {
 		_ = release()
+
 		var zero V
+
 		return zero, err
 	}
+
 	if !leader {
 		_ = release()
 		return g.wait(ctx, key, c)
 	}
+
 	go g.run(key, c, func(workCtx context.Context) (V, error) {
 		defer release()
 		return wrapped(workCtx)
 	})
+
 	return g.wait(ctx, key, c)
 }

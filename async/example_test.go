@@ -39,9 +39,11 @@ func ExampleRunner_Map_failures() {
 			if n%2 == 0 {
 				return 0, errors.New("even")
 			}
+
 			return n, nil
 		})
 	fmt.Println(err)
+
 	var item *async.ItemError
 	fmt.Println(errors.As(err, &item), item.Index)
 	// Output:
@@ -54,6 +56,7 @@ func ExampleRunner_Map_failures() {
 // see the slice, since they all finish before Map returns.
 func ExampleRunner_Map_ownedCollection() {
 	run, _ := async.New(async.Unlimited)
+
 	owner, _ := ownership.New([]string{"a", "bb", "ccc"})
 	defer owner.Release()
 
@@ -80,16 +83,20 @@ func ExampleRunner_Gather_takeRecipe() {
 
 func ExampleRunner_ErrGroup() {
 	run := async.Must(async.New(async.Limited(2)))
+
 	eg, ctx := run.ErrGroup(context.Background())
 	for _, n := range []int{1, 2, 3} {
 		eg.Go(func(ctx context.Context) error {
 			if n == 2 {
 				return errors.New("two failed")
 			}
+
 			<-ctx.Done() // siblings stop when the first error cancels the group
+
 			return nil
 		})
 	}
+
 	fmt.Println(eg.Wait(), context.Cause(ctx))
 	// Output: two failed two failed
 }

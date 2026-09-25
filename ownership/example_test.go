@@ -16,6 +16,7 @@ func ExampleOwner_View() {
 		for _, value := range values {
 			total += value
 		}
+
 		return total, nil
 	})
 	fmt.Println(sum)
@@ -37,8 +38,10 @@ func ExampleOwner_Mutate() {
 
 func ExampleOwner_IntoShared() {
 	owner := ownership.Own("velocity")
+
 	shared, _ := owner.IntoShared()
 	defer shared.Release()
+
 	clone, _ := shared.Clone()
 	defer clone.Release()
 

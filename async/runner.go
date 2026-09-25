@@ -20,6 +20,7 @@ func (l Limit) valid() error {
 	if !l.configured || (!l.unlimited && l.value <= 0) {
 		return &PlanError{Index: -1, Cause: ErrInvalidLimit}
 	}
+
 	return nil
 }
 
@@ -28,6 +29,7 @@ func (l Limit) workers(n int) int {
 	if l.unlimited {
 		return n
 	}
+
 	return min(l.value, n)
 }
 
@@ -48,6 +50,7 @@ func tasks[T any](fns []func(context.Context) (T, error)) []Task[T] {
 	for i, fn := range fns {
 		out[i].Run = fn
 	}
+
 	return out
 }
 
@@ -87,15 +90,19 @@ func New(limit Limit, opts ...Option) (*Runner, error) {
 	if err := limit.valid(); err != nil {
 		return nil, err
 	}
+
 	r := &Runner{limit: limit}
+
 	for _, opt := range opts {
 		if opt == nil {
 			return nil, &PlanError{Index: -1, Cause: ErrNilOption}
 		}
+
 		if err := opt.apply(r); err != nil {
 			return nil, err
 		}
 	}
+
 	return r, nil
 }
 
@@ -106,6 +113,7 @@ func Must(r *Runner, err error) *Runner {
 	if err != nil {
 		panic(err)
 	}
+
 	return r
 }
 
@@ -116,14 +124,17 @@ func (r *Runner) validTasks(n int, run func(int) bool) error {
 	if r == nil {
 		return &PlanError{Index: -1, Cause: ErrNilRunner}
 	}
+
 	if n == 0 {
 		return &PlanError{Index: -1, Cause: ErrNoTasks}
 	}
+
 	for i := range n {
 		if !run(i) {
 			return &PlanError{Index: i, Cause: ErrNilTask}
 		}
 	}
+
 	return nil
 }
 

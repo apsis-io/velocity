@@ -29,6 +29,7 @@ func (s State) String() string {
 	case HalfOpen:
 		return "half-open"
 	}
+
 	return "unknown"
 }
 
@@ -121,21 +122,27 @@ func NewBreaker(policy BreakerPolicy) (*Breaker, error) {
 	if policy.Trip == nil {
 		return nil, &PolicyError{Cause: ErrNilTrip}
 	}
+
 	if policy.OpenFor <= 0 || policy.Interval < 0 || policy.MaxProbes < 0 || policy.SuccessesToClose < 0 {
 		return nil, &PolicyError{Cause: ErrInvalidBreaker}
 	}
+
 	if policy.MaxProbes == 0 {
 		policy.MaxProbes = 1
 	}
+
 	if policy.SuccessesToClose == 0 {
 		policy.SuccessesToClose = 1
 	}
+
 	clock := policy.Clock
 	if clock == nil {
 		clock = RealClock()
 	}
+
 	b := &Breaker{policy: policy, clock: clock}
 	b.enterLocked(Closed, clock.Now())
+
 	return b, nil
 }
 
@@ -151,28 +158,36 @@ func (b *Breaker) Do[T any](ctx context.Context, fn func(context.Context) (T, er
 	if ctx == nil {
 		return zero, &PolicyError{Cause: context.Canceled}
 	}
+
 	if fn == nil {
 		return zero, &PolicyError{Cause: ErrNilFunction}
 	}
+
 	if ctx.Err() != nil {
 		return zero, context.Cause(ctx)
 	}
+
 	generation, err := b.admit()
 	if err != nil {
 		return zero, err
 	}
+
 	reported := false
 	defer func() {
 		if !reported {
 			b.report(generation, errPanicked)
 		}
 	}()
+
 	value, err := fn(ctx)
 	reported = true
+
 	b.report(generation, err)
+
 	if err != nil {
 		return zero, err
 	}
+
 	return value, nil
 }
 
@@ -186,7 +201,9 @@ func (b *Breaker) Allow() (report func(error), err error) {
 	if err != nil {
 		return nil, err
 	}
+
 	var once sync.Once
+
 	return func(err error) {
 		once.Do(func() { b.report(generation, err) })
 	}, nil
@@ -197,24 +214,30 @@ func (b *Breaker) Allow() (report func(error), err error) {
 func (b *Breaker) admit() (uint64, error) {
 	now := b.clock.Now()
 	b.mu.Lock()
+
 	transition := b.advanceLocked(now)
 	switch b.state {
 	case Open:
 		retryAfter := b.expiry.Sub(now)
 		b.mu.Unlock()
 		b.notify(transition)
+
 		return 0, &BreakerError{State: Open, RetryAfter: retryAfter}
 	case HalfOpen:
 		if b.inflight >= b.policy.MaxProbes {
 			b.mu.Unlock()
 			b.notify(transition)
+
 			return 0, &BreakerError{State: HalfOpen}
 		}
+
 		b.inflight++
 	}
+
 	generation := b.generation
 	b.mu.Unlock()
 	b.notify(transition)
+
 	return generation, nil
 }
 
@@ -227,6 +250,7 @@ func (b *Breaker) State() State {
 	state := b.state
 	b.mu.Unlock()
 	b.notify(transition)
+
 	return state
 }
 
@@ -238,6 +262,7 @@ func (b *Breaker) Counts() Counts {
 	counts := b.counts
 	b.mu.Unlock()
 	b.notify(transition)
+
 	return counts
 }
 
@@ -254,15 +279,19 @@ func (b *Breaker) Reset() {
 func (b *Breaker) report(generation uint64, err error) {
 	now := b.clock.Now()
 	b.mu.Lock()
+
 	transition := b.advanceLocked(now)
 	if generation != b.generation {
 		// The state changed under this call; its outcome belongs to a
 		// window that has already been judged.
 		b.mu.Unlock()
 		b.notify(transition)
+
 		return
 	}
+
 	failed := err != nil && (b.policy.Failure == nil || b.policy.Failure(err))
+
 	b.counts.Requests++
 	if failed {
 		b.counts.Failures++
@@ -273,6 +302,7 @@ func (b *Breaker) report(generation uint64, err error) {
 		b.counts.ConsecutiveSuccesses++
 		b.counts.ConsecutiveFailures = 0
 	}
+
 	switch b.state {
 	case Closed:
 		if failed && b.policy.Trip(b.counts) {
@@ -306,6 +336,7 @@ func (b *Breaker) advanceLocked(now time.Time) *stateChange {
 			b.expiry = now.Add(b.policy.Interval)
 		}
 	}
+
 	return nil
 }
 
@@ -320,11 +351,13 @@ func (b *Breaker) enterLocked(state State, now time.Time) *stateChange {
 	b.state = state
 	b.counts = Counts{}
 	b.inflight = 0
+
 	b.generation++
 	if b.recovery != nil {
 		b.recovery.Stop()
 		b.recovery = nil
 	}
+
 	switch state {
 	case Open:
 		b.expiry = now.Add(b.policy.OpenFor)
@@ -335,9 +368,11 @@ func (b *Breaker) enterLocked(state State, now time.Time) *stateChange {
 	default:
 		b.expiry = time.Time{}
 	}
+
 	if change.from == change.to {
 		return nil
 	}
+
 	return change
 }
 
@@ -365,6 +400,7 @@ func (b *Breaker) notify(change *stateChange) {
 	if change == nil {
 		return
 	}
+
 	if hook := b.policy.Hooks.OnStateChange; hook != nil {
 		hook(change.from, change.to, change.counts)
 	}

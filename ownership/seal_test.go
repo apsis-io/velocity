@@ -17,9 +17,11 @@ func TestSealRejectsNewBorrowsButKeepsExisting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if err := owner.Seal(); err != nil {
 		t.Fatal(err)
 	}
+
 	if state := owner.State(); !state.Sealed {
 		t.Fatalf("state = %+v", state)
 	}
@@ -28,9 +30,11 @@ func TestSealRejectsNewBorrowsButKeepsExisting(t *testing.T) {
 	if _, err := owner.Borrow(); !errors.Is(err, ownership.ErrSealed) {
 		t.Fatalf("Borrow after Seal = %v", err)
 	}
+
 	if _, err := owner.BorrowMut(); !errors.Is(err, ownership.ErrSealed) {
 		t.Fatalf("BorrowMut after Seal = %v", err)
 	}
+
 	if _, err := owner.View(func(int) (int, error) { return 0, nil }); !errors.Is(err, ownership.ErrSealed) {
 		t.Fatalf("View after Seal = %v", err)
 	}
@@ -40,6 +44,7 @@ func TestSealRejectsNewBorrowsButKeepsExisting(t *testing.T) {
 	if err != nil || value != 1 {
 		t.Fatalf("existing borrow = (%d, %v)", value, err)
 	}
+
 	if err := held.Release(); err != nil {
 		t.Fatal(err)
 	}
@@ -53,10 +58,12 @@ func TestDrainedClosesWhenLastBorrowGoes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	second, err := owner.Borrow()
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if err := owner.Seal(); err != nil {
 		t.Fatal(err)
 	}
@@ -69,6 +76,7 @@ func TestDrainedClosesWhenLastBorrowGoes(t *testing.T) {
 	}
 
 	_ = first.Release()
+
 	select {
 	case <-drained:
 		t.Fatal("drained closed with one borrow still outstanding")
@@ -76,6 +84,7 @@ func TestDrainedClosesWhenLastBorrowGoes(t *testing.T) {
 	}
 
 	_ = second.Release()
+
 	select {
 	case <-drained:
 	case <-time.After(time.Second):
@@ -100,7 +109,9 @@ func TestDrainedStaysOpenUntilSealed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unsealed value refused a borrow: %v", err)
 	}
+
 	_ = borrow.Release()
+
 	select {
 	case <-drained:
 		t.Fatal("drained closed on an unsealed value")
@@ -110,6 +121,7 @@ func TestDrainedStaysOpenUntilSealed(t *testing.T) {
 	if err := owner.Seal(); err != nil {
 		t.Fatal(err)
 	}
+
 	select {
 	case <-drained:
 	case <-time.After(time.Second):
@@ -120,9 +132,11 @@ func TestDrainedStaysOpenUntilSealed(t *testing.T) {
 func TestSealWithNoBorrowsDrainsImmediately(t *testing.T) {
 	owner := mustOwner(t, 1)
 	defer owner.Release()
+
 	if err := owner.Seal(); err != nil {
 		t.Fatal(err)
 	}
+
 	select {
 	case <-owner.Drained():
 	default:
@@ -133,11 +147,13 @@ func TestSealWithNoBorrowsDrainsImmediately(t *testing.T) {
 func TestSealIsIdempotent(t *testing.T) {
 	owner := mustOwner(t, 1)
 	defer owner.Release()
+
 	for range 3 {
 		if err := owner.Seal(); err != nil {
 			t.Fatalf("Seal = %v", err)
 		}
 	}
+
 	select {
 	case <-owner.Drained():
 	default:
@@ -148,6 +164,7 @@ func TestSealIsIdempotent(t *testing.T) {
 // The shutdown shape this exists for, with the caller owning the waiting.
 func TestSealDrainReleaseShutdownSequence(t *testing.T) {
 	owner := mustOwner(t, 1)
+
 	borrow, err := owner.Borrow()
 	if err != nil {
 		t.Fatal(err)
@@ -157,22 +174,26 @@ func TestSealDrainReleaseShutdownSequence(t *testing.T) {
 	if err := owner.Release(); !errors.Is(err, ownership.ErrConflict) {
 		t.Fatalf("Release with live borrow = %v", err)
 	}
+
 	if err := owner.Seal(); err != nil {
 		t.Fatal(err)
 	}
 
 	go func() {
 		time.Sleep(20 * time.Millisecond)
+
 		_ = borrow.Release()
 	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
+
 	select {
 	case <-owner.Drained():
 	case <-ctx.Done():
 		t.Fatal("timed out waiting to drain")
 	}
+
 	if err := owner.Release(); err != nil {
 		t.Fatalf("Release after drain = %v", err)
 	}
@@ -182,16 +203,19 @@ func TestSealDrainReleaseShutdownSequence(t *testing.T) {
 // value sealed so a later attempt can finish.
 func TestSealedValueSurvivesAbandonedWait(t *testing.T) {
 	owner := mustOwner(t, 1)
+
 	borrow, err := owner.Borrow()
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if err := owner.Seal(); err != nil {
 		t.Fatal(err)
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
+
 	select {
 	case <-owner.Drained():
 		t.Fatal("drained while a borrow was still held")
@@ -202,12 +226,15 @@ func TestSealedValueSurvivesAbandonedWait(t *testing.T) {
 	if state := owner.State(); !state.Sealed || state.Readers != 1 {
 		t.Fatalf("state after abandoned wait = %+v", state)
 	}
+
 	_ = borrow.Release()
+
 	select {
 	case <-owner.Drained():
 	case <-time.After(time.Second):
 		t.Fatal("second attempt never drained")
 	}
+
 	if err := owner.Release(); err != nil {
 		t.Fatal(err)
 	}
@@ -215,10 +242,12 @@ func TestSealedValueSurvivesAbandonedWait(t *testing.T) {
 
 func TestSealAppliesToEveryHandle(t *testing.T) {
 	owner := mustOwner(t, 1)
+
 	shared, err := owner.IntoShared()
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	peer, err := shared.Clone()
 	if err != nil {
 		t.Fatal(err)
@@ -228,9 +257,11 @@ func TestSealAppliesToEveryHandle(t *testing.T) {
 	if err := shared.Seal(); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := peer.Borrow(); !errors.Is(err, ownership.ErrSealed) {
 		t.Fatalf("peer Borrow after Seal = %v", err)
 	}
+
 	select {
 	case <-peer.Drained():
 	default:
@@ -246,12 +277,15 @@ func TestSealOnFrozenAndNilHandles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
 	if err := frozen.Seal(); err != nil {
 		t.Fatal(err)
 	}
+
 	if _, err := frozen.Borrow(); !errors.Is(err, ownership.ErrSealed) {
 		t.Fatalf("frozen Borrow after Seal = %v", err)
 	}
+
 	_ = frozen.Release()
 
 	var nilOwner *ownership.Owner[int]
@@ -268,11 +302,13 @@ func TestSealOnFrozenAndNilHandles(t *testing.T) {
 
 func TestSealRejectedOnSpentHandle(t *testing.T) {
 	owner := mustOwner(t, 1)
+
 	moved, err := owner.Move()
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer moved.Release()
+
 	if err := owner.Seal(); !errors.Is(err, ownership.ErrMoved) {
 		t.Fatalf("Seal on moved-from handle = %v", err)
 	}

@@ -12,10 +12,13 @@ func FuzzOwnershipModel(f *testing.F) {
 	f.Add([]byte{3, 4, 6, 7, 2, 5, 1})
 	f.Fuzz(func(t *testing.T, ops []byte) {
 		owner := mustOwner(t, 0)
-		var shared []*ownership.Shared[int]
-		var frozen []*ownership.Frozen[int]
-		var reads []*ownership.ReadBorrow[int]
-		var writes []*ownership.WriteBorrow[int]
+
+		var (
+			shared []*ownership.Shared[int]
+			frozen []*ownership.Frozen[int]
+			reads  []*ownership.ReadBorrow[int]
+			writes []*ownership.WriteBorrow[int]
+		)
 
 		for _, op := range ops {
 			switch op % 16 {
@@ -26,6 +29,7 @@ func FuzzOwnershipModel(f *testing.F) {
 					if err := owner.Seal(); err != nil && !knownLifecycleError(err) {
 						t.Fatalf("Seal: %v", err)
 					}
+
 					if _, err := owner.Borrow(); err == nil {
 						t.Fatal("Borrow succeeded on a sealed owner")
 					} else if !knownLifecycleError(err) && !errors.Is(err, ownership.ErrSealed) {
@@ -66,10 +70,12 @@ func FuzzOwnershipModel(f *testing.F) {
 				// leave state behind.
 				if owner != nil {
 					before := owner.State()
+
 					_, err := owner.View(func(value int) (int, error) { return value, nil })
 					if err != nil && !knownLifecycleError(err) {
 						t.Fatalf("View: %v", err)
 					}
+
 					if after := owner.State(); after != before {
 						t.Fatalf("View changed state: %+v -> %+v", before, after)
 					}
@@ -77,10 +83,12 @@ func FuzzOwnershipModel(f *testing.F) {
 			case 11:
 				if owner != nil {
 					before := owner.State()
+
 					err := owner.WithWrite(func(value *int) error { *value++; return nil })
 					if err != nil && !knownLifecycleError(err) {
 						t.Fatalf("WithWrite: %v", err)
 					}
+
 					if after := owner.State(); after != before {
 						t.Fatalf("WithWrite changed state: %+v -> %+v", before, after)
 					}
@@ -163,15 +171,19 @@ func FuzzOwnershipModel(f *testing.F) {
 		for _, borrow := range reads {
 			_ = borrow.Release()
 		}
+
 		for _, borrow := range writes {
 			_ = borrow.Release()
 		}
+
 		for _, handle := range shared {
 			_ = handle.Release()
 		}
+
 		for _, handle := range frozen {
 			_ = handle.Release()
 		}
+
 		if owner != nil {
 			_ = owner.Release()
 		}
