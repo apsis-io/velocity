@@ -47,8 +47,11 @@ func TestMutateAsyncReportsAnErroredCallback(t *testing.T) {
 
 	res, err := owner.MutateAsync(func(*int) (int, error) { return 0, boom }).
 		Await(context.Background())
-	if err != nil {
-		t.Fatalf("Await = %v, want the wait to succeed", err)
+
+	// Await reports the work's failure too, so the ordinary `if err != nil`
+	// catches a callback that failed without reading the Result first.
+	if !errors.Is(err, boom) {
+		t.Fatalf("Await = %v, want an error wrapping the callback's failure", err)
 	}
 
 	if !errors.Is(res.Err, boom) {
@@ -150,8 +153,13 @@ func TestMutateAsyncRecoversAPanicAndReleasesTheBorrow(t *testing.T) {
 
 	res, err := owner.MutateAsync(func(*int) (int, error) { panic("callback") }).
 		Await(context.Background())
-	if err != nil {
-		t.Fatalf("Await = %v, want the wait to succeed", err)
+
+	// A recovered panic arrives as the returned error too, and stays
+	// unwrappable to the value underneath, which is the point of recovering it
+	// rather than letting it take the process down.
+	var raised *ownership.Panic
+	if !errors.As(err, &raised) || raised.Value != "callback" {
+		t.Fatalf("Await = %v, want a *Panic carrying the value", err)
 	}
 
 	var p *ownership.Panic
@@ -241,6 +249,10 @@ func TestMutateAsyncAwaitTimeoutDoesNotCancelTheWork(t *testing.T) {
 	after, err := f.Await(context.Background())
 	if err != nil || after.Value != 5 {
 		t.Fatalf("the Future did not resolve with the real outcome: (%+v, %v)", after, err)
+	}
+
+	if !after.Ok() {
+		t.Fatalf("the resolved Result reports a failure: %+v", after)
 	}
 }
 

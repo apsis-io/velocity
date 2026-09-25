@@ -6,6 +6,7 @@ package traits
 
 import (
 	"context"
+	"fmt"
 	"sync"
 )
 
@@ -32,10 +33,11 @@ func (r Result[R]) Ok() bool { return r.Err == nil }
 // unresolved, or it carries a Result.
 //
 // The distinction a Future exists to keep: **a Result's Err is the work's
-// failure, and the error Await returns is the wait's.** A caller that gives up
-// waiting has learned something about its own patience, not about the work —
-// which is why the two are separate returns rather than one error channel
-// carrying both.
+// failure, and a timeout is the wait's** — and Await's error reports whichever
+// of the two applies, wrapping the work's so `if err != nil` catches a failure
+// without a caller digging into the Result. A caller that gives up waiting has
+// learned something about its own patience, not about the work, which is why
+// the two facts never collapse into one.
 type Future[R any] struct {
 	done chan struct{}
 	once sync.Once
@@ -114,11 +116,22 @@ func (f *Future[R]) Try() (Result[R], bool) {
 	}
 }
 
-// Await waits for the work to finish and returns its Result, or waits for ctx
-// to end and returns ctx's cause. The returned error is the **wait's**, not the
-// work's: on a timeout the work still runs and the Future still resolves for
-// anyone else watching it. That is the property that makes a Future droppable —
-// nothing is abandoned, so nothing needs cleaning up by whoever let go.
+// Await waits for the work to finish, or for ctx to end, and returns its
+// Result with a second value saying whether it succeeded:
+//
+//   - work succeeded, wait completed — (Result, nil)
+//   - work failed, wait completed — (Result carrying the failure, an error
+//     wrapping it), so `if err != nil` catches a failure without the caller
+//     having to look inside the Result first
+//   - ctx ended first — (the zero Result, ctx's cause), and **the work still
+//     runs** and still resolves the Future for anyone else watching
+//
+// The last is the property that makes a Future droppable: nothing is abandoned,
+// so nothing needs cleaning up by whoever let go. It is also the one case
+// where the two values disagree, and deliberately so — on a timeout `err` is
+// non-nil and the zero Result reports `Ok()`, because the Result is not to be
+// read when the wait did not complete. A caller that wants the work's fate
+// waits for it, or watches Done.
 func (f *Future[R]) Await(ctx context.Context) (Result[R], error) {
 	if f == nil {
 		return Result[R]{}, nil
@@ -126,8 +139,15 @@ func (f *Future[R]) Await(ctx context.Context) (Result[R], error) {
 
 	select {
 	case <-f.done:
+		if f.res.Err != nil {
+			return f.res, fmt.Errorf("traits: work failed: %w", f.res.Err)
+		}
+
 		return f.res, nil
 	case <-ctx.Done():
+		// Not wrapped: a context cause is already a typed, comparable error,
+		// and errors.Is against context.Canceled or DeadlineExceeded is a
+		// caller's first move with it.
 		return Result[R]{}, context.Cause(ctx)
 	}
 }

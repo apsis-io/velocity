@@ -63,13 +63,18 @@ func TestFutureAwaitSeparatesTheWaitFromTheWork(t *testing.T) {
 		t.Fatalf("Await = %v, want the caller's deadline", err)
 	}
 
-	// The work completes afterwards, and the Future still reports it.
+	// The work completes afterwards, and the Future still reports it — the
+	// timeout was about the wait, not about the work.
 	boom := errors.New("boom")
 	f.Complete(0, boom)
 
 	res, err := f.Await(context.Background())
-	if err != nil {
-		t.Fatalf("Await = %v, want the wait to succeed", err)
+
+	// The returned error is the WORK's failure, wrapped, so the common
+	// `if err != nil` catches it without reading the Result first — and it is
+	// still the work's error underneath, not a replacement for it.
+	if !errors.Is(err, boom) {
+		t.Fatalf("Await = %v, want an error wrapping the work's failure", err)
 	}
 
 	if !errors.Is(res.Err, boom) {

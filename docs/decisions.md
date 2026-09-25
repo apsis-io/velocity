@@ -1547,8 +1547,10 @@ reports and leaves the cell usable — the last because the borrow is released
 *before* the panic is converted, which is the failure the no-panic-callbacks
 rule exists to prevent.
 
-One honest limit, recorded on `Await` and asserted nowhere because the type
-cannot express it: on a timeout the returned Result is the zero Result, which
-reports `Ok()`. A caller who ignores the wait's error and reads the value has
-the same bug they would have in any Go function returning a value and an error.
-The error is the only thing that says the Result is not to be read.
+The earlier version of this entry recorded `Await` as returning only the wait's
+error, and the author revised it: a caller writing the ordinary `if err != nil`
+after a callback failed would have seen success, which is the footgun the split
+was meant to remove. Reporting the work's failure too closes it without
+collapsing the two facts — the wrap preserves `errors.Is` and `errors.As`
+against the original, so a typed failure like `*Panic` or `ErrConflict` is
+still reachable.
