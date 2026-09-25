@@ -1992,3 +1992,56 @@ socket and listener close in that codebase is interface-typed, so
 roughly twenty of them unreachable by any config rule. A plan that assumed the
 config would cover the Close family would have found that out only after
 writing the list.
+
+## A queued mutation was invisible to Release, so ending a handle was a race (implemented)
+
+Asked whether `MutateAsync` was correct *semantically*, having already found
+two defects in it by reading. The semantics did not hold up either, and this one
+is a weaker claim than the last two: not a wrong value, but a **guarantee that
+depended on timing**.
+
+A submission is not a borrow. `o.h.borrows` is incremented at admission, not at
+submission, so a mutation the caller has already been handed a Future for was
+invisible to everything that ends a handle's life. Measured:
+
+	Release with a mutation outstanding returned <nil>;  Drop ran: true
+	mutation: value={0}  err=borrow mutable: ownership released
+
+The end state is consistent — the Drop ran, the mutation did not apply, and the
+mutation says so — but `Release` guards on `borrows != 0`, so **whether the Drop
+ran before or after a submitted mutation depended on a race between the caller
+and a goroutine it had already been handed a handle for.** Had the mutation been
+admitted a moment earlier, `Release` would have conflicted. The same holds for
+`Move`.
+
+`cell` now counts a `pending` submission, separate from `borrows` because it is
+not a borrow: no address is exposed and nothing is excluded by it, so lending it
+the borrow count's meaning would be wrong. `Release` and `Move` refuse while it
+is non-zero, which makes ending a handle a choice:
+
+  - **await it**, then release; or
+  - **`Seal`** to drop it deliberately, which refuses the submission and
+    reports `ErrSealed`.
+
+The count has to fall on **every** path, and that is the part the first attempt
+got wrong. A terminal refusal — released, moved, sealed — completes the Future and
+returned without decrementing, so the count leaked and `Release` conflicted
+forever. The second test in the file is what caught it, and the path easiest to
+forget is exactly the one a release or a seal causes. Each exit settles it, and
+the admitted path shares one critical section with the borrow release, so there
+is no window in which the borrow is free while the submission is still counted.
+
+**One test became impossible, which is the strongest evidence the fix is right.**
+`TestMutateAsyncReportsAReleasedOwnerWhileQueued` queued a mutation and released
+the owner behind it. That scenario is now unreachable — `Release` refuses — so the
+test failed and was replaced by the terminal case that remains: a submission
+against an owner that was *already* released or moved, which is refused at once
+and says which. A test that stops compiling because the state it needed can no
+longer be reached is a different kind of evidence from one that starts passing.
+
+This is the third defect in this method and the only one that needed a question
+rather than a read: two came from re-reading the loop, and this one only from
+asking whether the *design* held. Bugs in what the code does are found by
+reading it. A bug in what it promises is found by asking what someone would
+reasonably believe, and this was reasonable: you submit work, you get a handle,
+and ending the value is yours to do when you are ready. It was not.

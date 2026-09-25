@@ -54,6 +54,13 @@ type cell[T any] struct {
 	drained       chan struct{}
 	drainedClosed bool
 
+	// pending counts submitted mutations that have been handed a Future but not
+	// yet admitted — work the caller has committed and that no borrow accounts
+	// for. Release and Move refuse while it is non-zero, so ending a handle is
+	// the caller's decision rather than a race with a goroutine this cell has
+	// already promised to run.
+	pending int
+
 	// changed is closed and replaced whenever admission-relevant state moves: a
 	// borrow ends, or the cell is sealed. It is a **broadcast, not a queue** —
 	// closing it hands every waiter a chance and holds nothing, so a waiter can
@@ -203,6 +210,16 @@ func (c *cell[T]) endWriteLocked(h *handle) {
 // changedLocked wakes every goroutine waiting for admission to re-read the
 // cell's state. Closing a channel is not a wait, so this adds a signal without
 // adding a blocking operation.
+// settlePending drops one submission's count. Called on every path a submitted
+// mutation can finish, because a count that only falls on the happy path
+// blocks Release and Move for good — and the paths that are easiest to forget
+// are exactly the ones a release or a seal causes.
+func (c *cell[T]) settlePending() {
+	c.mu.Lock()
+	c.pending--
+	c.mu.Unlock()
+}
+
 func (c *cell[T]) changedLocked() {
 	if c.changed != nil {
 		close(c.changed)

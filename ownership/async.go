@@ -65,6 +65,15 @@ func (o *Owner[T]) MutateAsync[R any](ctx context.Context, fn func(*T) (R, error
 		return f
 	}
 
+	// Count the submission against the cell before it is handed back, so
+	// Release and Move cannot retire the value out from under work the caller
+	// already holds a Future for. A pending mutation is not a borrow — no
+	// address is exposed and nothing is excluded by it — so it gets its own
+	// count rather than borrowing the borrow count's meaning.
+	o.c.mu.Lock()
+	o.c.pending++
+	o.c.mu.Unlock()
+
 	go o.mutateAsync(ctx, f, fn)
 
 	return f
@@ -78,7 +87,9 @@ func (o *Owner[T]) mutateAsync[R any](ctx context.Context, f *traits.Future[R], 
 
 	for {
 		if err := ctx.Err(); err != nil {
+			c.settlePending()
 			f.Complete(zero[R](), context.Cause(ctx))
+
 			return
 		}
 
@@ -97,14 +108,18 @@ func (o *Owner[T]) mutateAsync[R any](ctx context.Context, f *traits.Future[R], 
 			// until the context ended and then report the context's cause —
 			// a different failure from the one that actually happened.
 			if !errors.Is(admitErr, ErrConflict) {
+				c.settlePending()
 				f.Complete(zero[R](), admitErr)
+
 				return
 			}
 
 			select {
 			case <-changed:
 			case <-ctx.Done():
+				c.settlePending()
 				f.Complete(zero[R](), context.Cause(ctx))
+
 				return
 			}
 
@@ -124,9 +139,12 @@ func (o *Owner[T]) mutateAsync[R any](ctx context.Context, f *traits.Future[R], 
 					panicked = v
 				}
 
-				// Release first and unconditionally, waking anything queued
-				// behind this borrow before anything else can fail.
+				// Release unconditionally and drop the submission's count in
+				// the same critical section, so there is no window in which
+				// the borrow is free while the submission is still counted, or
+				// the reverse — and one lock rather than two on the path.
 				c.mu.Lock()
+				c.pending--
 				c.endWriteLocked(&o.h)
 				c.mu.Unlock()
 

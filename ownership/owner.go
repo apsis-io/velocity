@@ -314,6 +314,16 @@ func (c *cell[T]) beginOwnerRelease(h *handle) (value T, drop func(T) error, fir
 		return value, nil, false, c.conflictLocked(OpRelease)
 	}
 
+	// A submitted mutation that has not been admitted is work this cell has
+	// already promised to run, and no borrow accounts for it. Releasing past it
+	// would run the Drop and discard the mutation, and which of the two
+	// happened would depend on a race between this and a goroutine the caller
+	// has already been handed a Future for. Refusing makes it the caller's
+	// decision: await the mutation and release, or Seal to drop it deliberately.
+	if c.pending > 0 {
+		return value, nil, false, c.conflictLocked(OpRelease)
+	}
+
 	h.state = handleReleased
 	value = c.value
 

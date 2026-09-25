@@ -5,7 +5,6 @@ import (
 	"errors"
 	"runtime"
 	"testing"
-	"time"
 
 	"github.com/apsis-io/velocity/ownership"
 )
@@ -16,7 +15,13 @@ import (
 // borrow ending or a seal, and neither happens on release or move. So the
 // mutation sleeps until its context dies and then reports the *context's* cause,
 // which is a different failure from the one that actually occurred.
-func TestMutateAsyncReportsAReleasedOwnerWhileQueued(t *testing.T) {
+// A submission against an owner that is already terminal is refused at once,
+// and says which. The obvious version of this test — queue a mutation, then
+// release the owner behind it — is no longer reachable: Release refuses while a
+// submission is outstanding, precisely so a caller cannot retire a value out
+// from under work it has already been handed a Future for. Sealing is the way
+// to discard pending work deliberately, and it is tested separately.
+func TestMutateAsyncReportsATerminalOwnerBeforeItStarts(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		leave func(o *ownership.Owner[int])
@@ -49,54 +54,31 @@ func TestMutateAsyncReportsAReleasedOwnerWhileQueued(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			// Hold the borrow so the mutation queues behind it.
-			held, err := owner.BorrowMut()
-			if err != nil {
-				t.Fatal(err)
-			}
+			tc.leave(owner)
 
-			// A generous context: the point is that the mutation reports the
-			// terminal condition without waiting for it.
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-
-			ran := make(chan struct{})
-			f := owner.MutateAsync(ctx, func(v *int) (int, error) {
-				close(ran)
-
+			ran := false
+			f := owner.MutateAsync(context.Background(), func(v *int) (int, error) {
+				ran = true
 				*v = 1
 
 				return *v, nil
 			})
 
-			if _, ready := f.Try(); ready {
-				t.Fatal("the mutation was admitted while a write borrow was held")
-			}
-
-			if err := held.Release(); err != nil {
-				t.Fatal(err)
-			}
-
-			tc.leave(owner)
-
-			start := time.Now()
-			res, err := f.Await(ctx)
-			elapsed := time.Since(start)
-
+			res, err := f.Await(context.Background())
 			if err == nil {
-				t.Fatalf("the mutation reported success (%+v) after the owner was %s", res, tc.name)
-			}
-
-			if errors.Is(err, context.DeadlineExceeded) {
-				t.Fatalf("the mutation reported the context cause after %s, not the %s", elapsed, tc.name)
+				t.Fatalf("the mutation reported success (%+v) on a %s owner", res, tc.name)
 			}
 
 			tc.check(t, err)
 
 			select {
-			case <-ran:
-				t.Fatal("the callback ran after the owner was gone")
+			case <-f.Done():
 			default:
+				t.Fatal("the Future did not resolve")
+			}
+
+			if ran {
+				t.Fatal("the callback ran against a terminal owner")
 			}
 		})
 	}
