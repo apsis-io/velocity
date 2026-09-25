@@ -78,7 +78,7 @@ func (r *Runner) ErrGroup(ctx context.Context) (*ErrGroup, context.Context) {
 // is Limited so that the Limit bounds goroutines, not just running work. A
 // function that obtains its permit after the group context is already
 // cancelled is not run: the group is failing and its result could not
-// change that. Go blocks for the permit regardless, as x/sync does; GoContext
+// change that. Go blocks for the permit regardless, as x/sync does; GoCtx
 // is Go for a submitter that must be able to give up on that wait.
 //
 // Because a function may not run, cleanup it was meant to perform for
@@ -127,7 +127,7 @@ func (g *ErrGroup) Go(fn func(context.Context) error) {
 	g.start(fn, waited)
 }
 
-// GoContext is Go with the permit wait bounded by ctx, and it reports whether
+// GoCtx is Go with the permit wait bounded by ctx, and it reports whether
 // fn was submitted. False means the group was already finished, or finished
 // while the submitter waited, and fn never ran.
 //
@@ -144,7 +144,7 @@ func (g *ErrGroup) Go(fn func(context.Context) error) {
 //
 // ctx bounds the wait for a permit and nothing else. fn still receives the
 // group context, which is the one Wait and cancellation speak about.
-func (g *ErrGroup) GoContext(ctx context.Context, fn func(context.Context) error) bool {
+func (g *ErrGroup) GoCtx(ctx context.Context, fn func(context.Context) error) bool {
 	if ctx == nil {
 		if g.run == nil {
 			g.record(-1, &PlanError{Index: -1, Cause: ErrNilRunner})
@@ -204,7 +204,7 @@ func (g *ErrGroup) GoContext(ctx context.Context, fn func(context.Context) error
 }
 
 // admissible reports whether a submission is well formed, recording the
-// error for one that is not. Both Go and GoContext start here, so a malformed
+// error for one that is not. Both Go and GoCtx start here, so a malformed
 // submission is reported the same way whichever was called.
 func (g *ErrGroup) admissible(fn func(context.Context) error) bool {
 	if g.run == nil {

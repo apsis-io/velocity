@@ -111,10 +111,10 @@ func Example_requestReply() {
 // Two things here are the shape rather than the plumbing, and both are about
 // not stranding a goroutine:
 //
-//   - A submitter that must be able to stop uses GoContext. A loop calling Go
+//   - A submitter that must be able to stop uses GoCtx. A loop calling Go
 //     blocks on the permit with a plain send, so with every permit held it
 //     cannot reach its own cancellation branch — and a loop that cannot reach
-//     its cancel is a loop that can never shut down. GoContext selects on the
+//     its cancel is a loop that can never shut down. GoCtx selects on the
 //     context instead, so cancelling from elsewhere releases it.
 //   - The group is shut down at the end rather than abandoned. A responder
 //     parked on its context is a goroutine the example still owns, and leaving
@@ -159,7 +159,7 @@ func Example_requestReply_bounded() {
 	go func() {
 		defer close(waiting)
 
-		eg.GoContext(ctx, responder("order-3"))
+		eg.GoCtx(ctx, responder("order-3"))
 	}()
 
 	// Shutting down releases both ends at once: the waiting submitter's select

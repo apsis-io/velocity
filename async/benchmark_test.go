@@ -77,13 +77,13 @@ func BenchmarkMapVersusGather(b *testing.B) {
 	}
 }
 
-// BenchmarkErrGroupGoVersusGoContext measures what bounding the permit wait
+// BenchmarkErrGroupGoVersusGoCtx measures what bounding the permit wait
 // costs a submitter whose permit is free, which is the case most submissions
 // are. The contended case is where the documented ~250 ns applies, but it does
 // not isolate in a benchmark: holding a permit needs a holder, and releasing it
 // needs a timer, so the measurement is dominated by the holder rather than by
 // the select.
-func BenchmarkErrGroupGoVersusGoContext(b *testing.B) {
+func BenchmarkErrGroupGoVersusGoCtx(b *testing.B) {
 	work := func(context.Context) error { return nil }
 
 	b.Run("Go", func(b *testing.B) {
@@ -97,7 +97,7 @@ func BenchmarkErrGroupGoVersusGoContext(b *testing.B) {
 			_ = eg.Wait()
 		}
 	})
-	b.Run("GoContext", func(b *testing.B) {
+	b.Run("GoCtx", func(b *testing.B) {
 		run, _ := async.New(async.Limited(8))
 		ctx := context.Background()
 
@@ -105,7 +105,7 @@ func BenchmarkErrGroupGoVersusGoContext(b *testing.B) {
 
 		for b.Loop() {
 			eg, _ := run.ErrGroup(ctx)
-			eg.GoContext(ctx, work)
+			eg.GoCtx(ctx, work)
 			_ = eg.Wait()
 		}
 	})

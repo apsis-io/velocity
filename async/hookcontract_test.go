@@ -53,7 +53,7 @@ import (
 // hook and the contract in hooks.go covers tasks as well as submissions. Two
 // groups, and the behavioural count table below pins only the second:
 //
-//	ErrGroup's four  Go and GoContext report a submission that ran or was
+//	ErrGroup's four  Go and GoCtx report a submission that ran or was
 //	                 discarded; skipped and exec are unexported and report the
 //	                 two halves of that — one that never ran, one that did.
 //	tasks            Gather and Map report each task, race reports each
@@ -83,7 +83,7 @@ var expectedFiringSites = map[string]bool{
 
 // Deliberately absent, and the reason the population is sites and not methods:
 //
-//	Go, GoContext, TryGo   none of them invokes the hook. Go and GoContext each
+//	Go, GoCtx, TryGo   none of them invokes the hook. Go and GoCtx each
 //	                       reach exec through start, and TryGo reaches Go on
 //	                       one path, skipped on a second and start on a third.
 //	                       Three hops for the common route.
@@ -92,7 +92,7 @@ var expectedFiringSites = map[string]bool{
 //	start                  delegates to exec.
 //
 // Counting sites is also what makes the nil-check from which of these had to be
-// excluded: Go and GoContext each test `hooks.OnTaskComplete != nil` before
+// excluded: Go and GoCtx each test `hooks.OnTaskComplete != nil` before
 // queueing a permit, and reading a mention as a call would have put two
 // functions in this table that never fire it. A guard is supposed to be the
 // thing that does not make that mistake, and the first version of this one
@@ -282,28 +282,28 @@ func TestErrGroupHookCountsMatchTheContract(t *testing.T) {
 			},
 		},
 		{
-			name: "GoContext, function runs",
+			name: "GoCtx, function runs",
 			want: 1,
 			run: func(t *testing.T, eg *async.ErrGroup, _ chan struct{}) {
-				if !eg.GoContext(context.Background(), func(context.Context) error { return nil }) {
-					t.Error("GoContext refused a submission with a free permit")
+				if !eg.GoCtx(context.Background(), func(context.Context) error { return nil }) {
+					t.Error("GoCtx refused a submission with a free permit")
 				}
 			},
 		},
 		{
 			// Submitted, then discarded by a context that was already done.
 			// The caller handed over a function, so it is reported.
-			name: "GoContext, caller's context already done",
+			name: "GoCtx, caller's context already done",
 			want: 1,
 			run: func(t *testing.T, eg *async.ErrGroup, _ chan struct{}) {
 				ctx, cancel := context.WithCancel(context.Background())
 				cancel()
 
-				if eg.GoContext(ctx, func(context.Context) error {
+				if eg.GoCtx(ctx, func(context.Context) error {
 					t.Error("a function ran against a finished context")
 					return nil
 				}) {
-					t.Error("GoContext submitted against a finished context")
+					t.Error("GoCtx submitted against a finished context")
 				}
 			},
 		},

@@ -23,7 +23,7 @@ import (
 //
 //   - no more than Limit functions run at once, through any submission path;
 //   - a function runs at most once;
-//   - a function submitted through GoContext with a context that was already
+//   - a function submitted through GoCtx with a context that was already
 //     done never runs at all, whatever else is in flight;
 //   - a submission after the group has finished returns, which it can only do
 //     by taking a permit. Every function having returned and this both
@@ -118,9 +118,9 @@ func FuzzErrGroupModel(f *testing.F) {
 			case 3:
 				refused[id] = true
 
-				eg.GoContext(done, fn)
+				eg.GoCtx(done, fn)
 			case 4:
-				eg.GoContext(context.Background(), fn)
+				eg.GoCtx(context.Background(), fn)
 			}
 		}
 

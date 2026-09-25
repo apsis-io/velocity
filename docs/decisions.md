@@ -906,10 +906,10 @@ contained:
   running past 8 s against a handler that never returns; the loop does not fix
   it either, since it substitutes a bare `wg.Wait` for the same unbounded
   drain, so the gap belongs to the shape rather than to either arm.
-  `GoContext(ctx, fn) bool` is the addition: it selects on ctx for the permit
+  `GoCtx(ctx, fn) bool` is the addition: it selects on ctx for the permit
   and reports whether the function was submitted. `Go` is unchanged, because
   its cost is the reason the method is not the default — measured at a free
-  permit, which is the common case, `GoContext` costs ~35 ns more of 1145
+  permit, which is the common case, `GoCtx` costs ~35 ns more of 1145
   (1177 vs 1145, 3 runs, 985k–1M iterations, same 480 B and 6 allocs), and the
   contended case is where the documented ~250 ns applies. That case does not
   isolate in a benchmark, since holding a permit needs a holder and releasing
@@ -1050,14 +1050,14 @@ goroutine:
   read one is dropped rather than parked on a full channel, because that blocked
   send is precisely what stops the responder reaching the `defer` that would
   have cleaned up. The leak and the fix are the same line of code.
-- **A submitter that must stop uses `GoContext`, not `Go`.** A loop calling `Go`
+- **A submitter that must stop uses `GoCtx`, not `Go`.** A loop calling `Go`
   blocks on the permit with a plain send, so with every permit held it cannot
   reach its own cancellation branch — and a loop that cannot reach its cancel
   can never shut down.
 
 The third is worth reading twice, because writing the example tripped it. The
 first version submitted three responders from the example's own goroutine with
-the limit at two, so the third `GoContext` blocked and the loop never reached
+the limit at two, so the third `GoCtx` blocked and the loop never reached
 the `cancel()` two lines below it: the example hung until the test timeout, and
 the responders were still parked on a context nothing had cancelled. A hazard
 documented in a package is not thereby avoided by the package's own example. The
@@ -1357,3 +1357,23 @@ is true: a named use case with a visible second instance, rather than a
 speculation. If the models are unified onto it, that entry can be rewritten with
 the migration in it; if a third model arrives and still hand-rolls its
 encoding, this was the wrong answer and the reckoning above should be reopened.
+
+## ErrGroup.GoContext is GoCtx (decided)
+
+Renamed. `GoContext` is `GoCtx` across the API, the tests, the benchmarks, the
+fuzz model and this record.
+
+The name is shorter and the doc comment that justifies it reads better with the
+shorter name in it, which is the whole of the case. It is a pre-v1 rename on a
+method two consumers have read and one is about to build against, so it was
+done while that consumer had not started rather than after.
+
+**The cost, which is a naming inconsistency this record should not pretend is
+absent.** The rest of the package spells the suffix: `WaitContext`,
+`Semaphore.Acquire(ctx)`, `RWMutex.Lock(ctx)`, `dedupe.WithBaseContext`. So
+`GoCtx` now sits beside `WaitContext`, and the doc comment for one names the
+other in the same sentence — the package has both spellings for the same idea.
+Renaming `WaitContext` to `WaitCtx` would make the pair consistent and is a
+larger break for a method with more call sites; leaving it makes `GoCtx` the
+odd one. Neither is free, and the choice is the author's. Recorded here so the
+next reader is not left to infer that one of the two is a typo.

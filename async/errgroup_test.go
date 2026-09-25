@@ -272,12 +272,12 @@ func TestErrGroupHooksSeeEachFunction(t *testing.T) {
 	}
 }
 
-// TestErrGroupGoContextGivesUpOnAHeldPermit is the regression for the
+// TestErrGroupGoCtxGivesUpOnAHeldPermit is the regression for the
 // measured gap: a stream consumer's permit wait has to be bounded, because a
 // function that ignores its own cancellation can hold every permit for as long
 // as it likes. With Go, a submitter behind one of those cannot reach its own
 // cancellation branch, and so never reaches WaitContext either.
-func TestErrGroupGoContextGivesUpOnAHeldPermit(t *testing.T) {
+func TestErrGroupGoCtxGivesUpOnAHeldPermit(t *testing.T) {
 	eg, _ := runner(t, async.Limited(1)).ErrGroup(context.Background())
 
 	held := make(chan struct{})
@@ -293,26 +293,26 @@ func TestErrGroupGoContextGivesUpOnAHeldPermit(t *testing.T) {
 
 	done := make(chan bool, 1)
 	go func() {
-		done <- eg.GoContext(ctx, func(context.Context) error { ran = true; return nil })
+		done <- eg.GoCtx(ctx, func(context.Context) error { ran = true; return nil })
 	}()
 
 	select {
 	case submitted := <-done:
 		if submitted {
-			t.Fatal("GoContext submitted a function with no permit free")
+			t.Fatal("GoCtx submitted a function with no permit free")
 		}
 
 		if ran {
 			t.Fatal("the function ran")
 		}
 	case <-time.After(2 * time.Second):
-		t.Fatal("GoContext did not return; the permit wait is unbounded")
+		t.Fatal("GoCtx did not return; the permit wait is unbounded")
 	}
 }
 
-// TestErrGroupGoContextSubmitsWhenAPermitArrives is the other half: bounding
+// TestErrGroupGoCtxSubmitsWhenAPermitArrives is the other half: bounding
 // the wait must not cost a submission that would have run.
-func TestErrGroupGoContextSubmitsWhenAPermitArrives(t *testing.T) {
+func TestErrGroupGoCtxSubmitsWhenAPermitArrives(t *testing.T) {
 	// Two permits, one of them held, so one is free to be taken.
 	eg, _ := runner(t, async.Limited(2)).ErrGroup(context.Background())
 	release := make(chan struct{})
@@ -322,9 +322,9 @@ func TestErrGroupGoContextSubmitsWhenAPermitArrives(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	submitted := eg.GoContext(ctx, func(context.Context) error { return nil })
+	submitted := eg.GoCtx(ctx, func(context.Context) error { return nil })
 	if !submitted {
-		t.Fatal("GoContext = false, want a submission while a permit was free")
+		t.Fatal("GoCtx = false, want a submission while a permit was free")
 	}
 
 	close(release)
@@ -371,7 +371,7 @@ func TestErrGroupHookReportsSubmissionThatNeverRan(t *testing.T) {
 	ran := false
 	never := func(context.Context) error { ran = true; return nil }
 	eg.Go(never)
-	eg.GoContext(context.Background(), never)
+	eg.GoCtx(context.Background(), never)
 
 	if eg.TryGo(never) {
 		t.Fatal("TryGo submitted a function to a finished group")
@@ -397,10 +397,10 @@ func TestErrGroupHookReportsSubmissionThatNeverRan(t *testing.T) {
 	}
 }
 
-func TestErrGroupGoContextValidation(t *testing.T) {
+func TestErrGroupGoCtxValidation(t *testing.T) {
 	eg, _ := runner(t, async.Unlimited).ErrGroup(context.Background())
 	//lint:ignore SA1012 a nil context is exactly what is under test
-	if eg.GoContext(nil, func(context.Context) error { return nil }) {
+	if eg.GoCtx(nil, func(context.Context) error { return nil }) {
 		t.Fatal("nil ctx submitted a function")
 	}
 
@@ -409,7 +409,7 @@ func TestErrGroupGoContextValidation(t *testing.T) {
 	}
 
 	eg, _ = runner(t, async.Unlimited).ErrGroup(context.Background())
-	if eg.GoContext(context.Background(), nil) {
+	if eg.GoCtx(context.Background(), nil) {
 		t.Fatal("nil fn submitted a function")
 	}
 
