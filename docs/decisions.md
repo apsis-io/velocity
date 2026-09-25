@@ -1453,3 +1453,51 @@ one that cost a consumer a revert: the property reads as an absence rather than
 as the design, and the fix for a caller who wants to retry is to say so in the
 open with `resilience.Retry` and `ErrConflict`, rather than have the cell do it
 quietly on their behalf.
+
+## MutateAsync, and where the context went instead of onto the call (implemented)
+
+`Owner.MutateAsync(fn) *Future[R]` is `Mutate` with the callback moved to its
+own goroutine. The Future is pending, or carries the callback's `(R, error)`.
+
+**Admission stays synchronous, and that is the whole design.** `MutateAsync`
+takes the write borrow before it returns, or reports `ErrConflict` before it
+returns, exactly as `Mutate` does. The Future is about the callback's outcome,
+not about acquiring: a goroutine that *waited* for the borrow would put a wait
+inside the cell, and a cell with waiters is how a cycle gets one, which is what
+the no-wait invariant exists to prevent. So a caller keeps the synchronous
+admission contract, and an error arriving on the Future is a **failure** rather
+than a rejection — a rejection is reported by the call that would have admitted
+it. The implementation splits `scopedMutate` at the point its state machine
+already separates admission from release, so the writer flag is taken by the
+caller and released by the goroutine.
+
+**The context is on `Await`, not on the submission.** A context on
+`MutateAsync` could only do one thing: catch an already-done context before
+admitting, because `fn` takes no context and so there is nothing for it to
+propagate into. That is a real check and a near-vacuous one, and it would have
+required a new `ErrNilContext` sentinel in a package that has no notion of
+contexts at all. Bounding the *wait* is the one job a context can actually do
+here, and `Await` is where the caller can act on it, so that is where it went.
+If cancellation ever needs to reach the work, `fn` has to take a context, which
+is a different API and a larger decision than this.
+
+**Giving up on the wait does not give up on the work.** `Await` returning the
+context's cause leaves the mutation running; it still completes and still
+releases its borrow, and the Future still resolves for anyone watching. That is
+what makes a Future droppable without thought: there is nothing on the caller's
+path that has to happen, so there is nothing to forget. `Result` is the
+non-blocking read and says so, and `ErrPending` is a distinct error rather than
+a bool so it goes straight to `errors.Is`.
+
+**One place this is more forgiving than the package's own rule.** Callbacks
+must not panic — a rule that exists because a panic leaves state inconsistent.
+Here a panic would have no caller to reach, so a goroutine panic would take the
+process down. It is recovered into `*Panic`, carrying the value and the stack
+and unwrapping to the original error, mirroring `async.Panic`. The borrow is
+released **before** the panic is converted, so a panicking callback cannot wedge
+the cell — which is the failure the rule was written to prevent, and which the
+test asserts directly.
+
+Nine tests, including the three the design lives or dies by: a conflict is
+refused synchronously rather than on the Future, fifty dropped Futures leave the
+cell admitting, and a panicking callback both reports and leaves the cell usable.
