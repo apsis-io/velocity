@@ -5,6 +5,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -118,27 +119,40 @@ func firingSites(t *testing.T) map[string]int {
 
 	// The test runs with the package directory as its working directory, so
 	// this is the package under test and not the external test package.
-	pkgs, err := parser.ParseDir(token.NewFileSet(), ".", nil, 0)
+	//
+	// parser.ParseDir would say the same thing and is deprecated since Go 1.25
+	// — it does not consider build tags when associating files with packages.
+	// Its suggested replacement, go/packages, is a dependency this module does
+	// not have and the record rules out adding for a test. Reading the
+	// directory and parsing each file is the same answer with neither cost.
+	entries, err := os.ReadDir(".")
 	if err != nil {
 		t.Fatal(err)
 	}
 
+	fset := token.NewFileSet()
+
 	sites := map[string]int{}
-	for _, pkg := range pkgs {
-		for _, file := range pkg.Files {
-			if strings.HasSuffix(file.Name.Name, "_test.go") {
+
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatalf("parsing %s: %v", name, err)
+		}
+
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Body == nil {
 				continue
 			}
 
-			for _, decl := range file.Decls {
-				fn, ok := decl.(*ast.FuncDecl)
-				if !ok || fn.Body == nil {
-					continue
-				}
-
-				if callsHook(fn.Body) {
-					sites[fn.Name.Name]++
-				}
+			if callsHook(fn.Body) {
+				sites[fn.Name.Name]++
 			}
 		}
 	}
@@ -176,6 +190,7 @@ func callsHook(body *ast.BlockStmt) bool {
 	})
 
 	calls := false
+
 	ast.Inspect(body, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
