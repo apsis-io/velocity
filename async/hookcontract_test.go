@@ -20,6 +20,16 @@ import (
 // The guard keys on shape rather than names. A submission path is a method
 // that takes a func(context.Context) error, so a rename is caught and so is a
 // fourth path nobody considered — neither of which a name list would notice.
+//
+// It has one blind spot, found by being shown the same shape of guard in
+// another package: reflect.Methods returns only EXPORTED methods, so an
+// unexported submission path — an internal fast path that took the same shape —
+// would be invisible here, and would then silently never be reported. It does
+// not bite today because all three submission paths are exported, and it is
+// recorded rather than left implied. The fix, if it ever matters, is to stop
+// reflecting and parse the package with go/ast, which sees unexported methods;
+// the price is a test that has to resolve the type by hand, which is why it is
+// not done for a case that does not exist yet.
 
 // specifiedSubmissionPaths is every submission path whose hook behaviour the
 // table in TestErrGroupHookCountsMatchTheContract spells out. A path missing
