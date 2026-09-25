@@ -10,6 +10,7 @@ import (
 
 	"github.com/apsis-io/velocity/dedupe"
 	"github.com/apsis-io/velocity/ownership"
+	"github.com/apsis-io/velocity/traits"
 )
 
 func newGroup(t *testing.T, opts ...dedupe.Option[string, int]) *dedupe.Group[string, int] {
@@ -357,7 +358,7 @@ func TestDoBatchCancellationWaitsForAllLeaderKeys(t *testing.T) {
 	started := make(chan struct{})
 	contextDone := make(chan struct{})
 	release := make(chan struct{})
-	batchDone := make(chan map[string]dedupe.Result[int], 1)
+	batchDone := make(chan map[string]traits.Result[int], 1)
 
 	batchCtx, cancelBatch := context.WithCancel(context.Background())
 	go func() {

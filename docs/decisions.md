@@ -1554,3 +1554,68 @@ was meant to remove. Reporting the work's failure too closes it without
 collapsing the two facts — the wrap preserves `errors.Is` and `errors.As`
 against the original, so a typed failure like `*Panic` or `ErrConflict` is
 still reachable.
+
+## velocityvet's own dead-end hint, found by a consumer following it (implemented)
+
+A consumer trying to run the analyzer directly hit two dead ends, because both
+suggestions are wrong:
+
+    $ go tool velocityvet ./...
+    velocityvet: invoking "go tool velocityvet" directly is unsupported; use "go velocityvet"
+    $ go velocityvet ./...
+    go velocityvet: unknown command
+
+The message is **unitchecker's**, templated on the tool's name: it means "go
+tool vet" and the substitution produced "go velocityvet", which is not a Go
+subcommand. The working form is the two-line `go build` plus
+`go vet -vettool=`, and it is the only one that works — a direct invocation
+gets the analyzer no configuration, so it reports nothing or misreports.
+
+`cmd/velocityvet` now detects the case and prints the form that works. The
+detection is the one `unitchecker` itself uses, loosened slightly: `go vet
+-vettool=` passes a single `*.cfg` path, and anything else is a user running
+the binary. It is deliberately looser than unitchecker's exact check so a
+legitimate vet run is never silenced — printed under `go vet` the hint would
+appear once per analysed package and bury the findings, which is worse than no
+hint at all. Both directions are tested.
+
+`go velocityvet` cannot be intercepted from inside the program — `go` fails
+before the binary runs — so the two documented forms carry that part.
+
+This is the first defect a consumer has reported in velocity's own tooling, and
+it is worth recording how: the analyzer, its tests and the whole suite were
+green throughout. Nothing in this repository could see it, because the failure
+is in the path a user takes *toward* the tool rather than in anything the tool
+does.
+
+## dedupe.Result is gone rather than aliased, and Scope stays out of the analyzer table (decided)
+
+Two things a consumer's report forced, in opposite directions.
+
+**The alias is removed.** `dedupe.Result[V]` had been made an alias for
+`traits.Result[V]` so the two would not drift apart. Removing it is the better
+answer for a type this new, and it was decided rather than assumed: `DoBatch`
+now returns `map[K]traits.Result[V]` and there is one name for an outcome. That
+is a break against `v0.6.0`, which shipped the alias hours earlier, and no
+consumer had adopted it in between.
+
+**`Scope` is deliberately not in the `lostrelease` acquirer table, and the
+reason is that it is not the same kind of thing.** The table holds handle-returning
+calls whose result a caller must hand back — a borrow, a permit, a checkout. A
+`Scope` has no `Release`; cleanup on it is explicit, and a scope that is never
+closed is a deliberate no-op rather than a lost handle. The package says so:
+cleanup is explicit only, and a `Drained` that never closes is the documented
+outcome.
+
+So a dropped `Scope` **is** a leak — the resources enrolled on it are never
+released — but it is a leak of a lifetime rather than of a handle, and the
+analyzer's model cannot express it by adding a row. Reporting the table's
+coverage as though it included scopes would be worse than the gap, because
+someone would rely on a check that is not there. Left out, deliberately, and
+recorded here so the exclusion reads as a decision.
+
+The consumer's phrasing was the right one and is worth keeping: they migrated
+fifteen-odd `Close` sites, declined the rest with reasons, and explicitly
+reported the migration as clean on the strength of their lock test rather than
+on the strength of `lostrelease` — which proved nothing about it. A migration
+reported clean by a checker that never looked is a claim about nothing.
