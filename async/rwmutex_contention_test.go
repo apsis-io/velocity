@@ -1,3 +1,7 @@
+// Every critical section here is empty on purpose: the lock is the
+// measurement. The same reason the other RWMutex benchmark file says so.
+//
+//lint:file-ignore SA2001 the critical section is the measurement
 package async_test
 
 import (
