@@ -1,0 +1,43 @@
+version: "2"
+
+# Whitespace style: a blank line where a block ends and a new statement group
+# begins. See the wsl entry in docs/decisions.md.
+#
+# The default set is on: errcheck, govet, ineffassign, staticcheck, unused,
+# plus wsl_v5. That is duplication with the tools the justfile already runs —
+# go vet, standalone staticcheck, and velocity's own lostrelease analyzer — and
+# it is duplication with a cost, because the two staticchecks do not agree on
+# suppressions: standalone staticcheck honours //lint:ignore and this one does
+# not, so the three deliberate suppressions in the benchmark and nil-context
+# tests are listed under linters.exclusions below as well. Consolidating on one
+# staticcheck is the obvious follow-up and is not done here.
+
+linters:
+  enable:
+    - wsl_v5
+
+  exclusions:
+    rules:
+      # A test that defers a release and ignores its error is the ordinary Go
+      # idiom, and whether the handle was released is not what the test is
+      # checking — analysis/lostrelease is the thing that covers that, and it
+      # runs over test files too. The one release in library code,
+      # dedupe/borrowed.go, is handled at the call site instead, so this rule
+      # does not hide a decision anywhere.
+      - linters: [errcheck]
+        path: '_test\.go'
+
+      # async's benchmark file is entirely empty critical sections, which is
+      # the measurement. The file carries //lint:ignore for standalone
+      # staticcheck, which honours it; this tool does not, so it is listed
+      # here as well.
+      - linters: [staticcheck]
+        text: 'SA2001'
+        path: 'async/rwmutex_benchmark_test\.go'
+
+      # The two nil-context tests exist to check that a nil context is
+      # rejected. Same reason as above: the directive is for standalone
+      # staticcheck, this exclusion is for the copy inside golangci-lint.
+      - linters: [staticcheck]
+        text: 'SA1012'
+        path: '(async/errgroup_test|resilience/until_test)\.go' 

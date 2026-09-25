@@ -21,7 +21,7 @@ func fixedDelay(d time.Duration) resilience.Backoff {
 func TestHedgeSecondAttemptWinsAndFirstIsDiscarded(t *testing.T) {
 	release := make(chan struct{})
 
-	var discarded chan int = make(chan int, 1)
+	discarded := make(chan int, 1)
 
 	policy := resilience.HedgePolicy[int]{
 		MaxAttempts: 2,
@@ -367,7 +367,7 @@ func TestHedgeHooksReportEveryAttempt(t *testing.T) {
 		mu       sync.Mutex
 		started  []int
 		hedges   []bool
-		wonBy    int = -1
+		wonBy    = -1
 		discards int
 	)
 

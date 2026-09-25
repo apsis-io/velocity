@@ -50,17 +50,43 @@ So, read the record with this in mind:
   dialect, which staticcheck does not read, on two release candidates in a row
   that every other check passed. `wsl` for whitespace: a blank line where a
   block ends and a new statement group begins, which is the one style rule here
-  that nothing enforced. Both run as a pinned `go run` from the justfile and as
-  a CI step, over the root module and all three submodules, rather than through
-  a linter aggregator — a whole framework to run two binaries is the dependency
-  the rule was protecting against.
-- **`wsl` is pinned to v5.9.0 and the pin is load-bearing.** v4 bundles an
-  `x/tools` too old to read Go 1.27 export data and dies with `package strconv
-  without types` before reporting anything, so a version that looks current
-  silently reports nothing at all. Applied across every module it changed 2321
-  sites over 96 files, of which 2267 were blank lines and 54 merged adjacent
-  `var` declarations into a `var (...)` group — semantically inert in Go, which
-  was verified with the suite, `-race`, and a benchmark rather than assumed.
+  that nothing enforced. `wsl` is run through `golangci-lint`; `staticcheck`,
+  `go vet` and velocity's own `lostrelease` are still run directly, each pinned.
+  That split is temporary and is discussed below.
+- **Whitespace style is `wsl`, run through `golangci-lint`, with its default
+  linter set on.** The style itself is one rule repeated: a blank line where a
+  block ends and a new statement group begins. Applied across every module it
+  changed 2321 sites over 96 files, of which 2267 were blank lines and 54 merged
+  adjacent `var` declarations into a `var (...)` group — semantically inert in
+  Go, which was verified with the suite, `-race`, and a benchmark rather than
+  assumed.
+- **It is run by `golangci-lint` rather than as a standalone `go run`, and
+  that changed three things worth recording.** The first configuration used a
+  pinned `go run github.com/bombsimon/wsl/v5/cmd/wsl@v5.9.0`, which worked; the
+  switch to `golangci-lint` came from wanting the bundled `wsl_v5`, whose
+  version tracks the tool so there is no separate pin to keep current. The
+  standalone path is also why the version matters: v4 bundles an `x/tools` too
+  old to read Go 1.27 export data and dies with `package strconv without types`
+  **before reporting anything**, so an apparently-current version silently
+  reports nothing at all. That failure mode — a linter that cannot parse the
+  toolchain and exits with a message about a package it never read — is the
+  reason the version is checked rather than trusted.
+- **Enabling `golangci-lint`'s default set surfaced 34 findings the repository
+  had never been checked against, and that is the argument for having done it
+  one linter at a time.** 26 were `errcheck` on a deferred `Release()` or
+  `Close()` in a test or benchmark, which is the ordinary Go idiom and is
+  excluded by path — `analysis/lostrelease` is what covers whether the handle
+  was released, and it runs over test files too. One was in library code:
+  `dedupe/borrowed.go` deferred a borrow release and discarded its error, which
+  the two sibling paths in the same function already discarded explicitly, so
+  the fix was to make the third consistent rather than to decide anything. Two
+  were `staticcheck` style suggestions on redundant types, fixed. Five were
+  suppressions this repository already had: three `SA2001` in a benchmark file
+  and two `SA1012` in nil-context tests, both carried as `//lint:ignore` for
+  standalone `staticcheck`, which honours that directive and which
+  `golangci-lint`'s copy does not — so they are now listed in both places.
+  **Two staticchecks that disagree about suppressions is a cost of running
+  both**, and consolidating on one is the obvious follow-up.
 - Traits are generic function types, not interfaces. The initial traits are
   Drop and Clone with strict nil validation, ordered Drop error joining,
   sequential Clone short-circuiting, and explicit intermediate cleanup.

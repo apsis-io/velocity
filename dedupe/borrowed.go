@@ -85,7 +85,10 @@ func (g *Group[K, V]) doBorrowed(ctx context.Context, key K, release func() erro
 	}
 
 	go g.run(key, c, func(workCtx context.Context) (V, error) {
-		defer release()
+		// Discarded, as the two paths above already discard it. A borrow
+		// release reports a conflict the round is already abandoning, and
+		// there is no caller left to hand it to.
+		defer func() { _ = release() }()
 		return wrapped(workCtx)
 	})
 
