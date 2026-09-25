@@ -1,6 +1,7 @@
 package ownership
 
 import (
+	"context"
 	"fmt"
 	"runtime/debug"
 
@@ -30,93 +31,130 @@ func (p *Panic) Unwrap() error {
 	return nil
 }
 
-// MutateAsync is Mutate with the work moved to its own goroutine. The borrow is
-// taken before MutateAsync returns, or refused before it returns with
-// ErrConflict, exactly as Mutate does; what becomes asynchronous is the
-// callback, and the Future reports its outcome.
+// MutateAsync is Mutate with the work moved to its own goroutine, and with
+// **admission queued rather than refused**: the write borrow is waited for, and
+// the Future reports the outcome once the callback has run.
 //
-//	mutation := owner.MutateAsync(update)
+//	mutation := owner.MutateAsync(ctx, update)
 //	// ... elsewhere, whenever:
 //	result, err := mutation.Await(ctx)
 //
-// **Admission stays synchronous, and that is the whole design.** The Future is
-// about the callback's outcome, not about acquiring: a goroutine that *waited*
-// for the borrow would put a wait inside the cell, and a cell with waiters is
-// how a cycle gets one, which is what the rest of this package refuses to have.
-// So a caller keeps the synchronous admission contract, and a failure arriving
-// on the Future is a failure rather than a rejection.
+// ctx bounds the wait for the borrow, so a caller that gives up cancels the
+// mutation before it starts rather than leaving it queued. It cannot cancel a
+// callback already running — a callback has no context — so a Future dropped
+// mid-callback is still completed and still released.
 //
-// **The callback may panic here without taking the process with it**, which it
-// would if it ran on a caller's goroutine. The borrow is released before the
-// panic is converted, so a panicking callback cannot wedge the cell, and the
-// Future reports a *Panic — the same information a caller recovering the
-// synchronous form would have. This is the one place the package is more
-// forgiving than its own rule that callbacks must not panic, and it is
-// forgiving because there is no caller left to be forgiving towards.
-func (o *Owner[T]) MutateAsync[R any](fn func(*T) (R, error)) *traits.Future[R] {
+// **Mutate itself is unchanged and still refuses on conflict.** That is the
+// important half: if the synchronous path queued too, every borrow would wait,
+// and the no-wait invariant this package is built on would go with it. The choice
+// is the caller's — `Mutate` to be told immediately, `MutateAsync` to wait for a
+// turn.
+//
+// **Waiting here is a broadcast, not a queue.** The cell wakes every waiter when
+// a borrow ends and the losers re-read the state, so a waiter holds nothing and
+// cannot block a release. An ordered waiter list would be a queue the cell
+// owns, and a re-entrant caller would queue behind itself with nothing timing
+// it out — the deadlock this shape exists to avoid.
+//
+// **Re-entering the cell from this callback hangs.** A callback that reaches the
+// same Owner, or any other borrower of the cell, waits for a borrow that only
+// its own return can release. With `Mutate` that is an immediate
+// `ErrConflict`; here it is a wait that never ends. This is the cost of
+// queueing, and the same cost `sync.RWMutex` and this package's own
+// `async.Mutex` carry. It is stated here because a method that returns
+// immediately invites a caller not to check.
+func (o *Owner[T]) MutateAsync[R any](ctx context.Context, fn func(*T) (R, error)) *traits.Future[R] {
 	f := traits.NewFuture[R]()
 
-	if fn == nil {
-		f.CompleteResult(traits.Result[R]{Err: &ProjectionError{Operation: OpUpdate}})
+	switch {
+	case fn == nil:
+		f.Complete(zero[R](), &ProjectionError{Operation: OpUpdate})
+		return f
+	case o == nil || o.c == nil:
+		f.Complete(zero[R](), &ReleasedError{Operation: OpBorrowMut})
+		return f
+	case ctx == nil:
+		// A goroutine panicking on a nil ctx would take the process with it, so
+		// one is refused here rather than dereferenced there.
+		f.Complete(zero[R](), traits.ErrNilContext)
 		return f
 	}
 
-	if o == nil || o.c == nil {
-		f.CompleteResult(traits.Result[R]{Err: &ReleasedError{Operation: OpBorrowMut}})
-		return f
-	}
+	go o.mutateAsync(ctx, f, fn)
 
-	// Admission is the cell's decision and it does not wait, so this either
-	// takes the write borrow now or reports why it could not. Nothing below runs
-	// in the second case and no goroutine is started.
+	return f
+}
+
+// mutateAsync waits for the write borrow, then runs fn, and resolves f either
+// way. The loop is the whole of the queue: try to be admitted, and on a
+// conflict wait for the cell to say something moved.
+func (o *Owner[T]) mutateAsync[R any](ctx context.Context, f *traits.Future[R], fn func(*T) (R, error)) {
 	c := o.c
 
-	c.mu.Lock()
+	for {
+		if err := ctx.Err(); err != nil {
+			f.Complete(zero[R](), context.Cause(ctx))
+			return
+		}
 
-	if err := c.admitWriteLocked(&o.h, modeUnique); err != nil {
+		c.mu.Lock()
+
+		admitErr := c.admitWriteLocked(&o.h, modeUnique)
+		changed := c.waitForChange()
+
 		c.mu.Unlock()
-		f.CompleteResult(traits.Result[R]{Err: err})
 
-		return f
-	}
+		if admitErr != nil {
+			// Not an error to report: being turned away is what a queue is. A
+			// cell that has been sealed or moved will never admit, so its change
+			// is the only signal a waiter gets — the loop re-reads the state and
+			// `admitWriteLocked` reports the terminal condition itself.
+			select {
+			case <-changed:
+			case <-ctx.Done():
+				f.Complete(zero[R](), context.Cause(ctx))
+				return
+			}
 
-	c.mu.Unlock()
+			continue
+		}
 
-	go func() {
 		var (
 			r        R
 			err      error
 			panicked any
 		)
 
-		defer func() {
-			if v := recover(); v != nil {
-				panicked = v
-			}
+		func() {
+			defer func() {
+				if v := recover(); v != nil {
+					panicked = v
+				}
 
-			// Release first and unconditionally. The writer flag is the
-			// exclusion, and it is cleared before anything else can fail —
-			// including a panic above, which is the one failure that would
-			// otherwise leave the cell wedged.
-			c.mu.Lock()
-			c.endWriteLocked(&o.h)
-			c.mu.Unlock()
+				// Release first and unconditionally, waking anything queued
+				// behind this borrow before anything else can fail.
+				c.mu.Lock()
+				c.endWriteLocked(&o.h)
+				c.mu.Unlock()
 
-			if panicked != nil {
-				var zero R
-				f.Complete(zero, &Panic{Value: panicked, Stack: debug.Stack()})
+				if panicked != nil {
+					f.Complete(zero[R](), &Panic{Value: panicked, Stack: debug.Stack()})
+					return
+				}
 
-				return
-			}
+				f.Complete(r, err)
+			}()
 
-			f.Complete(r, err)
+			// The writer flag excludes every other access until the deferred end
+			// above, so the address is exclusive for exactly that long.
+			r, err = fn(&c.value)
 		}()
 
-		// The writer flag excludes every other access until the deferred end
-		// above, so handing out the address is exclusive for exactly that long —
-		// the same guarantee scopedMutate gives, across a return boundary.
-		r, err = fn(&c.value)
-	}()
+		return
+	}
+}
 
-	return f
+func zero[R any]() R {
+	var zero R
+	return zero
 }

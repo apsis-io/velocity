@@ -6,9 +6,15 @@ package traits
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 )
+
+// ErrNilContext is what Future.Await returns for a nil context. A Future is
+// often carried by a caller that has no context of its own, and the panic a nil
+// ctx.Done() would produce is a poor answer to that.
+var ErrNilContext = errors.New("traits: nil context")
 
 // Result is the outcome of work: succeeded with a value, or failed with an
 // error. It is deliberately not a third state. "Not finished yet" is a property
@@ -135,6 +141,10 @@ func (f *Future[R]) Try() (Result[R], bool) {
 func (f *Future[R]) Await(ctx context.Context) (Result[R], error) {
 	if f == nil {
 		return Result[R]{}, nil
+	}
+
+	if ctx == nil {
+		return Result[R]{}, ErrNilContext
 	}
 
 	select {

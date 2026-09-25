@@ -1459,17 +1459,48 @@ quietly on their behalf.
 `Owner.MutateAsync(fn) *Future[R]` is `Mutate` with the callback moved to its
 own goroutine. The Future is pending, or carries the callback's `(R, error)`.
 
-**Admission stays synchronous, and that is the whole design.** `MutateAsync`
-takes the write borrow before it returns, or reports `ErrConflict` before it
-returns, exactly as `Mutate` does. The Future is about the callback's outcome,
-not about acquiring: a goroutine that *waited* for the borrow would put a wait
-inside the cell, and a cell with waiters is how a cycle gets one, which is what
-the no-wait invariant exists to prevent. So a caller keeps the synchronous
-admission contract, and an error arriving on the Future is a **failure** rather
-than a rejection — a rejection is reported by the call that would have admitted
-it. The implementation splits `scopedMutate` at the point its state machine
-already separates admission from release, so the writer flag is taken by the
-caller and released by the goroutine.
+**Admission queues rather than refusing — corrected, and the original reasoning
+for refusing was wrong in a way that decided the design.** The first version
+took the borrow synchronously and reported `ErrConflict` at the call, on the
+argument that a goroutine waiting for the borrow "puts a wait inside the cell, and
+a cell with waiters is how a cycle gets one". Two things were wrong with that.
+The cell does not need to hold the wait: a `changed` broadcast,
+closed-and-replaced whenever a borrow ends or the cell is sealed, gives every
+waiter a chance and holds nothing, so **the package still contains no blocking
+operation** and the invariant survives intact. And citing "the caller can write a
+retry loop instead" argued for building this rather than against it — the loop is
+a real repeated need, and `Mutate`'s own doc tells every contended call site to
+write one.
+
+So `MutateAsync(ctx, fn)` waits for the write borrow, and a contended mutation
+is delayed rather than dropped. Two hundred submitted at once all land, and never
+more than one callback runs at a time.
+
+**The broadcast is deliberately unordered.** An ordered waiter list would be a
+queue the cell owns, and a re-entrant caller would queue behind itself with
+nothing timing it out — the deadlock this shape exists to avoid. A broadcast has
+no ordering and no fairness, but it holds nothing in the cell and degrades to a
+retry. Fairness is a question for a measurement, not a default.
+
+**`Mutate` itself is unchanged and still refuses at once.** If the synchronous
+path queued too, every borrow would wait and the no-wait invariant would go
+with it, so the choice is the caller's: `Mutate` to be told immediately,
+`MutateAsync` to wait for a turn.
+
+**The cost, named rather than dressed up: re-entering the cell from this
+callback hangs.** A callback that reaches the same Owner, or any other borrower
+of the cell, waits for a borrow only its own return can release. With `Mutate`
+that is an immediate `ErrConflict`; here it is a wait that never ends. It is the
+same cost `sync.RWMutex` and this package's own `async.Mutex` carry, and it is
+documented on the method because a method that returns immediately invites a
+caller not to check.
+
+**The context is back on the call, for a different reason than the first version
+gave.** It was moved to `Await` on the argument that a context there could only
+catch an already-done context, since the callback takes none. With a queue it
+bounds the *admission* wait: a caller that gives up cancels the mutation before
+it starts rather than leaving it queued. It still cannot cancel a callback
+already running, so a Future dropped mid-callback is completed and released.
 
 **The context is on `Await`, not on the submission.** A context on
 `MutateAsync` could only do one thing: catch an already-done context before
@@ -1619,3 +1650,40 @@ fifteen-odd `Close` sites, declined the rest with reasons, and explicitly
 reported the migration as clean on the strength of their lock test rather than
 on the strength of `lostrelease` — which proved nothing about it. A migration
 reported clean by a checker that never looked is a claim about nothing.
+
+## The //lint:ignore directives in this repository suppress nothing (corrected)
+
+Found while adding a third nil-context test and watching a directive I had
+written — in the same shape as two that work — do nothing.
+
+**The two that work are suppressed by `.golangci.yml`, not by the directive.**
+The `SA1012` rule in that file enumerates the test files that pass a nil context
+on purpose, and an earlier version of its comment credited the directives. It
+had been crediting them all along. Standalone `staticcheck`, which `just vet`
+runs, does honour `//lint:ignore`; the copy inside `golangci-lint` does not, so
+both the directive and the exclusion are needed and **only the exclusion is
+doing anything in CI**.
+
+Three things went wrong before that was found, and each is a way of being
+confident from resemblance:
+
+  - the directive was placed above an `if` whose statement spanned two lines, and
+    the diagnostic is reported on the argument inside it rather than on the
+    statement;
+  - a `//` separator line was added between the prose and the directive, which
+    looks like separation and is not — a comment group is broken by a blank line,
+    not by another comment marker;
+  - the assignment was then moved onto one line with the directive directly above
+    it, matching the working cases exactly, and it still did not suppress,
+    because the working cases were never working for the reason they appeared to.
+
+The third is the one worth keeping. The fix was to read `resilience`'s
+suppressed line, notice its file appears in the config's exclusion, and conclude
+that the mechanism I had been copying was inert. **A working example is evidence
+about the output, not about the mechanism**, and the cheapest way to tell them
+apart is to change the input.
+
+The directive stays in the three files, because the standalone checker in the
+justfile does honour it, and the two checkers genuinely disagree. The config now
+names `ownership/async_test.go` alongside the other two, and says which one is
+doing the work.

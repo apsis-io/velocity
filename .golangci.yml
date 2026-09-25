@@ -35,9 +35,17 @@ linters:
         text: 'SA2001'
         path: 'async/rwmutex_benchmark_test\.go'
 
-      # The two nil-context tests exist to check that a nil context is
-      # rejected. Same reason as above: the directive is for standalone
-      # staticcheck, this exclusion is for the copy inside golangci-lint.
+      # The nil-context tests exist to check that a nil context is rejected.
+      #
+      # Enumerated per file rather than for every _test.go, because SA1012 is a
+      # real finding in a test and only these files pass a nil context on purpose.
+      #
+      # The //lint:ignore directives on those lines are NOT what suppresses this:
+      # staticcheck inside golangci-lint does not honour them, and this rule does.
+      # The directives are kept because the standalone staticcheck the justfile
+      # also runs does honour them, and the two checkers do not agree. An earlier
+      # version of this file credited the directives; the exclusion was always the
+      # thing doing the work.
       - linters: [staticcheck]
         text: 'SA1012'
-        path: '(async/errgroup_test|resilience/until_test)\.go' 
+        path: '(async/errgroup_test|resilience/until_test|ownership/async_test)\.go' 

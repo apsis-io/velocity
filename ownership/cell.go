@@ -54,6 +54,18 @@ type cell[T any] struct {
 	drained       chan struct{}
 	drainedClosed bool
 
+	// changed is closed and replaced whenever admission-relevant state moves: a
+	// borrow ends, or the cell is sealed. It is a **broadcast, not a queue** —
+	// closing it hands every waiter a chance and holds nothing, so a waiter can
+	// never block a release and this package still contains no blocking
+	// operation. A waiter that loses the race simply re-reads the state.
+	//
+	// Deliberately unordered. An ordered waiter list would be a queue the cell
+	// owns, and a re-entrant caller would silently queue behind itself with
+	// nothing timing it out, which is the deadlock this broadcast exists to
+	// avoid. Fairness is a question for a measurement, not a default.
+	changed chan struct{}
+
 	drop    traits.Drop[T]
 	clone   traits.Clone[T]
 	dropErr error
@@ -176,6 +188,7 @@ func (c *cell[T]) endReadLocked(h *handle) {
 	c.readers--
 	h.borrows--
 
+	c.changedLocked()
 	c.signalDrainedLocked()
 }
 
@@ -183,7 +196,30 @@ func (c *cell[T]) endWriteLocked(h *handle) {
 	c.writer = false
 	h.borrows--
 
+	c.changedLocked()
 	c.signalDrainedLocked()
+}
+
+// changedLocked wakes every goroutine waiting for admission to re-read the
+// cell's state. Closing a channel is not a wait, so this adds a signal without
+// adding a blocking operation.
+func (c *cell[T]) changedLocked() {
+	if c.changed != nil {
+		close(c.changed)
+	}
+
+	c.changed = make(chan struct{})
+}
+
+// waitForChange returns the channel to select on until the cell's state next
+// moves, or ctx ends. Called with the lock held; the caller releases it before
+// selecting, which is what keeps a waiter from blocking a release.
+func (c *cell[T]) waitForChange() <-chan struct{} {
+	if c.changed == nil {
+		c.changed = make(chan struct{})
+	}
+
+	return c.changed
 }
 
 func (c *cell[T]) acquireRead(h *handle, expected mode) (*lease[T], error) {
@@ -270,6 +306,7 @@ func (c *cell[T]) seal(h *handle) error {
 	}
 
 	c.sealed = true
+	c.changedLocked()
 	c.signalDrainedLocked()
 
 	return nil
