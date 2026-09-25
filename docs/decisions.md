@@ -1269,3 +1269,43 @@ code — the same position the `ownership` entry ended at before the basis was
 given. What would settle it is either a prospective user for a pluggable op
 set, which makes the answer keep, or a decision that speculative API is not
 something a v0 library carries, which makes the answer remove.
+
+## opcodes and opruntime are kept: the op set is registered at run time (decided)
+
+The reckoning above left this open and asked for the basis, because nothing in
+the code derives it. The basis is **fuzzing, and an op set a caller registers
+rather than one the compiler can see** — which is the case the earlier entry
+named as the only thing that would earn these their keep, and it turns out to
+be the case the repository is already in.
+
+`ownership`'s model test maps a fuzz byte to an operation with `op % 16` and a
+switch over sixteen cases. The `async` model target added alongside
+`ForEachFuncs` maps one with `op % 5` and a switch over five. **Two model tests,
+two hand-rolled op vocabularies, and neither imports `opcodes`** — a byte is
+decoded into an operation by an expression written out twice, with nothing
+shared, nothing reusable, and no way for a third model to be written without a
+third expression. That is the duplication `opcodes`' data shapes and
+`opruntime`'s handler table exist to remove, and it arrived in the same commit
+that added the second model test.
+
+So the justification is not the hypothetical "a future scripting/replay layer"
+the earlier entry allowed for. It is a present duplication with a concrete
+second instance, in a package the library is now growing into: two models, with
+a third plausible as the packages accumulate.
+
+**What this does not claim.** Neither existing model uses `opcodes` today, so
+nothing has been rewritten and no duplication has been removed. The argument is
+that the mechanism is already right for what the tests are becoming, not that a
+migration has happened. The ~28% that a hand-written switch beats
+`Table.Dispatch` still stands for a fixed op set, and a model's op set is fixed
+at the call site, so **these two tests are still better off with their own
+switches today.** What a runtime-registered op set buys is the third model, or
+one model that registers a different handler set per iteration — cases where the
+switch would have to become a table anyway.
+
+**The cost still stands, unchanged.** 522 lines exercised only by each other
+remains a cost, and the way this entry is true is the way the `ownership` entry
+is true: a named use case with a visible second instance, rather than a
+speculation. If the models are unified onto it, that entry can be rewritten with
+the migration in it; if a third model arrives and still hand-rolls its
+encoding, this was the wrong answer and the reckoning above should be reopened.
