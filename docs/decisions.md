@@ -1409,10 +1409,29 @@ other part of the plan was.
 refusing and owns the lifetime. That is the design rather than a gap in it:
 **waiting is a property of the work, not of the resource.** A registry that
 needs exclusion takes a `async.Mutex`; a value whose lifetime must be checked
-takes an `Owner`. The composition — a mutex for the critical section and
-`Seal`/`Drained` for the lifetime — is two primitives reproducing what one mutex
-already does, and it is worth paying for only when something actually retires in
-process.
+takes an `Owner`.
+
+**Correction, from a consumer reading `async.RWMutex`'s doc: those two
+properties were conflated here, and the composition is smaller than this entry
+claimed.** It said a mutex for the critical section plus `Seal`/`Drained` for
+the lifetime is "two primitives reproducing what one mutex already does". That
+is true of *exclusion* and false of *drain*, and the difference decides which
+primitive a consumer reaches for:
+
+- **A goroutine parked on a lock cannot be told to exit.** That is the hazard
+  `async.RWMutex`'s doc describes, and it is fixed by making the exclusion
+  cancellable — `RLock(ctx)` and `Lock(ctx)` return when the context ends. One
+  primitive, and it gives a capability `sync.RWMutex` does not have.
+- **`Seal`/`Drained` gives a different thing**: a checkable postcondition that
+  nothing is in flight when teardown finishes, and a place that refuses new
+  work. It does not release a goroutine already waiting for a lock, because that
+  goroutine is inside the mutex, not inside an ownership cell.
+
+So the two are complements, not substitutes, and a consumer wanting a drain
+should reach for cancellable exclusion first — it is one primitive and it is the
+one that addresses the parked-goroutine case. Retirement is worth layering only
+when something needs the postcondition, which is a stronger and later claim than
+"we are shutting down".
 
 `Mutate`'s doc now says all of this, because the assumption it invites is the
 one that cost a consumer a revert: the property reads as an absence rather than
