@@ -1215,3 +1215,57 @@ would reasonably assume the other matches, and the two behaviours are
 indistinguishable from their names. Both sites now say so, and point at the
 other. A guard for it is unnecessary: both behaviours are now pinned by tests,
 this one by the argument above and the package's existing abandonment tests.
+
+## opcodes and opruntime: the reckoning ownership got, and the answer is not the same (open)
+
+`ownership` was kept with no call site, on a stated basis and with the cost
+named. The same question applies to `opcodes` and `opruntime`, and the answer is
+less comfortable, because the two situations are not the same kind of thing.
+
+**The facts.** 79 lines of plain `Op`/`Instruction` data shapes, and 443 lines
+of registry-and-dispatch. Between them they have **no users**: `opruntime`
+imports `opcodes`, nothing imports `opruntime`, and `opcodes`'s only importers
+are `opruntime`'s own tests. Neither appears in the README's field-use section
+or anywhere in the benchmark suite. The entry above already states the only
+justification on record — they "earn their keep only where the op set is
+genuinely pluggable at runtime (a caller registers handlers, as `dedupe`/`async`
+do not, but a future scripting/replay layer might)."
+
+**Why `ownership`'s answer does not transfer.** The two are kept for different
+reasons in kind, and the difference is not size. `ownership` is a foundational
+concept: the class of bug it prevents — a resource released twice, not at all,
+or after someone moved it — is a bug this library's consumers hit, and the
+reason to keep it was a discipline, not a utility. `opruntime` is a **utility**:
+a dispatch table with handlers registered at run time. A reader who needs one
+can write the switch, and this record already carries the measurement that they
+should — `Table.Dispatch` is ~28% slower than a hand-written switch for the
+same 10-op shape. So the honest position is not "it is under-used" but "it is
+slower than the alternative for the case everyone has, and only wins for a case
+nobody has."
+
+**And the asymmetry that decides most of it.** `ownership`'s absence would be a
+bug class; nothing in this library or its consumers misbehaves because there is
+no dispatch table. That means the cost side is real — 522 lines that only
+exercise themselves, in a public API, in a package that is not advertised — and
+the benefit side is a hypothesis with no date on it. A package with no caller
+rots quietly, and the record is the only thing that will notice, which is the
+same argument the `ownership` entry makes about itself. Here it is stronger,
+because there is no prospective call site to keep the code honest against.
+
+**The three positions, and what would settle it.**
+
+  - **Remove both.** v0, no consumers, 522 lines, and the feature they exist
+    for is speculative. Cheap to do, and the record keeps the reasoning if a
+    scripting or replay layer ever arrives.
+  - **Keep, marked as not-API.** The type exists, the benchmark stays, and
+    godoc stops implying a commitment. Preserves the measurement, which is the
+    part with value, and stops the package being a claim.
+  - **Keep as is**, on the strength of "it is cheap and tested". Defensible, and
+    the one that decays: nothing distinguishes this from a package nobody
+    maintains on purpose.
+
+The decision is open, and it is the author's rather than derivable from the
+code — the same position the `ownership` entry ended at before the basis was
+given. What would settle it is either a prospective user for a pluggable op
+set, which makes the answer keep, or a decision that speculative API is not
+something a v0 library carries, which makes the answer remove.
