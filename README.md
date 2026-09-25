@@ -473,6 +473,14 @@ weaker one than independent adoption would be. What they establish is that the
 shapes work against real workloads and fail legibly when they do not — not that
 anyone outside would want them.
 
+Each has also **declined** something, which is worth more than the adoptions:
+Periapsis wrote a full registry swap onto `ownership.Owner` — `Seal`, `Drained`,
+the sealed table wired to real behaviour — and reverted it, because a registry
+admits by queuing and `Mutate` refuses. Its reason is recorded in the code, and
+it argues from this repository's own no-wait invariant. That is the package's
+sharpest limit stated by someone who had read the reasoning rather than skimmed
+it.
+
 **Periapsis**, a virtual-kubelet fork, ported seven call sites to velocity and
 has tracked each release since. It exercises `ownership`, `async` (`Runner.Map`,
 `ErrGroup`, `Mutex`, and now `RWMutex` — deployed to its cluster and measured
