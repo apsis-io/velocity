@@ -1427,11 +1427,26 @@ primitive a consumer reaches for:
   work. It does not release a goroutine already waiting for a lock, because that
   goroutine is inside the mutex, not inside an ownership cell.
 
-So the two are complements, not substitutes, and a consumer wanting a drain
-should reach for cancellable exclusion first — it is one primitive and it is the
-one that addresses the parked-goroutine case. Retirement is worth layering only
-when something needs the postcondition, which is a stronger and later claim than
-"we are shutting down".
+**They fail in opposite directions, which is the form worth keeping.**
+Cancellable exclusion releases a goroutine already parked on a lock and gives
+no postcondition. `Seal`/`Drained` gives a postcondition and releases no waiter,
+because a goroutine waiting for a lock is inside the mutex and not inside an
+ownership cell. So neither is a cheaper and a dearer version of one property,
+and "reach for cancellable exclusion first" is true only in the sense that it is
+one primitive and the other is not optional once the postcondition is wanted.
+A drain that wants both needs both, and the earlier "two primitives" figure was
+right after all — for a reason neither this entry nor the consumer who corrected
+it had given. Retirement is worth layering when something needs the
+postcondition, which is a stronger claim than "we are shutting down".
+
+**What would settle it is a count, not an argument.** For a consumer weighing
+cancellable exclusion, the question is how often a reader actually parks on the
+lock, because a critical section that is a map lookup parks nobody and the
+insurance is against a hazard that does not occur. `async.RWMutex` already has
+the instrument for it: `TryRLock` returns false instead of waiting, so a caller
+that probes on a sample of its calls and counts the refusals measures contention
+without a production loop or a drain. Neither building on that count nor ruling
+it out is justified without the number.
 
 `Mutate`'s doc now says all of this, because the assumption it invites is the
 one that cost a consumer a revert: the property reads as an absence rather than
