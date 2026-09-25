@@ -31,6 +31,8 @@ func (s *Shared[T]) State() State {
 }
 
 // Clone creates another explicitly counted Shared handle.
+//
+//velocity:acquires
 func (s *Shared[T]) Clone() (*Shared[T], error) {
 	if s == nil || s.c == nil {
 		return nil, &ReleasedError{Operation: OpClone}

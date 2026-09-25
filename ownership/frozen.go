@@ -65,6 +65,8 @@ func (f *Frozen[T]) State() State {
 }
 
 // Clone creates another explicitly counted Frozen handle.
+//
+//velocity:acquires
 func (f *Frozen[T]) Clone() (*Frozen[T], error) {
 	if f == nil || f.c == nil {
 		return nil, &ReleasedError{Operation: OpClone}

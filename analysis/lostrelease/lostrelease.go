@@ -125,8 +125,8 @@ const (
 var acquirers = map[string]map[string][]string{
 	ownershipPath: {
 		"Owner":  {"Borrow", "BorrowMut"},
-		"Shared": {"Borrow", "BorrowMut"},
-		"Frozen": {"Borrow"},
+		"Shared": {"Borrow", "BorrowMut", "Clone"},
+		"Frozen": {"Borrow", "Clone"},
 		"":       {"NewLease"},
 	},
 	poolPath: {

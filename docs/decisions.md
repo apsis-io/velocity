@@ -1133,3 +1133,45 @@ test file within a minute of the `//velocity:acquires` directives going in, on
 branches where `t.Fatal` means the release never runs. That is the analyzer
 working as intended on a package it had never seen, and the fix — release before
 failing — is the right shape anyway.
+
+## A dropped Shared.Clone was invisible, and the reason recorded for it was not a reason (implemented)
+
+Found while answering a consumer's question about building a shared pawn
+registry on `Shared`, which is the first `ownership` call site either consuming
+project has found. Before recommending the type I checked whether a handle on it
+is actually checked, and it is not:
+
+- `Shared.Clone` and `Frozen.Clone` return releasable counted handles and
+  neither carried a `//velocity:acquires` directive.
+- The drift test could not catch it either, because both sat in its
+  `notAcquirers` table with the reason **"counted handle from one already
+  held"**.
+
+The reason is the bug. A `Shared` is reference-counted, so a clone is not a
+transfer of an existing obligation — it is a *second* one. `Clone` increments
+the count, and the cell's `Drop` runs when the count reaches zero, so a dropped
+clone is a resource that is never released, which is the entire class
+`lostrelease` exists to catch. The exclusion appears to have read "the
+obligation already existed" as "so a further one need not be reported", which
+is true of a move and not of a counted handle.
+
+Verified rather than inferred, in a scratch module against a local replace:
+dropping a `Shared.Borrow` is reported, and dropping a `Shared.Clone` beside it
+in the same function is not. The incoherence is the argument — the same type
+checks one of its two ways of handing out a handle and ignores the other.
+
+**The fix, and what it costs.** A `//velocity:acquires` directive on each
+`Clone`, both added to the fallback table for pre-marker versions, and the two
+exclusions removed. Measured before committing: the drift test passes, the
+analyzer produces **no new reports over velocity's own tree** under the stricter
+policy, and the dropped-clone case is reported. So the check is free to the
+library and catches the thing it was always supposed to.
+
+**Why it is worth an entry rather than a commit message.** It was found by
+reading the API in order to advise a consumer, not by a failing test — the
+drift test was passing, the analyzer was passing, and velocity's suite was
+green throughout. A tool whose subject is "the failure mode is forgetting"
+had a hole in exactly the place a refcount makes forgetting expensive, and the
+hole was documented with a rationale that reads like a considered trade. That is
+the kind of entry that only gets written down if it is written down: a green
+suite is evidence about the checks that exist, not about the checks that do not.
