@@ -65,7 +65,16 @@ func TestMutateAsyncReentryByForm(t *testing.T) {
 		var inner error
 
 		f := owner.MutateAsync(context.Background(), func(v *int) (int, error) {
-			_, inner = owner.BorrowMut()
+			// Released on the success path even though the test expects a
+			// refusal: a discarded handle is a leak the analyzer cannot rule
+			// out, and it reported exactly that here.
+			if borrow, err := owner.BorrowMut(); err != nil {
+				inner = err
+			} else {
+				inner = errors.New("a re-entrant borrow was admitted")
+				_ = borrow.Release()
+			}
+
 			return *v, nil
 		})
 		if _, err := f.Await(context.Background()); err != nil {
