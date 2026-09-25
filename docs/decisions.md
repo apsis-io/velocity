@@ -1501,3 +1501,54 @@ test asserts directly.
 Nine tests, including the three the design lives or dies by: a conflict is
 refused synchronously rather than on the Future, fifty dropped Futures leave the
 cell admitting, and a panicking callback both reports and leaves the cell usable.
+
+## traits.Result and traits.Future, and a correction to the reason for migrating dedupe (implemented)
+
+Two types in `traits`, the package that already holds the vocabulary shared
+across this repository — `Drop`, `Clone` — and nothing else: a Result is the
+outcome of work, a Future is a handle on work that has not finished. They are
+separate because **"not finished" is a property of the handle, not of the
+outcome**, so an unresolved Future has no Result rather than a Result holding a
+sentinel meaning "wait".
+
+The reason to split them is a footgun the combined form has. A Future whose
+`Result()` returned `(R, error)` and reported *pending* in the error channel
+means a caller writing `if err != nil` treats "not ready" as "failed". The
+sentinel makes them separable by `errors.Is`, which is the same
+convention-instead-of-structure the rest of this repository argues against. So:
+
+  - `Try() (Result[R], bool)` — the second return is *readiness*, not an error.
+    Unknown, succeeded and failed are three different answers.
+  - `Await(ctx) (Result[R], error)` — and the returned error is the **wait's**,
+    while `Result.Err` is the **work's**. Giving up on the wait says something
+    about the caller's patience and nothing about the work, which still runs
+    and still resolves the Future for anyone else watching. That is what makes a
+    Future droppable: nothing is abandoned, so nothing needs cleaning up.
+
+**Correction: the reason given for migrating `dedupe.Result` was wrong.** It
+claimed the zero `Result` was ambiguous — "indistinguishable from a key whose
+value genuinely is the zero value", the same absent-versus-empty defect the
+evaluation measured in watermill's `Metadata.Get`. Checked, and every
+assignment in `DoBatch` sets either `Err` or `Value`, and the map is aligned to
+the requested keys, so **there is no absent state and the zero `Result` is
+unreachable.** No bug, and the migration is vocabulary consolidation: one
+`traits.Result` that `dedupe.Result` is an alias of, so the outcome of one key
+and the outcome of a mutation are the same type with nothing to keep in step.
+An alias rather than a removal, so `DoBatch`'s return is unchanged for callers.
+
+The zero `Result` is a **succeeded zero** and is documented as one, which is the
+same reasoning: a Result has no "absent" state to be confused with, because a
+Future that has not resolved has no Result at all.
+
+Nine ownership tests and seven traits tests. The three the designs live or die
+by: a conflicting mutation is refused at the call rather than on the Future,
+fifty dropped Futures leave the cell admitting, and a panicking callback both
+reports and leaves the cell usable — the last because the borrow is released
+*before* the panic is converted, which is the failure the no-panic-callbacks
+rule exists to prevent.
+
+One honest limit, recorded on `Await` and asserted nowhere because the type
+cannot express it: on a timeout the returned Result is the zero Result, which
+reports `Ok()`. A caller who ignores the wait's error and reads the value has
+the same bug they would have in any Go function returning a value and an error.
+The error is the only thing that says the Result is not to be read.

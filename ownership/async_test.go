@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/apsis-io/velocity/ownership"
+	"github.com/apsis-io/velocity/traits"
 )
 
 // The Future is a receipt, not a promise: admission happened before the call
@@ -24,9 +25,9 @@ func TestMutateAsyncReportsTheCallbackOutcome(t *testing.T) {
 		return *v + 1, nil
 	})
 
-	got, err := f.Await(context.Background())
-	if err != nil || got != 43 {
-		t.Fatalf("Await = (%d, %v), want (43, nil)", got, err)
+	res, err := f.Await(context.Background())
+	if err != nil || res.Value != 43 || !res.Ok() {
+		t.Fatalf("Await = (%+v, %v), want a succeeded 43", res, err)
 	}
 
 	// The mutation is visible on the value, and the borrow is gone.
@@ -44,9 +45,18 @@ func TestMutateAsyncReportsAnErroredCallback(t *testing.T) {
 
 	boom := errors.New("boom")
 
-	_, err = owner.MutateAsync(func(*int) (int, error) { return 0, boom }).Await(context.Background())
-	if !errors.Is(err, boom) {
-		t.Fatalf("Await = %v, want the callback's error", err)
+	res, err := owner.MutateAsync(func(*int) (int, error) { return 0, boom }).
+		Await(context.Background())
+	if err != nil {
+		t.Fatalf("Await = %v, want the wait to succeed", err)
+	}
+
+	if !errors.Is(res.Err, boom) {
+		t.Fatalf("Result.Err = %v, want the callback's error", res.Err)
+	}
+
+	if res.Ok() {
+		t.Fatal("a failed callback reported Ok")
 	}
 }
 
@@ -68,8 +78,14 @@ func TestMutateAsyncRefusesAConflictBeforeReturning(t *testing.T) {
 		return 0, nil
 	})
 
-	if _, err := f.Result(); !errors.Is(err, ownership.ErrConflict) {
-		t.Fatalf("Result = %v, want ErrConflict synchronously", err)
+	// Already finished, and finished with the refusal.
+	if _, ready := f.Try(); !ready {
+		t.Fatal("a refused mutation is not finished at the call")
+	}
+
+	res, _ := f.Try()
+	if !errors.Is(res.Err, ownership.ErrConflict) {
+		t.Fatalf("Result.Err = %v, want ErrConflict synchronously", res.Err)
 	}
 
 	if err := held.Release(); err != nil {
@@ -92,8 +108,8 @@ func TestMutateAsyncReleasesTheBorrowEvenWhenAbandoned(t *testing.T) {
 	}
 
 	// Submit fifty without keeping a handle and without waiting. Most are
-	// refused at the call — admission is synchronous, so at most one is
-	// admitted at a time — and the admitted ones have to release themselves.
+	// refused at the call — admission is synchronous, so at most one is admitted
+	// at a time — and the admitted ones have to release themselves.
 	for range 50 {
 		owner.MutateAsync(func(v *int) (int, error) {
 			*v++
@@ -101,8 +117,8 @@ func TestMutateAsyncReleasesTheBorrowEvenWhenAbandoned(t *testing.T) {
 		})
 	}
 
-	// The cell has to come back on the goroutines' own path. If the release
-	// were the caller's job, dropping the Future would wedge it and this never
+	// The cell has to come back on the goroutines' own path. If the release were
+	// the caller's job, dropping the Future would wedge it and this never
 	// succeeds.
 	deadline := time.Now().Add(5 * time.Second)
 
@@ -132,13 +148,15 @@ func TestMutateAsyncRecoversAPanicAndReleasesTheBorrow(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = owner.MutateAsync(func(*int) (int, error) {
-		panic("callback")
-	}).Await(context.Background())
+	res, err := owner.MutateAsync(func(*int) (int, error) { panic("callback") }).
+		Await(context.Background())
+	if err != nil {
+		t.Fatalf("Await = %v, want the wait to succeed", err)
+	}
 
 	var p *ownership.Panic
-	if !errors.As(err, &p) || p.Value != "callback" {
-		t.Fatalf("Await = %v, want a *Panic carrying the value", err)
+	if !errors.As(res.Err, &p) || p.Value != "callback" {
+		t.Fatalf("Result.Err = %v, want a *Panic carrying the value", res.Err)
 	}
 
 	// Released before the panic was converted, so the cell is usable.
@@ -147,9 +165,9 @@ func TestMutateAsyncRecoversAPanicAndReleasesTheBorrow(t *testing.T) {
 	}
 }
 
-// Result is non-blocking and says so: pending while it runs, the outcome once
-// it does, and ErrPending is distinct from a failure.
-func TestMutateAsyncResultIsNonBlocking(t *testing.T) {
+// Try is non-blocking and says so, and it separates "unknown" from "failed" —
+// which is the distinction a single (R, error) return cannot make.
+func TestMutateAsyncTryIsNonBlocking(t *testing.T) {
 	owner, err := ownership.New(1)
 	if err != nil {
 		t.Fatal(err)
@@ -167,23 +185,25 @@ func TestMutateAsyncResultIsNonBlocking(t *testing.T) {
 
 	<-started
 
-	if _, err := f.Result(); !errors.Is(err, ownership.ErrPending) {
-		t.Fatalf("Result while running = %v, want ErrPending", err)
+	if _, ready := f.Try(); ready {
+		t.Fatal("Try reported ready while the callback was running")
 	}
 
 	close(release)
 
-	if got, err := f.Await(context.Background()); err != nil || got != 7 {
-		t.Fatalf("Await = (%d, %v), want (7, nil)", got, err)
+	if _, err := f.Await(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 
-	if got, err := f.Result(); err != nil || got != 7 {
-		t.Fatalf("Result after Await = (%d, %v), want (7, nil)", got, err)
+	res, ready := f.Try()
+	if !ready || res.Value != 7 || !res.Ok() {
+		t.Fatalf("Try = (%+v, %v), want a ready succeeded 7", res, ready)
 	}
 }
 
-// Giving up on the wait is not giving up on the work. The Future still
-// resolves, and the borrow still comes back.
+// Giving up on the wait is not giving up on the work: the Future still
+// resolves, the borrow still comes back, and a wait that gave up says nothing
+// about the outcome — which is the distinction the two types exist to keep.
 func TestMutateAsyncAwaitTimeoutDoesNotCancelTheWork(t *testing.T) {
 	owner, err := ownership.New(1)
 	if err != nil {
@@ -205,19 +225,22 @@ func TestMutateAsyncAwaitTimeoutDoesNotCancelTheWork(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 	defer cancel()
 
+	// The returned error is the wait's. The Result alongside it is the zero
+	// Result, which is a *succeeded zero* and therefore reports Ok — so there
+	// is nothing here to assert about it. That is the shape of every Go
+	// function returning a value and an error, and the reason Await returns
+	// the wait's failure separately rather than folding it into the Result: on
+	// a timeout the Result is not to be read at all, and the only thing that
+	// says so is the error.
 	if _, err := f.Await(ctx); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Await = %v, want the caller's deadline", err)
 	}
 
 	close(release)
 
-	if _, err := f.Await(context.Background()); err != nil {
-		t.Fatalf("the Future did not resolve after the work finished: %v", err)
-	}
-
-	viewed, err := owner.View(func(v int) (int, error) { return v, nil })
-	if err != nil || viewed != 5 {
-		t.Fatalf("value = (%d, %v), want 5: the work ran to completion", viewed, err)
+	after, err := f.Await(context.Background())
+	if err != nil || after.Value != 5 {
+		t.Fatalf("the Future did not resolve with the real outcome: (%+v, %v)", after, err)
 	}
 }
 
@@ -234,7 +257,7 @@ func TestMutateAsyncKeepsTheLimit(t *testing.T) {
 
 	var (
 		mu       sync.Mutex
-		futures  []*ownership.Future[int]
+		futures  []*traits.Future[int]
 		running  atomic.Int64
 		peak     atomic.Int64
 		wg       sync.WaitGroup
@@ -315,30 +338,38 @@ func TestMutateAsyncNilArguments(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f := owner.MutateAsync[int](nil)
+	// A nil function is a rejected mutation, finished rather than pending.
+	res, ready := owner.MutateAsync[int](nil).Try()
+	if !ready {
+		t.Fatal("a nil-function mutation is pending")
+	}
 
 	var projection *ownership.ProjectionError
-	if _, err := f.Result(); !errors.As(err, &projection) {
-		t.Fatalf("nil fn = %v, want a rejected mutation", err)
+	if !errors.As(res.Err, &projection) {
+		t.Fatalf("nil fn = %v, want a rejected mutation", res.Err)
 	}
 
 	var none *ownership.Owner[int]
 
-	fromNil := none.MutateAsync(func(*int) (int, error) { return 0, nil })
-	if _, err := fromNil.Await(context.Background()); err == nil {
+	if res, _ := none.MutateAsync(func(*int) (int, error) { return 0, nil }).Try(); res.Ok() {
 		t.Fatal("a nil owner reported success")
 	}
 
-	// A nil Future is finished, not pending: nothing can wait on it forever.
-	var absent *ownership.Future[int]
+	// A nil Future is finished rather than pending: nothing can wait on it
+	// forever, and it carries the zero Result, which is a succeeded zero.
+	var absent *traits.Future[int]
 
-	if _, err := absent.Await(context.Background()); err == nil {
-		t.Fatal("a nil Future reported success")
+	if _, ready := absent.Try(); !ready {
+		t.Fatal("a nil Future is not ready")
 	}
 
 	select {
 	case <-absent.Done():
 	default:
 		t.Fatal("a nil Future is not done")
+	}
+
+	if res, err := absent.Await(context.Background()); err != nil || !res.Ok() {
+		t.Fatalf("a nil Future Await = (%+v, %v), want a finished zero Result", res, err)
 	}
 }

@@ -1,12 +1,18 @@
 package dedupe
 
-import "context"
+import (
+	"context"
+
+	"github.com/apsis-io/velocity/traits"
+)
 
 // Result holds the value or error for one requested key.
-type Result[V any] struct {
-	Value V
-	Err   error
-}
+//
+// An alias for traits.Result rather than a second definition, so the outcome of
+// one key and the outcome of a mutation are the same type and there is nothing
+// to keep in step. It stays exported here because DoBatch returns it and
+// renaming that return is a break for a convenience nobody needs.
+type Result[V any] = traits.Result[V]
 
 // DoBatch executes one function for all requested keys and aligns the result map
 // with the requested keys. It is a plain-value form like Do, and an owned group
