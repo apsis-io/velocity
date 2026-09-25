@@ -111,6 +111,28 @@ func (o *Owner[T]) View[R any](fn func(T) (R, error)) (R, error) {
 // Mutate runs fn with exclusive mutable access under a write borrow that
 // lasts exactly as long as the call. Mutations are not rolled back when fn
 // returns an error.
+//
+// **A conflicting Mutate reports ErrConflict at once. It does not wait, and
+// there is no blocking form.** That is the one property most likely to be
+// assumed away, so it is worth stating plainly:
+//
+//   - This is not a mutex. A mutex.Lock queues contending callers and every one
+//     of them eventually runs; a Mutate is refused while any borrow is held.
+//     Swapping one for the other turns a working serialised critical section
+//     into a workload where a predictable fraction of calls fail — with
+//     concurrent writers, roughly all but one.
+//   - If the work needs exclusion, take async.Mutex or async.Semaphore, whose
+//     Acquire waits under a context and can be given up on. Waiting belongs
+//     there rather than here because waiting is a property of the work, not of
+//     the resource, and because this package contains no wait: that absence is
+//     why a borrow here cannot deadlock, and a wait inside a cell is how a
+//     cycle gets one.
+//   - A caller that wants to retry can, and should say so — wrap the Mutate in
+//     resilience.Retry with ErrConflict as the retryable. Retrying is a policy
+//     decision made in the open rather than one baked into a cell.
+//
+// What a Mutate is for is the other half: a value whose lifetime is checked, so
+// use-after-release and a released Drop are errors rather than behaviour.
 func (o *Owner[T]) Mutate[R any](fn func(*T) (R, error)) (R, error) {
 	if o == nil {
 		var zero R

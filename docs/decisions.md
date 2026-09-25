@@ -1377,3 +1377,45 @@ Renaming `WaitContext` to `WaitCtx` would make the pair consistent and is a
 larger break for a method with more call sites; leaving it makes `GoCtx` the
 odd one. Neither is free, and the choice is the author's. Recorded here so the
 next reader is not left to infer that one of the two is a typo.
+
+## ownership is not a mutex, and a consumer found that the hard way (documented)
+
+A consumer replaced a registry's `sync.RWMutex` with `Owner` borrows, ran the
+tests, and reverted: **a conflicting `Mutate` reports `ErrConflict` at once and
+does not wait.** Their existing concurrency test said it without needing a new
+one — 24 concurrent adds of distinct names, all 24 landing under the mutex,
+8 landing and 16 refused under `Owner`. Two simultaneous operator adds become
+one add and one spurious failure.
+
+This is deliberate, and stated in three places: `View`'s doc — "Concurrent
+Views coexist; a Mutate meanwhile reports ErrConflict" — and twice in this
+record, the second time as *"The no-wait invariant is untouched. It is the
+design."* The reason is in the `Seal`/`Drained` entry: this package has no
+channels, selects or context waits anywhere, **and that absence is why a borrow
+here cannot deadlock**. A wait inside a cell is how a cycle gets one. So
+`ErrConflict` is the mechanism the deadlock argument rests on, not an artefact of
+nobody having asked for a blocking form.
+
+**What the review here missed, and it is the whole finding.** The two halves of
+the proposal were vetted separately — the borrow scope, the lifetime, the
+analyzer coverage, the retirement sequence — and accepted. Admission semantics
+were never on the table, and admission semantics decide it. A mutex's job is
+**queueing**; this package's job is explicitly **not queueing**. They are not
+the same primitive and the swap was never going to work, however correct every
+other part of the plan was.
+
+**The split already exists, one package over.** `async.Mutex` and
+`async.Semaphore` admit by waiting, cancellably; `ownership` admits by
+refusing and owns the lifetime. That is the design rather than a gap in it:
+**waiting is a property of the work, not of the resource.** A registry that
+needs exclusion takes a `async.Mutex`; a value whose lifetime must be checked
+takes an `Owner`. The composition — a mutex for the critical section and
+`Seal`/`Drained` for the lifetime — is two primitives reproducing what one mutex
+already does, and it is worth paying for only when something actually retires in
+process.
+
+`Mutate`'s doc now says all of this, because the assumption it invites is the
+one that cost a consumer a revert: the property reads as an absence rather than
+as the design, and the fix for a caller who wants to retry is to say so in the
+open with `resilience.Retry` and `ErrConflict`, rather than have the cell do it
+quietly on their behalf.
