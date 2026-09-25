@@ -56,13 +56,21 @@ func (p *Panic) Unwrap() error {
 // owns, and a re-entrant caller would queue behind itself with nothing timing
 // it out — the deadlock this shape exists to avoid.
 //
-// **Re-entering the cell from this callback hangs.** A callback that reaches the
-// same Owner, or any other borrower of the cell, waits for a borrow that only
-// its own return can release. With `Mutate` that is an immediate
-// `ErrConflict`; here it is a wait that never ends. This is the cost of
-// queueing, and the same cost `sync.RWMutex` and this package's own
-// `async.Mutex` carry. It is stated here because a method that returns
-// immediately invites a caller not to check.
+// **Re-entering from this callback reports `ErrConflict`, except in one shape.**
+// `View`, `Mutate` and `BorrowMut` called from inside the callback are turned
+// away at once, exactly as they would be from any other goroutine — the
+// callback holds the write borrow, and saying so is more useful than waiting.
+// That was worth checking rather than asserting: an earlier version of this
+// comment said re-entering hangs, and it does not.
+//
+// The one shape that waits is a **nested `MutateAsync` whose Future the callback
+// awaits**. The nested mutation queues, and the callback blocks on it holding
+// the borrow the nested one needs, so the two wait on each other. This is the
+// caller choosing to wait inside a critical section it holds — the same mistake
+// as waiting on a `WaitGroup` you are inside — not a failure to detect
+// anything. A context with a deadline turns it into an error at the point of the
+// wait, which is why `ctx` bounds the admission wait and not only the caller's
+// patience.
 func (o *Owner[T]) MutateAsync[R any](ctx context.Context, fn func(*T) (R, error)) *traits.Future[R] {
 	f := traits.NewFuture[R]()
 

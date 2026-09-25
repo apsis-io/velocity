@@ -1518,13 +1518,24 @@ path queued too, every borrow would wait and the no-wait invariant would go
 with it, so the choice is the caller's: `Mutate` to be told immediately,
 `MutateAsync` to wait for a turn.
 
-**The cost, named rather than dressed up: re-entering the cell from this
-callback hangs.** A callback that reaches the same Owner, or any other borrower
-of the cell, waits for a borrow only its own return can release. With `Mutate`
-that is an immediate `ErrConflict`; here it is a wait that never ends. It is the
-same cost `sync.RWMutex` and this package's own `async.Mutex` carry, and it is
-documented on the method because a method that returns immediately invites a
-caller not to check.
+**The cost, corrected by measuring each form rather than asserting it.** The
+first version of this entry said re-entering the cell from a callback hangs, and
+it does not. `View`, `Mutate` and `BorrowMut` called from inside the callback are
+all turned away **at once** with `ErrConflict`, exactly as they would be from any
+other goroutine — the callback holds the write borrow, and saying so beats
+waiting. Detection was never needed for the common case; the cell already reports
+it.
+
+Exactly one shape waits: a **nested `MutateAsync` whose Future the callback
+awaits**. The nested mutation queues, and the callback blocks on it while holding
+the borrow that one needs, so the two wait on each other. That is the caller
+choosing to wait inside a critical section it holds — the same mistake as
+waiting on a `WaitGroup` from inside the work it guards — and not a failure to
+detect anything. A deadline on the context turns it into an error at the point of
+the wait, which is the reason `ctx` bounds the admission wait and not only the
+caller's patience. All four forms are tests
+(`TestMutateAsyncReentryByForm`), so the claim is checked rather than trusted:
+three error, one waits.
 
 **The context is back on the call, for a different reason than the first version
 gave.** It was moved to `Await` on the argument that a context there could only
