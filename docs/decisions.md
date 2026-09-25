@@ -1148,19 +1148,31 @@ rather than of either lock. Re-measured with the workers started once and loopin
 ones come out at async 351 ns against sync 35 on reads, 177 against 130 on
 writes.
 
-**Even so, do not read the contended direction as settled, because a second
-measurement disagrees with it.** A consumer benchmarking on a different machine
-reports the same magnitude with the signs reversed — sync roughly 11x *slower*
-under contention, at 315 ns against async's 29. Same ratio, opposite conclusion,
-two machines. Under contention an atomic counter and a mutex trade places
-depending on core count, cache topology and how much real parallelism the
-scheduler finds, and none of that transfers between hosts.
+**A second measurement, on another machine, agrees — and the first version of
+this entry said it did not.** That was wrong in a way worth recording. A consumer
+benchmarking the same contended read reported 28.9 ns for `sync` and 326.8 ns for
+`async`, and it was read here as the figures reversed: sync slow, async fast,
+"same ratio, opposite sign, two machines", followed by a paragraph asserting that
+under contention an atomic counter and a mutex trade places on core count and
+topology and that neither figure transfers.
 
-**So the portable number is the uncontended one, and it is the one that decides
-a decision.** It reproduces across the two machines — 7.3x here against 8.2x
-there — because uncontended arithmetic does not depend on the host. A consumer
-whose registry serves 19 reads a minute pays about a microsecond a minute for the
-gap, which is why they kept the type despite it: the cost that is not negligible
+**They do not disagree. They measured the same thing twice and both say `async`
+is about 10x slower under contention** — 351 ns against 35 here, 326.8 against
+28.9 there. The conclusion this entry had drawn, that the contended direction is
+unresolvable, was an artefact of transposing two numbers in a message and not
+checking the direction before writing a paragraph about it.
+
+That is the same failure this record keeps finding in one form or another — a
+claim about a number, written from reading rather than from re-deriving — and it
+is worse here than most, because the sentence it produced tells the next reader
+that a question with a measured answer is an open one. **A portable question
+answered twice the same way is settled, and a summary of someone else's
+benchmark is a claim to be checked, not a conclusion to be built on.**
+
+**Both numbers are portable, and the uncontended one is the one that decides a
+decision.** It reproduces across the two machines — 7.3x here against 8.2x there.
+A consumer whose registry serves 19 reads a minute pays about a microsecond a
+minute for the gap, which is why they kept the type despite it: the cost that is not negligible
 is the complexity, and that is paid once and written down. The cancellability is
 what is being bought, and it costs ~7x on the fast path.
 
