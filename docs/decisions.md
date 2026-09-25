@@ -1071,13 +1071,44 @@ is empty. Twenty-five abandoned calls, zero left behind.
 
 ## ownership is kept deliberately, with no call site to point at (decided)
 
-`ownership` is 4,559 lines, the largest package here by a wide margin, and as
-of this entry it has **zero sites across both projects consuming velocity**:
-Periapsis looked for one and did not find it, and reported that the pawn
-lifecycle and the image manager are both plain shared state with channels. The
-package was raised as a question — whether it is carrying weight it has not
-earned — and the answer is that it is kept on purpose, for two reasons that
-stand without a current call site.
+`ownership` is 4,559 lines, the largest package here by a wide margin. It was
+recorded as having **zero sites across both consuming projects**, and that was
+wrong — in the direction that understates it. Checked against the trees rather
+than the reports that prompted the entry:
+
+- **Periapsis, `internal/image/pull.go`, ten sites.** A layer-pull race where
+  each side's result is an `ownership.Owner` whose `Drop` removes that side's
+  temp dir and blob, carried through `failsafeown.GetWithExecution` so that every
+  owner the policy chain did not hand back is released — **including one that
+  arrives after the winner was chosen**, on the goroutine that produced it. That
+  is the `failsafeown` use case this record describes, in production, with the
+  late-loser case the hand-written code had to remember at every call site.
+- **breeze, `daemon_lifecycle.go`, two sites.** `ownership.NewScope` for a
+  four-branch unwind in `tryBindDaemon`, where the flock-then-close order becomes
+  a property of acquisition rather than of each error path.
+
+What is actually unadopted is narrower and more specific: **the borrow
+machinery.** Periapsis wrote a full swap of a registry to
+`ownership.Owner[pawnTable]` — `Seal`, `Drained`, the absorb/propagate split,
+the sealed table wired to real sealed behaviour — and reverted it, because a
+registry admits by queuing and `Mutate` refuses. So the record's claim was
+right about the *borrows* and wrong about the *package*, and the two had been
+run together.
+
+**The strongest evidence that this record is load-bearing is that the consumer
+quoted it to make the decision.** `pawnregistry.go` carries a written
+justification for using `async.RWMutex` instead, and it argues from the
+no-wait invariant and from the absence of channels, selects and context waits in
+this package — the argument above, applied correctly by someone who had read
+it. A design record that a consumer can cite in a code comment is doing its
+job in a way no test can check.
+
+Which leaves the earlier framing wrong in its conclusion as well as its facts.
+The package was kept on the strength of a judgement and a differentiator, with no
+call site to point at. It has two call sites, in the two shapes it was designed
+for, and one documented negative from a consumer that looked hard and wrote down
+why. That is a better position than the one this entry originally recorded, and
+it was available the whole time.
 
 **It encodes a discipline whose failure mode is forgetting.** A team using
 `x/sync` plus good habits gets the primitives and the intention. What it does
