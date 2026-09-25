@@ -9,24 +9,28 @@ vet:
     staticcheck ./...
 
 # Whitespace style, through golangci-lint's bundled wsl_v5. See .golangci.yml:
-# it runs this one linter and nothing else, because the rest of velocity's
+# it runs that one linter and nothing else, because the rest of velocity's
 # analysis is run directly, each pinned, and adopting a second copy of it is
 # duplication with two places to configure the same rule.
 #
-# Covers every module, since ./... in the root does not reach the submodules.
+# golangci-lint must be on PATH; it is not a go tool, so `go -C` cannot reach
+# it and each module is run from a subshell. `go -C ./...` in the root would
+# not work either — it is a separate module.
+#
+#   go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
 wsl:
     golangci-lint run ./...
-    go -C failsafeown run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest run ./...
-    go -C analysis run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest run ./...
-    go -C benchmarks run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest run ./...
+    (cd failsafeown && golangci-lint run ./...)
+    (cd analysis && golangci-lint run ./...)
+    (cd benchmarks && golangci-lint run ./...)
 
 # Apply the rules rather than report them. Mechanical, and reviewed as its own
 # commit.
 wsl-fix:
     golangci-lint run --fix ./...
-    go -C failsafeown run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest run --fix ./...
-    go -C analysis run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest run --fix ./...
-    go -C benchmarks run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest run --fix ./...
+    (cd failsafeown && golangci-lint run --fix ./...)
+    (cd analysis && golangci-lint run --fix ./...)
+    (cd benchmarks && golangci-lint run --fix ./...)
 
 # Run velocity's own analyzers (lostrelease) as a vet tool over every module.
 lint:

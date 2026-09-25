@@ -52,15 +52,23 @@ jobs:
           version: latest
           install-go: false
 
-      # Whitespace style, via golangci-lint's bundled wsl_v5. It runs that
-      # one linter and nothing else; see .golangci.yml for why. Every module,
-      # since the root's ./... does not reach the submodules.
+      # Whitespace style, via golangci-lint's bundled wsl_v5, with its default
+      # set. See .golangci.yml for what is on and why. Installed here rather
+      # than through the action because the same binary has to run over the
+      # submodules, which the action does not reach: they are separate modules,
+      # ./... from the root does not include them, and `go -C` cannot invoke a
+      # non-go binary, so each is run from a subshell.
+      - name: install golangci-lint
+        run: |
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
       - name: wsl
         run: |
           golangci-lint run ./...
-          go -C failsafeown run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest run ./...
-          go -C analysis run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest run ./...
-          go -C benchmarks run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest run ./...
+          (cd failsafeown && golangci-lint run ./...)
+          (cd analysis && golangci-lint run ./...)
+          (cd benchmarks && golangci-lint run ./...)
 
       # velocity's own analyzer, over both modules that use the library.
       - name: lostrelease
