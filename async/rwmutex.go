@@ -195,6 +195,8 @@ func (m *RWMutex) unlockRead() {
 	m.mu.Lock()
 
 	m.readers--
+	checkReadRelease(m.readers)
+
 	if m.readers == 0 {
 		m.wake()
 	}
@@ -203,6 +205,7 @@ func (m *RWMutex) unlockRead() {
 
 func (m *RWMutex) unlockWrite() {
 	m.mu.Lock()
+	checkWriteRelease(m.held)
 	m.held = false
 	m.wake()
 	m.mu.Unlock()

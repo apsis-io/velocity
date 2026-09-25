@@ -1718,3 +1718,50 @@ The directive stays in the three files, because the standalone checker in the
 justfile does honour it, and the two checkers genuinely disagree. The config now
 names `ownership/async_test.go` alongside the other two, and says which one is
 doing the work.
+
+## The unlock paths have no floor, and a double release breaks exclusion silently (implemented)
+
+Proposed by the author as a way to spend the `-tags=velocitydebug` split, after
+a consumer found a live dependency on the guard a proposed optimisation would
+have removed.
+
+`Permit.Release` is guarded by a `sync.Once`, so a second call is a no-op. That
+absorbs the ordinary double release — a `defer` beside an explicit call, which is
+the documented pattern. A consumer asked for the `Once` to become a plain `bool`
+to halve the permit from 48 to 24 bytes, and **the proposal was withdrawn on
+their evidence**: they have a test helper that returns a bare `permit.Release()`
+and three call sites that release both explicitly and through a defer, which is
+safe only because of the guard.
+
+What that exposed is the part worth keeping. `unlockRead` is `readers--` with no
+floor:
+
+	m.readers--
+	if m.readers == 0 { m.wake() }
+
+A double release drives the count **negative**, which makes `readers == 0`
+unreachable. `wake` never fires, so waiting readers never re-read the state, and
+a writer is admitted while readers still hold the lock. **That is a silent break
+of the exclusion this type exists to provide** — not a leaked count — and it
+would appear in whatever runs next, with the release that caused it several calls
+away. The copy route is closed independently: `q := *p` on a `*Permit` is a
+`copylocks` vet error, because the permit contains a `sync.Once`.
+
+**The `Once` absorbs; it does not detect.** So swapping it for a `bool` in
+release builds would not add a diagnostic, it would convert silent absorption into
+silent corruption — and debug would pass exactly where release breaks, which is
+backwards for a net. That is the argument against the build split as first
+proposed, and it is why the tag is spent on a floor assertion instead.
+
+`unlockRead` and `unlockWrite` now call `checkReadRelease` and
+`checkWriteRelease`, which panic under `-tags=velocitydebug` and inline away
+otherwise, following `ownership`'s existing `leak_debug.go` / `leak_nodebug.go`
+pair. A legitimate release trips neither, which is asserted so the net is not
+just noise. The test reaches the counters directly rather than through
+`Release`, because `Release` is precisely what the `Once` makes un-trippable —
+that is the division of labour between the two, and the test has to honour it.
+
+**The size change is not taken.** 48 to 24 bytes and about 5 ns of a 26 ns
+allocation is real and is worth nothing at the one measured workload: a registry
+taking 19 reads a minute pays about a microsecond a minute. Removing the guard
+from that path would trade a load-bearing safety property for a rounding error.
