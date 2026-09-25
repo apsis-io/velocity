@@ -37,6 +37,7 @@ func BenchmarkRWMutexParallel(b *testing.B) {
 					}
 				})
 			}
+
 			wg.Wait()
 		})
 
@@ -52,6 +53,7 @@ func BenchmarkRWMutexParallel(b *testing.B) {
 					}
 				})
 			}
+
 			wg.Wait()
 		})
 	})
@@ -69,6 +71,7 @@ func BenchmarkRWMutexParallel(b *testing.B) {
 					}
 				})
 			}
+
 			wg.Wait()
 		})
 
@@ -84,6 +87,7 @@ func BenchmarkRWMutexParallel(b *testing.B) {
 					}
 				})
 			}
+
 			wg.Wait()
 		})
 	})
