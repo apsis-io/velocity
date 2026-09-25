@@ -92,6 +92,14 @@ func (s *Scope) OwnCloser(closer io.Closer) error {
 // cancellable supplies its own context here:
 //
 //	scope.OnRelease(func() error { return conn.Shutdown(ctx) })
+//
+// **This is the one call in the package whose error should not be discarded.**
+// It fails when the scope is already closed or disarmed, and then the resource
+// is NOT enrolled, so the scope's Close will not release it — the caller owns
+// that resource from the moment it exists. The failure looks impossible on a
+// scope nobody has closed early, which is exactly what makes it easy to ignore:
+// a consumer migrating a hand-rolled unwind wrote `_ =` here three times and one
+// of them was a lock file descriptor nobody would release again.
 func (s *Scope) OnRelease(release func() error) error {
 	if release == nil {
 		return &ReleasedError{Operation: OpOwn}

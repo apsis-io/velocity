@@ -269,3 +269,34 @@ func ExampleScope() {
 	fmt.Println(build())
 	// Output: dial sig
 }
+
+// A rejected enrolment means the resource is not in the scope, so Close will
+// not release it. That is the consequence a caller has to act on, and it is
+// what makes discarding this error a leak rather than a lost diagnostic — so it
+// is pinned here rather than left to the error's wording.
+func TestRejectedEnrolmentLeavesTheResourceToTheCaller(t *testing.T) {
+	scope := ownership.NewScope()
+	if err := scope.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	released := false
+	release := func() error {
+		released = true
+		return nil
+	}
+
+	if err := scope.OnRelease(release); !errors.Is(err, ownership.ErrScopeClosed) {
+		t.Fatalf("OnRelease after Close = %v, want ErrScopeClosed", err)
+	}
+
+	// A second Close must not run it either: the resource was never enrolled,
+	// so nothing in the scope is waiting for it.
+	if err := scope.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if released {
+		t.Fatal("a rejected enrolment was still released by Close; the caller and the scope now both think they own it")
+	}
+}

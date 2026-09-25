@@ -14,8 +14,19 @@ var (
 	ErrProjection      = errors.New("invalid ownership projection")
 	ErrDuplicateOption = errors.New("duplicate ownership option")
 	ErrNilOption       = errors.New("nil ownership option")
-	ErrScopeClosed     = errors.New("ownership scope closed")
-	ErrSealed          = errors.New("ownership sealed")
+	// ErrScopeClosed is returned when a resource is offered to a Scope that is
+	// already closed or disarmed. **Nothing is enrolled, so the scope's Close
+	// will not release it** — the resource is the caller's from the moment it
+	// exists, and discarding this error leaks it.
+	//
+	// It is stated here rather than only in Scope's docs because this is the
+	// one error in the package where ignoring it is a resource leak rather than
+	// a lost diagnostic. A consumer migrating a hand-rolled unwind onto Scope
+	// wrote `_ = scope.OnRelease(...)` three times, on the reasoning that a
+	// fresh scope cannot fail — and one of those three is a lock file
+	// descriptor whose release nobody would perform again.
+	ErrScopeClosed = errors.New("ownership scope closed; the resource was NOT enrolled and Close will not release it")
+	ErrSealed      = errors.New("ownership sealed")
 )
 
 type Operation string

@@ -1949,3 +1949,46 @@ one nobody writes a test for because the process is on its way out.
 Two tests pin both, and the queued one is deliberately written so the cell goes
 terminal before the borrow is dropped, which is the ordering that a
 contention-shaped test would never produce by accident.
+
+## The one error in ownership whose loss is a resource leak, and where it has to say so (implemented)
+
+A consumer migrating a hand-rolled unwind onto `ownership.Scope` found three
+`Scope.OnRelease` / `OwnCloser` calls with the error discarded, and worked out
+that all three are genuine leaks rather than noise: a rejected enrolment means
+the resource is **not in the scope**, so the deferred `Close` will not release
+it. One of the three was a lock file descriptor — the exact crash-orphan case
+the `O_CLOEXEC` comment above that open warns about. They are now checked.
+
+Two things about how this happened, and the second is the one that mattered.
+
+The consumer's reasoning was "it cannot fail on a fresh scope", which is true and
+is why the error was easy to discard. **And this record already said it** —
+"`Scope.OwnCloser` keeps its error return despite the `_ =` it forces: a resource
+enrolled after `Close` is silently leaked otherwise, which is the exact bug the
+type exists to prevent." A consumer read the package, used it, and still wrote
+three unchecked calls, because the consequence was documented **where the
+function is declared** and not **where the decision is made**. A documented
+return value is not an actionable one. The sentinel's message now carries the
+consequence — "the resource was NOT enrolled and Close will not release it" — and
+`OnRelease`'s doc says plainly that this is the one call in the package whose
+error should not be discarded, with the reason being how easily the failure looks
+impossible.
+
+`TestRejectedEnrolmentLeavesTheResourceToTheCaller` pins the invariant rather than
+the wording: a rejected enrolment is not released by a later `Close`, so the
+caller and the scope do not both believe they own the resource. That is the
+property; the message is only how someone learns it.
+
+Worth recording next to it: had `ownership.Scope` been excluded the way
+`(*os.File).Close` nearly was in the same errcheck exercise, a real leak would
+have been filed as noise. The linter found it **during** the migration whose
+premise was that the linter needed per-site judgment — which is the strongest
+argument yet for having it.
+
+**A general fact about the tool, learned in the same exercise and worth
+carrying:** errcheck's `exclude-functions` matches the **concrete** type. Every
+socket and listener close in that codebase is interface-typed, so
+`net.Conn.Close`, `net.Listener.Close` and `io.Closer` match **zero** sites —
+roughly twenty of them unreachable by any config rule. A plan that assumed the
+config would cover the Close family would have found that out only after
+writing the list.
