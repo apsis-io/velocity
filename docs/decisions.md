@@ -2528,3 +2528,43 @@ job already says it does not take numbers from CI machines because they are too
 noisy. A 15% band on a GitHub-hosted runner is a coin flip. The check stays
 opt-in, and the next question for that job is whether a scheduled, quieter
 window is worth more than a wider band on every push.
+
+## The composition helpers stay, and say out loud that nothing calls them (decided)
+
+`traits` exports three composition functions — `ComposeDrops`, `ComposeClones`
+and `Drop.Clone` — and the census found **zero non-test callers** in this
+repository, in periapsis, in breeze, or in the evaluation harness. The only
+`Clone(` call outside tests is `ownership`'s own `Shared.Clone`, which is a
+different function that happens to share a name. Meanwhile the root `doc.go`
+tells every reader of the package that Drop and Clone are *"composable as
+`Drop(...).Clone(...)`"* — teaching a step no example shows and nothing uses.
+
+That is the same shape `traits.Future` was in before `Submit`: an abstraction
+sitting in a shared package without a producer to justify it. It was raised,
+censused, and put to the author rather than acted on, because the standard it
+turns on — *"a named use case with a visible second instance, rather than a
+speculation"* — is theirs, from the `failsafeown` entry.
+
+**Decided: all three stay, and each doc comment now carries the evidence bar.**
+Two sections per function — who it is for, and what observation would retire it
+— so the surface stops implying users it does not have. The alternative on the
+table was to unexport `ComposeClones` and `Drop.Clone`, whose value does
+collapse into an eight-line closure at whatever single call site would ever
+exist; keeping them is defensible only because the docs now say plainly that
+nothing calls them, and a reader who has been misled by an unexercised surface
+once will read the next one more carefully.
+
+The `Drop.Clone` comment carries the sharpest version of the admission, because
+it is the one where the honest answer is uncomfortable: the nearest thing in
+this repository to its use case is `ownership.Map`, which chains a `Drop` so
+the writer flushes before the file closes — and takes a single `Clone` and a
+single `Drop`, composing neither. The likely first outcome of somebody reaching
+for it is finding they wanted `WithDrop`, which is worth saying in the function
+that is meant to prevent that.
+
+**What this does not settle.** The three functions drag `validate`,
+`TraitError` and `ErrNilTrait` with them, so all of that stays exported and
+unexercised for the same reason. `traits` is currently two function types with
+real users and five exported symbols with none, and the next reader deserves to
+know which is which — which is what a paragraph in the package doc would say,
+and has not yet.
