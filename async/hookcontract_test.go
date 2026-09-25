@@ -2,7 +2,10 @@ package async_test
 
 import (
 	"context"
-	"reflect"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -10,84 +13,216 @@ import (
 	"github.com/apsis-io/velocity/async"
 )
 
-// The Hooks doc is a promise about which submissions are reported. Nothing tied
-// that promise to the code: a fourth submission path could be added, or the
-// reporting for one of the existing three could change, and the only symptom
-// would be a metrics counter quietly disagreeing with the documentation. That
-// is the same failure the lostrelease drift test exists to catch, aimed at
-// prose instead of a table.
+// The Hooks doc is a promise about what gets reported, and nothing tied that
+// promise to the code: a new call site could be added, or the reporting for an
+// existing one changed, and the only symptom would be a caller's histogram
+// quietly disagreeing with the documentation. That is the failure the
+// lostrelease drift test exists to catch, aimed at behaviour rather than at a
+// table of names.
 //
-// The guard keys on shape rather than names. A submission path is a method
-// that takes a func(context.Context) error, so a rename is caught and so is a
-// fourth path nobody considered — neither of which a name list would notice.
+// The guard below counts CALL SITES, discovered by parsing the package, and it
+// started life counting METHODS through reflection. That was wrong twice over,
+// and both errors are worth recording because the second is not obvious.
 //
-// It has one blind spot, found by being shown the same shape of guard in
-// another package: reflect.Methods returns only EXPORTED methods, so an
-// unexported submission path — an internal fast path that took the same shape —
-// would be invisible here, and would then silently never be reported. It does
-// not bite today because all three submission paths are exported, and it is
-// recorded rather than left implied. The fix, if it ever matters, is to stop
-// reflecting and parse the package with go/ast, which sees unexported methods;
-// the price is a test that has to resolve the type by hand, which is why it is
-// not done for a case that does not exist yet.
+// First: reflect.Methods returns only exported methods, so a method-based guard
+// is blind to every unexported call site — and two of the four on the ErrGroup
+// path are unexported, in skipped and exec.
+//
+// Second, and the one that mattered: a method is not an event. TryGo contains
+// no call to the hook at all. It reaches the hook through Go on one path,
+// through skipped on a second, and through start to exec on a third, so a
+// table of submission paths claiming "TryGo reports" was a claim about a
+// delegation reached three ways rather than a fact about TryGo. The population
+// the contract actually describes is the places the hook fires, and those are
+// countable by parsing. This was found by being shown the same shape of guard
+// in another package, which is a cheaper way to learn a guard is keyed on the
+// wrong noun than to reason about it for another week.
+//
+// The count table at the bottom is the behavioural half and pins the ErrGroup
+// group only; the task half is pinned by the tests in gather.go and
+// collection.go, which already assert per-task reporting.
 
-// specifiedSubmissionPaths is every submission path whose hook behaviour the
-// table in TestErrGroupHookCountsMatchTheContract spells out. A path missing
-// here fails the test below.
-var specifiedSubmissionPaths = map[string]bool{
-	"Go":        true,
-	"GoContext": true,
-	"TryGo":     true,
+// expectedFiringSites is every function in this package that invokes
+// Hooks.OnTaskComplete. A new one fails the guard below, and so does an entry
+// here that no longer invokes it — a stale row is not a harmless leftover, it
+// is a false claim of coverage in the file whose whole job is to be the
+// coverage.
+//
+// The set is the package, not one operation, because Hooks is a Runner-level
+// hook and the contract in hooks.go covers tasks as well as submissions. Two
+// groups, and the behavioural count table below pins only the second:
+//
+//	ErrGroup's four  Go and GoContext report a submission that ran or was
+//	                 discarded; skipped and exec are unexported and report the
+//	                 two halves of that — one that never ran, one that did.
+//	tasks            Gather and Map report each task, race reports each
+//	                 completion, and cancelRemaining reports the ones Gather
+//	                 never claimed.
+//
+// ForEachFuncs, ForEach and FirstSuccess are deliberately absent: they delegate
+// to Gather, Map and race and introduce no new event, which is the distinction a
+// method table could not draw. TryGo is absent for the same reason and a
+// sharper one — it contains no call at all, reaching the hook through Go on one
+// path, skipped on a second and start to exec on a third. A table of submission
+// paths would have had to claim "TryGo reports" about a method that never calls
+// it, which is a claim about a delegation reached three ways, not about TryGo.
+var expectedFiringSites = map[string]bool{
+	// ErrGroup's two, both unexported. A submission that ran is reported from
+	// exec, in the function's own goroutine; one that never ran is reported
+	// from skipped, on the caller's.
+	"skipped": true,
+	"exec":    true,
+	// The task half. Gather and Map report each task, race reports each
+	// completion, and cancelRemaining reports the items Gather never claimed.
+	"Gather":          true,
+	"Map":             true,
+	"race":            true,
+	"cancelRemaining": true,
 }
 
-// isSubmissionPath reports whether a method hands a function to the group: its
-// last parameter is a func(context.Context) error, and it returns nothing or a
-// bool. The function is the LAST parameter rather than the only one, because
-// GoContext takes a context as well — a shape rule that missed GoContext on its
-// first version, which is the kind of thing a contract test should find rather
-// than a reason to write the rule loosely.
-func isSubmissionPath(m reflect.Method) bool {
-	t := m.Type
-	if t.NumIn() < 2 { // receiver plus at least the function
-		return false
+// Deliberately absent, and the reason the population is sites and not methods:
+//
+//	Go, GoContext, TryGo   none of them invokes the hook. Go and GoContext each
+//	                       reach exec through start, and TryGo reaches Go on
+//	                       one path, skipped on a second and start on a third.
+//	                       Three hops for the common route.
+//	ForEachFuncs, ForEach  delegate to Gather and Map.
+//	Race, FirstSuccess     delegate to race.
+//	start                  delegates to exec.
+//
+// Counting sites is also what makes the nil-check from which of these had to be
+// excluded: Go and GoContext each test `hooks.OnTaskComplete != nil` before
+// queueing a permit, and reading a mention as a call would have put two
+// functions in this table that never fire it. A guard is supposed to be the
+// thing that does not make that mistake, and the first version of this one
+// nearly did.
+// firingSites returns the functions in this package that invoke the hook, by
+// parsing the source rather than reflecting over the type.
+//
+// It parses because the population is call SITES, not methods, and two of the
+// four are in unexported functions — reflect.Methods sees only exported ones,
+// so a method-based guard cannot see them at all. Nor could it tell a method
+// that invokes the hook from one that delegates to a function that does: TryGo
+// contains no call, and reaches the hook through Go on one path, through
+// skipped on another, and through start to exec on the third. A table of
+// submission paths therefore said "TryGo reports" about a method that never
+// calls it, which is not a fact about TryGo but a claim about a delegation
+// reached three ways. Counting sites is the population the contract in
+// hooks.go actually describes.
+//
+// A new submission path that delegates to an existing site is deliberately NOT
+// a new entry: it introduces no new event, and the contract is about events. A
+// new one that fires the hook itself has to say so.
+func firingSites(t *testing.T) map[string]int {
+	t.Helper()
+
+	// The test runs with the package directory as its working directory, so
+	// this is the package under test and not the external test package.
+	pkgs, err := parser.ParseDir(token.NewFileSet(), ".", nil, 0)
+	if err != nil {
+		t.Fatal(err)
 	}
 
-	if t.In(t.NumIn()-1).String() != "func(context.Context) error" {
-		return false
+	sites := map[string]int{}
+	for _, pkg := range pkgs {
+		for _, file := range pkg.Files {
+			if strings.HasSuffix(file.Name.Name, "_test.go") {
+				continue
+			}
+
+			for _, decl := range file.Decls {
+				fn, ok := decl.(*ast.FuncDecl)
+				if !ok || fn.Body == nil {
+					continue
+				}
+
+				if callsHook(fn.Body) {
+					sites[fn.Name.Name]++
+				}
+			}
+		}
 	}
 
-	return t.NumOut() <= 1
+	return sites
 }
 
-// TestErrGroupSubmissionPathsAreSpecified fails when the API grows a submission
-// path the hook contract does not describe, and when the contract names one
-// that is gone. Both directions matter: the first is how a new path arrives
-// unannounced, the second is how a stale entry hides a rename.
-func TestErrGroupSubmissionPathsAreSpecified(t *testing.T) {
-	// The pointer, not the value: every method on ErrGroup has a pointer
-	// receiver, so the value type's method set is empty and the guard
-	// would pass vacuously.
-	typ := reflect.TypeFor[*async.ErrGroup]()
-	seen := map[string]bool{}
+// callsHook reports whether a function body invokes the hook, directly or
+// through a local alias. exec binds `hook := g.run.hooks.OnTaskComplete` and
+// then calls hook, so a selector-only match would miss half the population.
+func callsHook(body *ast.BlockStmt) bool {
+	aliased := map[string]bool{}
 
-	for m := range typ.Methods() {
-		if !isSubmissionPath(m) {
-			continue
+	// Two passes, because a binding can follow the call it enables. Binding a
+	// selector-valued name is the only way the hook is called indirectly here,
+	// and every such binding is in the same function.
+	ast.Inspect(body, func(n ast.Node) bool {
+		assign, ok := n.(*ast.AssignStmt)
+		if !ok {
+			return true
 		}
 
-		seen[m.Name] = true
-		if !specifiedSubmissionPaths[m.Name] {
-			t.Errorf("ErrGroup.%s submits a function but the hook contract does not specify its reporting.\n"+
-				"\tAdd it to specifiedSubmissionPaths and a case to TestErrGroupHookCountsMatchTheContract, "+
-				"or say in the Hooks doc why it is not a submission path.", m.Name)
+		for i, rhs := range assign.Rhs {
+			sel, ok := rhs.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "OnTaskComplete" || i >= len(assign.Lhs) {
+				continue
+			}
+
+			if name, ok := assign.Lhs[i].(*ast.Ident); ok {
+				aliased[name.Name] = true
+			}
+		}
+
+		return true
+	})
+
+	calls := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+
+		switch fun := call.Fun.(type) {
+		case *ast.SelectorExpr:
+			if fun.Sel.Name == "OnTaskComplete" {
+				calls = true
+			}
+		case *ast.Ident:
+			if aliased[fun.Name] {
+				calls = true
+			}
+		}
+
+		return true
+	})
+
+	return calls
+}
+
+// TestErrGroupFiringSitesAreSpecified fails when the hook gains a call site
+// that this table does not describe, and when a site here has gone. Both
+// directions: the first is how a new event arrives unannounced, the second is
+// how a stale row hides a rename and keeps reading as coverage.
+func TestErrGroupFiringSitesAreSpecified(t *testing.T) {
+	sites := firingSites(t)
+
+	for name := range sites {
+		if !expectedFiringSites[name] {
+			t.Errorf("%s invokes Hooks.OnTaskComplete but is not in expectedFiringSites.\n"+
+				"\tAdd it and a case to TestErrGroupHookCountsMatchTheContract, or say in the\n"+
+				"\tHooks doc why invoking the hook there is not a new event.", name)
 		}
 	}
 
-	for name := range specifiedSubmissionPaths {
-		if !seen[name] {
-			t.Errorf("the hook contract specifies ErrGroup.%s, which no longer takes a function.\n"+
-				"\tRemove it, or the contract describes a method that is not there.", name)
+	for name := range expectedFiringSites {
+		if sites[name] == 0 {
+			t.Errorf("expectedFiringSites lists %s, which no longer invokes the hook.\n"+
+				"\tRemove it, or the contract describes an event that no longer happens.", name)
 		}
+	}
+
+	if len(sites) == 0 {
+		t.Fatal("no firing sites found; the guard would pass vacuously")
 	}
 }
 
