@@ -1076,7 +1076,12 @@ recorded as having **zero sites across both consuming projects**, and that was
 wrong — in the direction that understates it. Checked against the trees rather
 than the reports that prompted the entry:
 
-- **Periapsis, `internal/image/pull.go`, ten sites.** A layer-pull race where
+- **Periapsis, `internal/image/pull.go`, six call sites** — counted as
+  non-test lines that are code rather than prose, with a builder chain counted
+  once. (This was first recorded as **ten**, which was a count of `grep`
+  matches including comment lines and the `cmd/perigeos` prose. The count was
+  never the point; asserting a number measured the wrong way was.)
+  A layer-pull race where
   each side's result is an `ownership.Owner` whose `Drop` removes that side's
   temp dir and blob, carried through `failsafeown.GetWithExecution` so that every
   owner the policy chain did not hand back is released — **including one that
@@ -1874,9 +1879,18 @@ panicked, and the shared type says "panic: ...". Losing the package-specific
 wording is the price of one type, and it is the right trade — a panic carrying
 its own stack does not need the package name to be diagnosable.
 
-**Not changed, and still open:** `Gather(ctx)` with zero tasks returns
-`ErrNoTasks`. That made sense when an empty `Plan` was a configuration error; for
-a v1 API, erroring on an empty fan-out is unfriendly, and `Gather` over nothing
-returning an empty slice and a nil error is what a caller expects. It is the same
-error whose name was stale, so the decision belongs beside the rename, and it was
-not taken here.
+**And the behaviour question that sat beside it, now answered separately.**
+`Gather(ctx)` over zero tasks used to return `ErrNoTasks`, which was right when an
+empty `Plan` was a configuration error and is unfriendly for a v1 API: a fan-out
+over nothing did nothing, and that is not a failure.
+
+A fan-out that *collects* results now returns an empty slice and a nil error —
+`Gather`, `GatherFuncs`, `Map`, `ForEach` and `ForEachFuncs`. **`Race` and
+`FirstSuccess` still refuse an empty set**, and the distinction is not
+conservatism: a race with no contenders has no winner, so the zero `Outcome` would
+be claiming that the zero value won. `Race` therefore keeps the check, with the
+reason written where the check is.
+
+It was taken as its own change rather than folded into the rename above, because a
+behaviour change inside a rename commit is the one a reviewer has to notice, and
+this one is not obvious from the diff.

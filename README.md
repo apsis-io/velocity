@@ -482,7 +482,8 @@ sharpest limit stated by someone who had read the reasoning rather than skimmed
 it.
 
 **Periapsis**, a virtual-kubelet fork, ported seven call sites to velocity and
-has tracked each release since. It exercises `ownership`, `async` (`Runner.Map`,
+has tracked each release since, and uses `ownership.Owner` to carry a `Drop`
+through a `failsafeown` chain. It exercises `ownership`, `async` (`Runner.Map`,
 `ErrGroup`, `Mutex`, and now `RWMutex` — deployed to its cluster and measured
 there), `dedupe`, and `failsafeown`, and dropped `conc`, `x/sync/singleflight`
 and `x/sync/errgroup` on the way. It is on `v0.5.1`. What is *running* on its

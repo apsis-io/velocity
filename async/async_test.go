@@ -70,8 +70,23 @@ func TestNamedAndFuncsFormsMatchTasks(t *testing.T) {
 		t.Fatalf("RaceFuncs = (%+v, %v)", out, err)
 	}
 
-	if _, err := run.GatherFuncs[int](context.Background()); !errors.Is(err, async.ErrNoTasks) {
-		t.Fatalf("empty GatherFuncs = %v", err)
+	// A fan-out over nothing did nothing, which is not an error. Only Race
+	// and FirstSuccess still refuse an empty set, because they have to name a
+	// winner and there is none.
+	if out, err := run.GatherFuncs[int](context.Background()); err != nil || len(out) != 0 {
+		t.Fatalf("empty GatherFuncs = (%v, %v), want an empty slice and no error", out, err)
+	}
+
+	if _, err := run.RaceFuncs[int](context.Background()); !errors.Is(err, async.ErrNoTasks) {
+		t.Fatalf("empty RaceFuncs = %v, want ErrNoTasks: a race with no contenders has no winner", err)
+	}
+
+	if err := run.ForEachFuncs(context.Background()); err != nil {
+		t.Fatalf("empty ForEachFuncs = %v, want no error", err)
+	}
+
+	if out, err := run.Map(context.Background(), []int(nil), func(_ context.Context, n int) (int, error) { return n, nil }); err != nil || len(out) != 0 {
+		t.Fatalf("empty Map = (%v, %v), want an empty slice and no error", out, err)
 	}
 
 	if _, err := run.GatherFuncs(context.Background(), one, nil); !errors.Is(err, async.ErrNilTask) {
@@ -100,7 +115,6 @@ func TestTaskValidation(t *testing.T) {
 		tasks []async.Task[int]
 		want  error
 	}{
-		{"empty", nil, async.ErrNoTasks},
 		{"nil task", []async.Task[int]{{}}, async.ErrNilTask},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

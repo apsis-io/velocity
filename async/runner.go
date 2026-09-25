@@ -120,13 +120,15 @@ func Must(r *Runner, err error) *Runner {
 // Limit reports the configured concurrency limit.
 func (r *Runner) Limit() Limit { return r.limit }
 
+// validTasks rejects a malformed task. It does NOT reject an empty set: a
+// fan-out over nothing is a fan-out that did nothing, and Gather, Map and
+// ForEach all return an empty result and a nil error for it. Race and
+// FirstSuccess are the exception, because a race with no contenders has no
+// winner — they check for themselves, and a zero Outcome with a nil error
+// would be a claim that the zero value won.
 func (r *Runner) validTasks(n int, run func(int) bool) error {
 	if r == nil {
 		return &TaskError{Index: -1, Cause: ErrNilReceiver}
-	}
-
-	if n == 0 {
-		return &TaskError{Index: -1, Cause: ErrNoTasks}
 	}
 
 	for i := range n {

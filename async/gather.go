@@ -172,6 +172,13 @@ func race[T any](ctx context.Context, r *Runner, tasks []Task[T], successOnly bo
 		return Outcome[T]{}, err
 	}
 
+	// A race with no contenders has no winner, and the zero Outcome says the
+	// zero value won. Unlike Gather, which returns empty and nil for an empty
+	// set, this has to say the task set was empty.
+	if len(tasks) == 0 {
+		return Outcome[T]{}, &TaskError{Index: -1, Cause: ErrNoTasks}
+	}
+
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
