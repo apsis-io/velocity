@@ -24,19 +24,3 @@ type ConfigError struct {
 
 func (e *ConfigError) Error() string   { return fmt.Sprintf("dedupe option %q: %v", e.Option, e.Cause) }
 func (e *ConfigError) Unwrap() []error { return []error{ErrInvalidConfig, e.Cause} }
-
-type PanicError struct {
-	Value any
-	Stack []byte
-}
-
-func (e *PanicError) Error() string {
-	return fmt.Sprintf("dedupe callback panic: %v\n\n%s", e.Value, e.Stack)
-}
-func (e *PanicError) Unwrap() error {
-	if err, ok := e.Value.(error); ok {
-		return err
-	}
-
-	return nil
-}

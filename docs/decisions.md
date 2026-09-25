@@ -2087,3 +2087,32 @@ Which is worth saying plainly, because this record was assembled by grepping
 names all day: **a count of the word is not a count of the thing**, and that
 error has a shape — it was the "ten sites" figure, and it is whatever a
 name-census produces.
+
+## The panic consolidation left a third copy behind (implemented)
+
+Consolidating `async.Panic` and `ownership.Panic` into `traits.Panic` was
+recorded as one concept with two names. It was **three**, and I removed two:
+`dedupe.PanicError` was still there, the same two fields with the same `Unwrap`,
+differing only in the message prefix.
+
+That is worse than not having started. A half-finished consolidation leaves two
+types *and* a migration someone might repeat, and the third copy is the one a
+reader of `dedupe` finds first. `dedupe`'s internal `call.panicErr` is now
+`*traits.Panic`, and the type is gone.
+
+**Not consolidated, and deliberately: the three `ConfigError` types.** Two of
+them are near-identical — `ownership.ConfigError{Option, Reason}` and
+`dedupe.ConfigError{Option, Cause}`, same shape, differing in a field name. The
+third, `traits.ConfigError{Trait, Index, Cause}`, is genuinely a different thing
+and describes a trait rather than an option.
+
+The two near-identical ones are left alone, and the reason is the part that
+`Panic` did not have to contend with: **each unwraps to its own package's
+sentinel**, so a caller writes `errors.Is(err, dedupe.ErrInvalidConfig)`. A
+shared type would have to carry the sentinel with it to keep that working, and
+then the field-name mismatch is the least of what has been given up. Two types
+that differ in a field name and answer to their own package are ordinary Go;
+three copies of one struct with nothing to distinguish them is the thing worth
+removing. The field names could be made consistent — `Reason` in both, or
+`Cause` in both — and that is a smaller change than it looks, but it is churn on
+an API nobody is asking for, so it is not taken here.

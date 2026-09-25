@@ -88,7 +88,7 @@ type call[V any] struct {
 	value     V
 	cell      *ownership.Shared[V] // owned groups only
 	err       error
-	panicErr  *PanicError
+	panicErr  *traits.Panic
 }
 
 // New constructs a duplicate-suppressing group. Work runs under a context
@@ -401,7 +401,7 @@ func (g *Group[K, V]) runBatch(keys []K, calls map[K]*call[V], fn func(context.C
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			for _, key := range keys {
-				calls[key].panicErr = &PanicError{Value: recovered, Stack: debug.Stack()}
+				calls[key].panicErr = &traits.Panic{Value: recovered, Stack: debug.Stack()}
 			}
 		}
 
@@ -434,7 +434,7 @@ func (g *Group[K, V]) run(key K, c *call[V], fn func(context.Context) (V, error)
 	start := time.Now()
 	normal := false
 
-	var panicErr *PanicError
+	var panicErr *traits.Panic
 	defer func() {
 		if !normal && panicErr == nil {
 			c.err = traits.ErrCallbackExit
@@ -461,9 +461,9 @@ func (g *Group[K, V]) run(key K, c *call[V], fn func(context.Context) (V, error)
 	normal = true
 }
 
-func capturePanic(target **PanicError) {
+func capturePanic(target **traits.Panic) {
 	if value := recover(); value != nil && *target == nil {
-		*target = &PanicError{Value: value, Stack: debug.Stack()}
+		*target = &traits.Panic{Value: value, Stack: debug.Stack()}
 	}
 }
 
