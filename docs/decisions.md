@@ -2045,3 +2045,22 @@ asking whether the *design* held. Bugs in what the code does are found by
 reading it. A bug in what it promises is found by asking what someone would
 reasonably believe, and this was reasonable: you submit work, you get a handle,
 and ending the value is yours to do when you are ready. It was not.
+
+## A usage census of velocity by name is unreliable, because a name collides (recorded)
+
+A consumer auditing the empty-fan-out change by grepping their own tree for
+velocity's API found that the `Gather` call sites in `internal/metrics` and
+`internal/reconcilemetrics` are **Prometheus's `registry.Gather`**, not this
+library's. The name collides with a very widely used one, so a census of "who
+uses `Gather`" returns hits that have nothing to do with velocity.
+
+This is worth recording because of how much of this record was assembled by
+grepping. "No consumer asserts `ErrNoTasks`" is a claim that needed
+qualification by import path, and the way it was checked would not have
+distinguished the two. The same hazard applies to `Result`, `Hooks`,
+`Outcome` and `Counters` — ordinary words that other libraries also export.
+
+**The practical form: census by import path, never by name.** `rg
+'apsis-io/velocity/\w+"'` finds the users; `rg '\bGather\('` finds the word.
+Today those are different sets, and the second one is not evidence about this
+library.
