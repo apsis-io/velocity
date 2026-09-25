@@ -42,6 +42,7 @@ func New[T any](value T, opts ...Option[T]) (*Owner[T], error) {
 	if len(opts) == 0 {
 		return Own(value), nil
 	}
+
 	cfg, err := buildConfig(opts)
 	if err != nil {
 		return nil, err
@@ -64,6 +65,7 @@ func (o *Owner[T]) Borrow() (*ReadBorrow[T], error) {
 	if o == nil || o.c == nil {
 		return nil, &ReleasedError{Operation: OpBorrow}
 	}
+
 	lease, err := o.c.acquireRead(&o.h, modeUnique)
 	if err != nil {
 		return nil, err
@@ -78,6 +80,7 @@ func (o *Owner[T]) BorrowMut() (*WriteBorrow[T], error) {
 	if o == nil || o.c == nil {
 		return nil, &ReleasedError{Operation: OpBorrowMut}
 	}
+
 	lease, err := o.c.acquireWrite(&o.h, modeUnique)
 	if err != nil {
 		return nil, err
@@ -129,18 +132,23 @@ func (o *Owner[T]) Snapshot() (T, error) {
 		var zero T
 		return zero, &ReleasedError{Operation: OpSnapshot}
 	}
+
 	o.c.mu.Lock()
 	if err := o.c.checkHandle(&o.h, OpSnapshot); err != nil {
 		o.c.mu.Unlock()
+
 		var zero T
 		return zero, err
 	}
+
 	clone := o.c.clone
 	o.c.mu.Unlock()
+
 	if clone == nil {
 		var zero T
 		return zero, &NoCloneError{Operation: OpSnapshot}
 	}
+
 	return o.View(clone)
 }
 
@@ -149,9 +157,11 @@ func (o *Owner[T]) Move() (*Owner[T], error) {
 	if o == nil || o.c == nil {
 		return nil, &ReleasedError{Operation: OpMove}
 	}
+
 	c := o.c
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
 	if err := c.checkHandle(&o.h, OpMove); err != nil {
 		return nil, err
 	}
@@ -161,7 +171,9 @@ func (o *Owner[T]) Move() (*Owner[T], error) {
 	if o.h.borrows != 0 || c.readers != 0 || c.writer {
 		return nil, c.conflictLocked(OpMove)
 	}
+
 	o.h.state = handleMoved
+
 	return &Owner[T]{c: c}, nil
 }
 
@@ -177,9 +189,11 @@ func (o *Owner[T]) Detach() (T, error) {
 		var zero T
 		return zero, &ReleasedError{Operation: OpDetach}
 	}
+
 	c := o.c
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
 	if err := c.checkHandle(&o.h, OpDetach); err != nil {
 		var zero T
 		return zero, err
@@ -188,11 +202,13 @@ func (o *Owner[T]) Detach() (T, error) {
 		var zero T
 		return zero, c.conflictLocked(OpDetach)
 	}
+
 	value := c.value
 	var zero T
 	c.value = zero
 	c.mode = modeReleased
 	o.h.state = handleMoved
+
 	return value, nil
 }
 
@@ -201,18 +217,22 @@ func (o *Owner[T]) IntoShared() (*Shared[T], error) {
 	if o == nil || o.c == nil {
 		return nil, &ReleasedError{Operation: OpIntoShared}
 	}
+
 	c := o.c
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
 	if err := c.checkHandle(&o.h, OpIntoShared); err != nil {
 		return nil, err
 	}
 	if c.mode != modeUnique || o.h.borrows != 0 || c.readers != 0 || c.writer {
 		return nil, c.conflictLocked(OpIntoShared)
 	}
+
 	o.h.state = handleMoved
 	c.mode = modeShared
 	c.shares = 1
+
 	return &Shared[T]{c: c}, nil
 }
 
@@ -221,6 +241,7 @@ func (o *Owner[T]) Release() error {
 	if o == nil || o.c == nil {
 		return nil
 	}
+
 	c := o.c
 	value, drop, first, err := c.beginOwnerRelease(&o.h)
 	if err != nil {
@@ -229,12 +250,15 @@ func (o *Owner[T]) Release() error {
 	if !first {
 		return nil
 	}
+
 	var dropErr error
 	if drop != nil {
 		dropErr = drop(value)
 	}
+
 	c.finishDrop(dropErr)
 	runtime.KeepAlive(o)
+
 	return dropErr
 }
 
@@ -244,17 +268,20 @@ func (o *Owner[T]) Close() error { return o.Release() }
 func (c *cell[T]) beginOwnerRelease(h *handle) (value T, drop func(T) error, first bool, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
 	if h.state == handleMoved || h.state == handleReleased || c.mode == modeReleased {
 		return value, nil, false, nil
 	}
 	if h.borrows != 0 || c.readers != 0 || c.writer {
 		return value, nil, false, c.conflictLocked(OpRelease)
 	}
+
 	h.state = handleReleased
 	value = c.value
 	var zero T
 	c.value = zero
 	c.mode = modeReleased
+
 	return value, c.drop, true, nil
 }
 
