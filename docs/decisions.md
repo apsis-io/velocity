@@ -2636,3 +2636,21 @@ harness gets the same treatment as the code it checks: mutation-tested, and its
 control values checked for collisions. `-1` meaning two different things in one
 file is the whole bug, and it is the kind that survives review because every
 individual line is correct.
+
+**Three checkers, one blind spot.** The duplicated `case` clause was invisible
+to `go vet`, to `staticcheck`, and to `wsl_v5` — all three ran, all three
+passed, and the branch was unreachable. Nothing in this repository's check
+recipe can see a dead `case` in a switch on a non-constant expression, so the
+only instrument that catches it is the one that is not automated: a reader
+noticing that two branches say the same thing. Worth recording as a tooling gap
+rather than as a lapse, because the next harness will hit it too and the
+response is to look, not to add a linter.
+
+**The sequence, named precisely, because the shape is reusable.** A harness was
+written, described to a peer as ready for review, and never executed — which is
+`go test` exiting zero having run nothing, wearing a review request. The
+distinction that matters is not "I should have run it" but that **a file
+offered for review carries an implicit claim that it has been run**, and that
+claim was false. The rule: nothing goes to a peer as reviewable until it has
+been run *and* a mutation of it has been seen to fail. A green first run is not
+evidence either — the three defects above would all have produced one.
