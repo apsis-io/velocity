@@ -2624,6 +2624,27 @@ the wrong number satisfies every other property in the file. Both mutations
 that break it were confirmed to fail the table: dropping the cleanup on a clone
 failure reds the count, and letting a failing drop continue reds the ordering.
 
+**The matrix is not a description of today's behaviour, it is the transition
+rule written down.** `owned == true` at the moment of failure is the whole
+predicate, and the three rows are its three cases: k=0 is never-owned, so the
+drop is unreachable in both directions; k=1 is owned, so the cleanup join
+fires; k=2 is a drop that already consumed the pipeline one step earlier. So
+the table's value is forward-looking — add a step type, or change when ownership
+transfers, and these sixteen cells are what turn a silent behaviour change into
+a red one. The count assertion is the half that catches the version which gets
+the errors right and the releases wrong, which is the version a review reads as
+correct. That is the shape to copy wherever a composition API grows a cleanup
+order.
+
+**Why the first harness survived review, named properly.** Every individual
+line in it was correct. The bug lived in the **relation** between two of them —
+the meaning of `-1` at construction against its meaning at the call — and that
+is precisely the gap between line-checkable review and behaviour. No reviewer
+reading top to bottom, and no checker in the recipe, is looking at relations.
+The only instrument that reads them is the red output of a harness that has
+actually been run, which is why "execute it before describing it" is the remedy
+rather than "review it more carefully".
+
 `Drop.Clone`'s doc sentence is corrected to say the join needs an intermediate
 that is **already owned**, which is not true when the first clone is the one
 that fails. The reviewer found that as a doc nit rather than a defect, and it
