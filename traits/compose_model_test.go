@@ -22,14 +22,14 @@ type node struct {
 // own value wherever it turns up.
 const inputTag = -1
 
-// failErr and dropErr are distinct so a joined error can be attributed.
+// errCloneFails and errDropFails are distinct so a joined error can be attributed.
 var (
-	failErr = errors.New("clone failed")
-	dropErr = errors.New("drop failed")
+	errCloneFails = errors.New("clone failed")
+	errDropFails  = errors.New("drop failed")
 )
 
 // stepClones builds a pipeline from a byte string: each byte is a transform,
-// and the step at failAt returns failErr instead. A failAt outside the range
+// and the step at failAt returns errCloneFails instead. A failAt outside the range
 // means no step fails.
 func stepClones(steps []byte, failAt int) []traits.Clone[*node] {
 	out := make([]traits.Clone[*node], len(steps))
@@ -39,7 +39,7 @@ func stepClones(steps []byte, failAt int) []traits.Clone[*node] {
 
 		out[i] = func(in *node) (*node, error) {
 			if fails {
-				return nil, failErr
+				return nil, errCloneFails
 			}
 
 			// Carries the input's accumulator forward as well as stamping a new
@@ -52,16 +52,20 @@ func stepClones(steps []byte, failAt int) []traits.Clone[*node] {
 	return out
 }
 
-// recordingDrop returns a Drop that appends every value it is given.
-func recordingDrop(seen *[]*node, failAt, index int) traits.Drop[*node] {
-	return func(v *node) error {
-		*seen = append(*seen, v)
+// assertReleased checks the COUNT as well as saying which values, because a
+// composition that released the wrong number can satisfy every other property
+// in this file: the released values are all legitimately older than the result
+// whether there are one of them or four.
+func assertReleased(t *testing.T, released []*node, want int) {
+	t.Helper()
 
-		if index == failAt {
-			return dropErr
-		}
+	tags := make([]int, 0, len(released))
+	for _, v := range released {
+		tags = append(tags, v.tag)
+	}
 
-		return nil
+	if len(released) != want {
+		t.Fatalf("released %d values %v, want %d", len(released), tags, want)
 	}
 }
 
@@ -82,21 +86,24 @@ func TestDropCloneAcrossEveryFailurePosition(t *testing.T) {
 			t.Run(fmt.Sprintf("clone fails at %d, drop fails at %d", failAt, dropFail), func(t *testing.T) {
 				var released []*node
 
-				// The drop is the RECEIVER of Drop.Clone - that is the API under
-				// test - and it both records what it releases (properties 1-3 read
-				// `released`) and fails on every call when dropFail >= 0, which is
-				// the failure the cell labels and the property-4 switch describes.
-				// The torn first draft built this drop and discarded it (_ = drop),
-				// which left properties 1-3 vacuous - nothing ever populated
-				// `released` - and the drop's error unreachable in every cell.
-				// recordingDrop cannot express "fails when configured" (its
-				// predicate is index == failAt on a fixed index), so it is written
-				// out here.
+				// The drop is the RECEIVER of Drop.Clone — that is the API under
+				// test — and it does both jobs at once: it records what it
+				// releases, which is what properties 1-3 read, and it fails on
+				// every call when dropFail >= 0, which is the failure this cell
+				// names. One drop rather than a recording witness plus a separate
+				// failing one, because a drop cannot see which pipeline position
+				// the value it is releasing came from, so "fails at position N" is
+				// not expressible — only "fails".
+				//
+				// The torn first draft of this file built a recording drop and
+				// threw it away (_ = drop), which left properties 1-3 vacuous —
+				// nothing ever populated `released` — and the drop's own error
+				// unreachable in all sixteen cells.
 				var drop traits.Drop[*node] = func(v *node) error {
 					released = append(released, v)
 
 					if dropFail >= 0 {
-						return dropErr
+						return errDropFails
 					}
 
 					return nil
@@ -149,42 +156,85 @@ func TestDropCloneAcrossEveryFailurePosition(t *testing.T) {
 					}
 				}
 
-				// Property four: the reported error is the one that actually
-				// happened. When BOTH are configured to fail, the clone error is
-				// the cause and the drop error is joined onto it (the implementation
-				// drops the doomed intermediate on the way out), so both sentinels
-				// must be findable - failErr attributed as the cause, dropErr
-				// present in the join.
+				// Property four: the error names what actually happened, and WHICH
+				// failures are visible depends on the order of the two — which is
+				// not obvious, and is not what the doc comment implies. Measured for
+				// this three-step pipeline, with the drop failing on every call:
+				//
+				//	nothing configured    no error; both intermediates released
+				//	drop fails, no clone  errDropFails alone, and the pipeline stops at the
+				//	                    first ownership transition
+				//	clone fails first    errCloneFails alone, nothing ever owned, so the
+				//	(k=0)               drop never ran and nothing was released
+				//	clone at k=1,        BOTH: the clone failure triggers the cleanup
+				//	drop fails           drop, and that drop fails too — the doc's
+				//	                    joined-errors sentence, and it needs owned=true
+				//	clone at k=2,        errDropFails alone, and errCloneFails is ABSENT: the drop
+				//	drop fails           failed at the earlier transition and stopped
+				//	                    the pipeline before the second clone ever ran
+				//
+				// The last two are the same inputs one step apart and they disagree,
+				// which is why both sentinels are checked rather than one. released
+				// is counted in every cell too, which nothing did before: a
+				// composition that released the wrong NUMBER of values satisfies
+				// every other property in this test.
 				switch {
 				case failAt < 0 && dropFail < 0:
 					if cloneErr != nil || got == nil {
 						t.Fatalf("nothing was configured to fail, yet clone = (%v, %v)", got, cloneErr)
 					}
-				case failAt >= 0 && dropFail >= 0 && failAt == 0:
-					// Nothing was ever owned: the failing step is the first one, so
-					// the drop never ran and the clone failure is the whole answer.
-					if !errors.Is(cloneErr, failErr) || errors.Is(cloneErr, dropErr) {
-						t.Fatalf("the first step failed before anything was owned, so clone = %v, want failErr alone", cloneErr)
+
+					assertReleased(t, released, 2)
+				case failAt < 0:
+					if !errors.Is(cloneErr, errDropFails) || errors.Is(cloneErr, errCloneFails) {
+						t.Fatalf("only a drop was configured to fail, so clone = %v, want the drop's error alone", cloneErr)
 					}
 
-					if len(released) != 0 {
-						t.Fatalf("the drop ran %d times, but nothing was ever owned to release", len(released))
+					assertReleased(t, released, 2)
+				case failAt == 0:
+					// Nothing was ever owned, so the drop is unreachable in both
+					// directions and the clone failure is the whole answer.
+					if !errors.Is(cloneErr, errCloneFails) || errors.Is(cloneErr, errDropFails) {
+						t.Fatalf("the first step failed before anything was owned, so clone = %v, want errCloneFails alone", cloneErr)
 					}
-				case dropFail >= 0:
-					// A failing drop stops the operation at the FIRST ownership
-					// transition - its own doc says so - so the failing clone step,
-					// if any, is never reached and its error never enters.
-					if !errors.Is(cloneErr, dropErr) {
-						t.Fatalf("a failing drop kills the pipeline at the first ownership transition, so clone = %v, want the drop's error", cloneErr)
+
+					assertReleased(t, released, 0)
+				case failAt == 1:
+					if !errors.Is(cloneErr, errCloneFails) {
+						t.Fatalf("clone = %v, want the clone's error", cloneErr)
 					}
-				case dropFail >= 0:
-					if !errors.Is(cloneErr, dropErr) {
-						t.Fatalf("a drop failed, so clone = %v, want the drop's error", cloneErr)
+
+					// The joined-errors sentence, which holds only because the
+					// failing step was not the first.
+					if dropFail >= 0 && !errors.Is(cloneErr, errDropFails) {
+						t.Fatalf("the cleanup drop failed too, so clone = %v, want both errors", cloneErr)
 					}
+
+					if dropFail < 0 && errors.Is(cloneErr, errDropFails) {
+						t.Fatalf("no drop was configured to fail, so clone = %v should not carry one", cloneErr)
+					}
+
+					assertReleased(t, released, 1)
+				case dropFail < 0:
+					if !errors.Is(cloneErr, errCloneFails) || errors.Is(cloneErr, errDropFails) {
+						t.Fatalf("only a clone was configured to fail, so clone = %v, want errCloneFails alone", cloneErr)
+					}
+
+					assertReleased(t, released, 2)
 				default:
-					if !errors.Is(cloneErr, failErr) {
-						t.Fatalf("a clone failed, so clone = %v, want the clone's error", cloneErr)
+					// The drop failed at the transition BEFORE this step, so the
+					// pipeline never got here and the clone's own error is absent.
+					if !errors.Is(cloneErr, errDropFails) || errors.Is(cloneErr, errCloneFails) {
+						t.Fatalf("the drop failed first, so clone = %v, want the drop's error alone", cloneErr)
 					}
+
+					assertReleased(t, released, 2)
+				}
+
+				// A composition that failed never hands back a value, or a caller
+				// holding a released resource would have no way to tell.
+				if cloneErr != nil && got != nil {
+					t.Fatalf("a failed composition returned tag %d as well as %v", got.tag, cloneErr)
 				}
 			})
 		}
@@ -227,19 +277,19 @@ func FuzzDropCloneInvariants(f *testing.F) {
 		var seen []*node
 
 		// The receiver drop records what it releases and fails on every call
-		// when a drop failure position was configured - the same injectable the
-		// table above uses, and the only one expressible here, because a drop
-		// cannot see which pipeline position the value it is releasing came
-		// from. The torn draft inverted this: it failed when dropFailAt was -1
-		// (the NOTHING-FAILS case) and never injected a failure otherwise, so
-		// the drop half of every fuzz input was fiction. The invariants below
-		// held anyway, which is exactly the vacuous-pass this file exists to
-		// make impossible.
+		// when a failure was configured — the same injectable the table
+		// above uses, and the only one expressible, because a drop cannot
+		// see which pipeline position the value it is releasing came from.
+		// The torn draft inverted this: it failed when dropFailAt was -1,
+		// which is the NOTHING-FAILS case, and never injected a failure
+		// otherwise — so the drop half of every fuzz input was fiction
+		// and the invariants below held anyway. That is exactly the
+		// vacuous pass this file exists to make impossible.
 		var drop traits.Drop[*node] = func(v *node) error {
 			seen = append(seen, v)
 
 			if dropFailAt >= 0 {
-				return dropErr
+				return errDropFails
 			}
 
 			return nil

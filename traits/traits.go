@@ -75,9 +75,11 @@ func ComposeClones[T any](clones ...Clone[T]) (Clone[T], error) {
 // soon as it is superseded, using d. The caller's input and the final
 // successful result are never dropped.
 //
-// If cloning fails, the current owned intermediate is dropped and both errors
-// are joined. If dropping a superseded intermediate fails, the newly created
-// value is also dropped and the operation stops.
+// If cloning fails **and an intermediate is already owned** — which it is not
+// when the first clone is the one that fails — that intermediate is dropped
+// and both errors are joined. If dropping a superseded intermediate fails, the
+// newly created value is also dropped and the operation stops there, so a
+// later clone never runs and its error never appears.
 //
 // **Who this is for, and who does not exist yet.** The case this exists for is
 // transforming an owned value through several steps where each intermediate is

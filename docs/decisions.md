@@ -2568,3 +2568,71 @@ unexercised for the same reason. `traits` is currently two function types with
 real users and five exported symbols with none, and the next reader deserves to
 know which is which — which is what a paragraph in the package doc would say,
 and has not yet.
+
+## The composition harness was wrong three times before it was right (recorded)
+
+`ComposeDrops`, `ComposeClones` and `Drop.Clone` were kept on the condition
+that their docs say who calls them. Writing the tests for them immediately
+found out that the **harness**, not the functions, was the thing with three
+defects, and the lesson is worth more than the tests.
+
+**The `-1` sentinel was double-booked.** The recording drop failed whenever
+`index == failAt`, and the call sites passed `index = -1` with `failAt` meaning
+"nothing fails" — so in the nothing-fails case every drop failed. A test whose
+harness inverts the control it is testing reports the opposite of the truth,
+which is the failure mode that is hardest to see, because the resulting
+assertion still has a shape.
+
+**The drop was built and thrown away** — `drop := recordingDrop(...); _ =
+drop` — so the slice three of the four properties read was never populated.
+They passed, vacuously, against a composer that released nothing at all. This
+is the exact thing a property test exists to prevent, written by the person who
+had just fixed three vacuous passes in `async` earlier the same day.
+
+**The fuzz injected backwards**, failing on the nothing-fails case and never
+injecting otherwise — so the drop half of every generated input was fiction, and
+the invariants held anyway.
+
+All three were found by a peer, while I was offline, who committed the repair
+rather than waiting. That is the right call and it is also the reason the
+repairs are worth reading closely: **the repair had two defects of its own.**
+A duplicated `case dropFail >= 0:` — legal Go, unreachable, invisible to
+`wsl` and `staticcheck` alike — and a comment asserting a contract the code
+below it did not implement.
+
+**And the property neither version stated was the one that mattered.** Measured
+across all sixteen cells rather than traced in my head, which is what settled
+it: the reported error depends on the **order** of the two failures, and the
+doc comment's "both errors are joined" holds only when the failing clone was
+not the first step.
+
+    nothing configured     no error
+    drop fails, no clone   the drop's error, and the pipeline stops at the
+                           first ownership transition
+    clone fails first (k=0) the clone's error alone — nothing was ever owned,
+                           so the drop never ran
+    clone at k=1, drop     BOTH: the clone failure triggers the cleanup drop,
+    fails                  and that drop fails too
+    clone at k=2, drop     the drop's error ALONE, and the clone's is ABSENT:
+    fails                  the drop failed at the earlier transition and stopped
+                           the pipeline before the second clone ever ran
+
+The last two are the same inputs one step apart and they disagree, which is why
+the assertions now check **both** sentinels and, in every cell, the **count** of
+values released — a count nothing had checked, and a composition that released
+the wrong number satisfies every other property in the file. Both mutations
+that break it were confirmed to fail the table: dropping the cleanup on a clone
+failure reds the count, and letting a failing drop continue reds the ordering.
+
+`Drop.Clone`'s doc sentence is corrected to say the join needs an intermediate
+that is **already owned**, which is not true when the first clone is the one
+that fails. The reviewer found that as a doc nit rather than a defect, and it
+was right on both counts.
+
+**What this leaves behind, stated as a rule rather than a story.** A property
+test's first version is a description of what the author expected, and a
+harness bug reads as a passing test rather than as a broken one. So a property
+harness gets the same treatment as the code it checks: mutation-tested, and its
+control values checked for collisions. `-1` meaning two different things in one
+file is the whole bug, and it is the kind that survives review because every
+individual line is correct.
