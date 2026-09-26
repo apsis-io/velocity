@@ -2526,8 +2526,17 @@ its real refusal with it. That reasoning is sound and **it does not transfer to
 this repository's CI**, which is the reason it is not wired in: the benchmarks
 job already says it does not take numbers from CI machines because they are too
 noisy. A 15% band on a GitHub-hosted runner is a coin flip. The check stays
-opt-in, and the next question for that job is whether a scheduled, quieter
-window is worth more than a wider band on every push.
+opt-in, and the review withdrew the recommendation rather than defending it,
+which is the correct response to being shown that the argument's premise was
+local rather than general.
+
+**What whoever wires it eventually wants is a lane, not the GitHub job** — and
+the sentence is here because the file did not have it. A runner with a declared
+resource envelope is the honest home for a numbers-based guard: the problem is
+never *where* the check runs but whether the machine's noise is inside the band
+being asserted. A scheduled job on a quiet runner beats a wider band on every
+push, and beats both a local-only check that nobody runs and a GitHub-hosted one
+that cries wolf.
 
 ## The composition helpers stay, and say out loud that nothing calls them (decided)
 
