@@ -132,6 +132,45 @@ must still be released. `Drained` closes only after sealing, because an
 unsealed borrow count of zero is transient and a closed channel is not.
 Abandoning the wait leaves the value sealed, so a later attempt can finish.
 
+## The drop net
+
+A value with a configured Drop — `NewCloser`, or `WithDrop` on any entry
+point — is backed by a runtime cleanup: if every handle to the cell becomes
+unreachable without a release having run, the net runs the Drop. The value the
+net drops is the one the cell owns at that moment, so a `Mutate` that replaces
+the value moves the net's target with it, and a `Map` disarms the source cell
+because the source value's remaining lifetime belongs to the derived Drop's
+chain. `Move`, `IntoShared`, `IntoOwner`, and `Freeze` keep the net: it hangs
+off the value's cell, not off any one handle, so the last handle going away is
+what fires it.
+
+The net is a backstop for a lost release, not a second lifetime, and three
+limits say exactly how far it goes:
+
+- The runtime does not guarantee that a cleanup runs before the program exits.
+  A resource that must be closed on the way out is closed explicitly; the net
+  covers only the drop that was forgotten.
+- The net's Drop runs on a goroutine of the runtime's choosing, and its error
+  is discarded — by the time it runs there is no caller left to read it. A
+  Drop whose failure matters must be reached through `Release`, where it
+  becomes `State.DropError` and the release's return value.
+- A Drop given to `WithDrop` must not capture the handle it is handed to. The
+  net's cleanup can only fire if nothing it holds keeps the cell reachable, so
+  the closure should take the resource, as `NewCloser`'s built-in Drop does.
+
+Every explicit path — `Release` on any handle type, `Detach`, `Map` — disarms
+the net inside the same critical section as the transition, from code where
+the cell is provably still reachable, which is the one condition under which
+`runtime.Cleanup.Stop` is guaranteed to win. The net therefore never races an
+explicit drop, and the drop-once guarantee is untouched by it.
+
+The asymmetry with the borrow-leak diagnostic is deliberate: a leaked advanced
+borrow blocks its cell and is a scoping bug, caught statically by lostrelease
+and, under `-tags=velocitydebug`, announced in the log; a leaked owner holds
+its resource until process end with nothing else in the system able to notice,
+which is why the owner net is always on and the debug build only adds the log
+line saying a net ran a Drop.
+
 ## When not to use this
 
 Ownership costs ceremony. It earns that cost only where a lifetime mistake

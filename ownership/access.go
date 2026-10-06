@@ -64,6 +64,9 @@ func scopedMutate[T, R any](c *cell[T], h *handle, mode mode, fn func(*T) (R, er
 	defer func() {
 		c.mu.Lock()
 		c.endWriteLocked(h)
+		// fn wrote the value in place, possibly replacing it; the net drops
+		// what the cell owns now.
+		c.syncNetLocked()
 		c.mu.Unlock()
 	}()
 	// The writer flag excludes every other access until the deferred end,

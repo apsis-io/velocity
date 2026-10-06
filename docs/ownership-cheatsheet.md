@@ -40,7 +40,16 @@ Seal()  -> no new borrows, irreversible
 Drained() <-chan struct{}         // closed once sealed and borrow-free
 
 final Release() or Close() -> Drop runs once
+all handles unreachable without one -> the drop net runs the Drop
 ```
+
+## The drop net
+
+A `Drop`-bearing cell (NewCloser, WithDrop) is backed by a runtime cleanup:
+last handle unreachable without a release, the net runs the Drop. It is a
+backstop for a lost release — not guaranteed to run before program exit, its
+error discarded, and a `WithDrop` closure must not capture the handle. See
+"The drop net" in [the ownership model](ownership.md).
 
 ## Construction
 

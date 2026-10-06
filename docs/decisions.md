@@ -2763,3 +2763,65 @@ readiness under a bound, the local `debug` recipe runs the same combination
 CI does, and the standing rule gains a corollary: a check that only CI runs
 is a check that fails only in CI, so the local recipe is CI's sequence, not
 an approximation of it.
+
+## The drop net: a lost release is the one failure with no error left to report (implemented)
+
+A consumer's adoption report handed over a design direction — engi's, relayed
+through the periapsis port's velocity-adoption record — with a use case
+attached: the pids.events file descriptor each limited container's watcher
+holds for the container's whole lifetime, owned through `NewCloser`, released
+by one `defer` in a per-container goroutine. A future edit that loses that
+defer leaks one descriptor per container until process end, and nothing in the
+running system can notice: no error surfaces, no borrow blocks, the static
+check reads the file as written rather than as it will be edited. Every other
+failure of the release discipline reports somewhere. That one is silent, so it
+is the one that gets a net.
+
+An `Owner` (and a `Shared`, a `Frozen`, a `Map` derivative) with a configured
+Drop registers a `runtime.AddCleanup` on its cell at construction. When every
+handle becomes unreachable without a release, the net runs the Drop. Three
+design questions came attached to the direction, and the answers are what the
+implementation is:
+
+**Does the net's drop count against drop-once enforcement?** It never meets
+it. Every explicit path — `Release` on all three handle types, `Detach`,
+`Map` — disarms the net inside the critical section that performs the
+transition, from code whose receiver chain proves the cell reachable, which is
+exactly the condition under which `runtime.Cleanup.Stop` is guaranteed to
+beat a queued cleanup. The enforcement state machine never sees the net, and
+the belt behind that brace is a flag on the net's own state plus the fact that
+its drop's error is discarded: by the time it could run wrongly, there is no
+caller left to tell.
+
+**Overlap with the velocitydebug borrow diagnostic?** None, and the asymmetry
+is the point. A leaked advanced borrow blocks its cell — a scoping bug, loud,
+caught statically by lostrelease and, in debug builds, announced and cleaned
+up so tests keep going; production pays nothing for it. A leaked owner is not
+scoped to anything: it holds its resource until process end, invisibly, which
+is why the owner net is always on and the debug tag only adds a log line when
+the net, not a caller, ran a Drop.
+
+**Default-on or an Option?** Default-on, and no Option exists to turn it off.
+An opt-in net is forgotten at exactly the sites that need it — the lost defer
+and the forgotten option are the same mistake wearing two commits — and the
+cost is one cleanup registration and one small box per drop-bearing cell, with
+nothing per operation: a `Mutate` syncs the net's target value with one
+field write under a lock it already holds.
+
+**What the implementation could not skip.** The cleanup's argument must never
+reference the cell — an arg that keeps the ptr reachable means the cell is
+never collected and the net never fires, which is also the user-facing rule
+that a `WithDrop` closure must not capture the Owner it is handed to. And the
+net must drop the value the cell owns *now*, not at construction: `Mutate`
+writes the value in place, so the scoped and queued mutation paths sync the
+net's target under the lock that ordered the write. Skipping the sync would
+have armed a net that closes the resource the cell gave up and leaves the one
+it holds — a wrong close, which is worse than the leak it replaces.
+
+**Named limits, in the docs rather than in fine print.** The runtime gives no
+guarantee that a cleanup runs before program exit, so the net is a backstop
+and never a shutdown path; its Drop runs on a goroutine of the runtime's
+choosing and its error has no channel left; the model fuzz target deliberately
+does not cover it, because a net whose whole semantics is GC timing cannot be
+asserted by a model that steps operations discretely — the targeted tests
+drive real collections instead.

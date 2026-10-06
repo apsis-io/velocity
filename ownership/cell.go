@@ -1,6 +1,7 @@
 package ownership
 
 import (
+	"runtime"
 	"sync"
 
 	"github.com/apsis-io/velocity/traits"
@@ -77,6 +78,11 @@ type cell[T any] struct {
 	clone   traits.Clone[T]
 	dropErr error
 	nextID  uint64
+
+	// The drop net and the state its cleanup runs against; both zero on a cell
+	// built without a Drop. See backstop.go.
+	net    runtime.Cleanup
+	netArg *backstop[T]
 }
 
 type handle struct {

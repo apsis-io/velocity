@@ -6,6 +6,9 @@ import "runtime"
 // rather than mutated: configuration, manifests, policy snapshots. It saves
 // constructing an Owner only to Freeze it immediately.
 //
+// A configured Drop is backed by the drop net; see New for what that
+// guarantees.
+//
 // Frozen is shallow. A frozen []byte, map, pointer, or interface still exposes
 // whatever interior storage it points at; freezing the handle does not deep-copy
 // or seal what the value refers to. Supply a real Clone and hand out Snapshot
@@ -20,7 +23,10 @@ func NewFrozen[T any](value T, opts ...Option[T]) (*Frozen[T], error) {
 		return nil, err
 	}
 
-	return &Frozen[T]{c: &cell[T]{value: value, mode: modeFrozen, shares: 1, drop: cfg.drop, clone: cfg.clone}}, nil
+	c := &cell[T]{value: value, mode: modeFrozen, shares: 1, drop: cfg.drop, clone: cfg.clone}
+	armNet(c)
+
+	return &Frozen[T]{c: c}, nil
 }
 
 // Frozen is one explicitly counted handle to a value that can no longer be

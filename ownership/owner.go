@@ -11,14 +11,21 @@ import (
 //	conn := ownership.NewCloser(rawConn)
 //	defer conn.Close()
 //
+// If every handle to the value becomes unreachable without that Close having
+// run, the drop net runs it anyway; see below and backstop.go's doc for what
+// that guarantees and what it does not.
+//
 // It cannot fail, so it returns no error. Use New with WithDrop when cleanup is
 // not exactly Close, or WithClone alongside it.
 func NewCloser[T io.Closer](value T) *Owner[T] {
-	return &Owner[T]{c: &cell[T]{
+	c := &cell[T]{
 		value: value,
 		mode:  modeUnique,
 		drop:  func(closer T) error { return closer.Close() },
-	}}
+	}
+	armNet(c)
+
+	return &Owner[T]{c: c}
 }
 
 // Owner holds the unique ownership handle for a value. It must not be copied
@@ -38,6 +45,12 @@ func Own[T any](value T) *Owner[T] {
 
 // New creates a unique owner with options. Without options it is exactly
 // Own, which does not make the caller handle an error that cannot happen.
+//
+// A configured Drop is backed by the drop net: if the value becomes
+// unreachable without Release having run, the net runs the Drop — the closure
+// given to WithDrop must therefore not capture the Owner, or the net can never
+// fire. A cleanup is not guaranteed to run before the program exits, so
+// nothing may be put off to the net that must happen on the way out.
 func New[T any](value T, opts ...Option[T]) (*Owner[T], error) {
 	if len(opts) == 0 {
 		return Own(value), nil
@@ -48,7 +61,10 @@ func New[T any](value T, opts ...Option[T]) (*Owner[T], error) {
 		return nil, err
 	}
 
-	return &Owner[T]{c: &cell[T]{value: value, mode: modeUnique, drop: cfg.drop, clone: cfg.clone}}, nil
+	c := &cell[T]{value: value, mode: modeUnique, drop: cfg.drop, clone: cfg.clone}
+	armNet(c)
+
+	return &Owner[T]{c: c}, nil
 }
 
 // State returns a synchronized ownership snapshot.
@@ -209,7 +225,8 @@ func (o *Owner[T]) Move() (*Owner[T], error) {
 }
 
 // Detach consumes this Owner and returns the bare value, transferring cleanup
-// responsibility to the caller: Drop does not run, now or ever.
+// responsibility to the caller: Drop does not run, now or ever, and the drop
+// net is disarmed with it.
 //
 // Use it when the caller genuinely takes over the resource. Do not use it
 // merely to pass a value through an API that wants a bare T, because nothing
@@ -242,6 +259,9 @@ func (o *Owner[T]) Detach() (T, error) {
 	c.value = zero
 	c.mode = modeReleased
 	o.h.state = handleMoved
+	// The caller owns the value from here; the net must not close what it
+	// handed over.
+	c.disarmNetLocked()
 
 	return value, nil
 }
@@ -326,6 +346,9 @@ func (c *cell[T]) beginOwnerRelease(h *handle) (value T, drop func(T) error, fir
 
 	h.state = handleReleased
 	value = c.value
+	// The Drop below is the release; the net's copy of the obligation ends
+	// here, disarmed before anything observable changes.
+	c.disarmNetLocked()
 
 	// Terminal for admission, and a queued MutateAsync waiting on this cell is
 	// asleep rather than polling — so without the wake it sleeps until its

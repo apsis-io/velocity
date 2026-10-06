@@ -3,6 +3,9 @@ package ownership
 import "runtime"
 
 // NewShared creates a shared handle with one reference.
+//
+// A configured Drop is backed by the drop net; see New for what that
+// guarantees.
 func NewShared[T any](value T, opts ...Option[T]) (*Shared[T], error) {
 	if len(opts) == 0 {
 		return &Shared[T]{c: &cell[T]{value: value, mode: modeShared, shares: 1}}, nil
@@ -13,7 +16,10 @@ func NewShared[T any](value T, opts ...Option[T]) (*Shared[T], error) {
 		return nil, err
 	}
 
-	return &Shared[T]{c: &cell[T]{value: value, mode: modeShared, shares: 1, drop: cfg.drop, clone: cfg.clone}}, nil
+	c := &cell[T]{value: value, mode: modeShared, shares: 1, drop: cfg.drop, clone: cfg.clone}
+	armNet(c)
+
+	return &Shared[T]{c: c}, nil
 }
 
 // Shared is one explicitly counted handle to a borrow-checked shared value. It
@@ -242,6 +248,9 @@ func (c *cell[T]) beginCountedRelease(h *handle, expected mode) (value T, drop f
 	h.state = handleReleased
 	c.shares = 0
 	value = c.value
+	// The last handle is going away and the Drop below is the release; the
+	// net's copy of the obligation ends here.
+	c.disarmNetLocked()
 
 	var zero T
 

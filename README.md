@@ -58,6 +58,12 @@ name, err := cfg.View(func(c Config) (string, error) { return c.Name, nil })
 err = cfg.WithWrite(func(c *Config) error { c.Retries++; return nil })
 ```
 
+A missed `defer Close()` is a leak, so a `Drop`-bearing value is backed by a
+net: if every handle becomes unreachable without a release, the net runs the
+Drop. It is a backstop, not a second lifetime — the runtime promises no
+cleanup before program exit — and the full contract is in
+[`docs/ownership.md`](docs/ownership.md).
+
 The shapes that pay for themselves:
 
 - **`Scope`** unwinds a multi-step construction that fails partway, so each

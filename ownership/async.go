@@ -146,6 +146,9 @@ func (o *Owner[T]) mutateAsync[R any](ctx context.Context, f *traits.Future[R], 
 				c.mu.Lock()
 				c.pending--
 				c.endWriteLocked(&o.h)
+				// fn wrote the value in place, possibly replacing it; the net
+				// drops what the cell owns now.
+				c.syncNetLocked()
 				c.mu.Unlock()
 
 				switch {

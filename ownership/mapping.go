@@ -17,6 +17,10 @@ import "errors"
 // callbacks must return normally.
 //
 // If fn returns an error, this Owner is left untouched and remains usable.
+//
+// The derived Owner's Drop is backed by the drop net, and this Owner's net is
+// disarmed: the source value's remaining lifetime belongs to the chained Drop,
+// not to the cell it left. See New for what the net guarantees.
 func (o *Owner[T]) Map[U any](fn func(T) (U, error), opts ...Option[U]) (*Owner[U], error) {
 	if fn == nil {
 		return nil, &ProjectionError{Operation: OpMap}
@@ -69,15 +73,21 @@ func (o *Owner[T]) Map[U any](fn func(T) (U, error), opts ...Option[U]) (*Owner[
 
 	c.value = zero
 	c.mode = modeReleased
+	// The source value's Drop is now chained into the derived cell's; this
+	// cell owns nothing and its net must not fire over it later.
+	c.disarmNetLocked()
 	c.changedLocked()
 	c.mu.Unlock()
 
-	return &Owner[U]{c: &cell[U]{
+	derivedCell := &cell[U]{
 		value: derived,
 		mode:  modeUnique,
 		drop:  chainDrop(cfg.drop, sourceDrop, value),
 		clone: cfg.clone,
-	}}, nil
+	}
+	armNet(derivedCell)
+
+	return &Owner[U]{c: derivedCell}, nil
 }
 
 // chainDrop composes the derived value's Drop with the source's, closing over
