@@ -298,6 +298,7 @@ func TestAwaitTimeoutLeavesTheWorkRunning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the work never became readable after finishing: %v", err)
 	}
+
 	if got.Value != 5 || got.Err != nil {
 		t.Fatalf("the work = %+v, want 5 with no error once it finished", got)
 	}
