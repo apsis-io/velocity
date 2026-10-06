@@ -98,6 +98,11 @@ nets the ones whose release gets lost.
 
 ## Status
 
-New. The engine's contract is [documented](doc.go) and the tests pin the
-design-doc transcript to the pass. The first real plan is the perigeos
-reconcile site — that migration is the evaluation the library has to pass.
+New, and evaluated: [barrier_eval_test.go](barrier_eval_test.go) re-expresses
+perigeos's coordinated-checkpoint controller — a hand-rolled four-phase
+state machine with a no-outage barrier — as one plan, and asserts the
+controller's properties structurally: nothing crosses the barrier while any
+member is un-quiesced, members progress independently, the wall-clock
+timeout is an observed fact, and `status.phase` falls out of the stage
+names. The real migration is the next step, and the evaluation is its
+specification.
