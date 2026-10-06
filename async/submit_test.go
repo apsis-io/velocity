@@ -287,9 +287,19 @@ func TestAwaitTimeoutLeavesTheWorkRunning(t *testing.T) {
 		t.Fatal("giving up on the wait stopped the work")
 	}
 
-	got, ready := f.Try()
-	if !ready || got.Value != 5 {
-		t.Fatalf("the work = %+v (ready %v), want 5 once it finished", got, ready)
+	// The result is published after the work's function returns, which is
+	// after finished closes, so readiness is awaited under a bound rather
+	// than read on the spot: a Try here raced the publication and read
+	// ready=false off a healthy runner.
+	bounded, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	got, err := f.Await(bounded)
+	if err != nil {
+		t.Fatalf("the work never became readable after finishing: %v", err)
+	}
+	if got.Value != 5 || got.Err != nil {
+		t.Fatalf("the work = %+v, want 5 with no error once it finished", got)
 	}
 }
 

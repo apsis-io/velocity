@@ -2747,3 +2747,19 @@ to `GOPROXY=direct`, which sees a pushed tag at once. The rule for the next
 module release: verify a fresh tag's install with `GOPROXY=direct`, and treat
 the proxy's indexing lag as a window in which same-numbered versions of
 unrelated modules answer a consumer's pin.
+
+**The first nested-tag run went red, and that is the trigger working.** The
+verification this entry demands caught a race on its first outing — not in
+the released module, whose checks passed whole, but in the library the tag's
+commit also contains: an async test read a finished work's result with `Try`
+on the spot after the event the work raises, and the result is published
+after the work's function returns, so a healthy runner loses that read under
+the race detector. The combination that exposes it — the debug build tag
+*and* `-race` together — exists only in CI; the local recipe ran them as two
+separate invocations, which is how the test survived every local check and
+how the library's own main runs had been going red since September on
+timing-sensitive tests nobody could see locally. The test now awaits
+readiness under a bound, the local `debug` recipe runs the same combination
+CI does, and the standing rule gains a corollary: a check that only CI runs
+is a check that fails only in CI, so the local recipe is CI's sequence, not
+an approximation of it.
