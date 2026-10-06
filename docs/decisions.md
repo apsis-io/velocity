@@ -2730,3 +2730,20 @@ module's tag, and the tag's red or green CI run is the release's verification.
 The consumer report that found this justifies the fix under this record's
 standing rule — a version that cannot be pinned is a failure whoever reports
 it — and adds nothing about what else the analysis module ought to grow.
+
+**Amended in the release's own verification, twice over.** The install form
+this entry first wrote — `go install ...@analysis/v0.2.0` — is disallowed: the
+`@version` in a `go install` is the module's version, and the directory prefix
+is how the repository tag is found, not part of the version string, so the
+correct pin is `@v0.2.0` and nothing else. And installing that pin through the
+module proxy the minute the tag was pushed taught the sharper lesson: while
+the proxy had not yet indexed `github.com/apsis-io/velocity/analysis@v0.2.0`,
+the resolver fell to the shorter module path prefix — the library itself —
+whose `v0.2.0` is a 2024 release of a tree that still contained
+`analysis/cmd` without the separating go.mod, and it installed that ancient
+analyzer silently, no error, no warning. The verification only caught it by
+probing the binary rather than trusting the exit status, and by falling back
+to `GOPROXY=direct`, which sees a pushed tag at once. The rule for the next
+module release: verify a fresh tag's install with `GOPROXY=direct`, and treat
+the proxy's indexing lag as a window in which same-numbered versions of
+unrelated modules answer a consumer's pin.

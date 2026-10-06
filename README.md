@@ -135,7 +135,7 @@ is discarded, or has a path to a return on which it is never released, is
 reported at the acquisition and at the return.
 
 ```sh
-go install github.com/apsis-io/velocity/analysis/cmd/velocityvet@analysis/v0.2.0
+go install github.com/apsis-io/velocity/analysis/cmd/velocityvet@v0.2.0
 go vet -vettool=velocityvet ./...
 ```
 
