@@ -66,6 +66,28 @@ an executor), a pass budget, stall detection (nothing moves), and oscillation
 detection (the plan fights itself, A-B-A). Terminal diagnoses are data, and
 `Reset` is the human's decision.
 
+## The report
+
+Every `Step` returns one `Report`, and it is the whole interface between a
+pass and the daemon:
+
+| Field | Meaning |
+| --- | --- |
+| `Status` | `Converged`, `Frontier` (working — apply `Want`), `Stalled`, `Oscillating`, `Exhausted` |
+| `Frontier` | index of the unsatisfied stage; `-1` at convergence |
+| `Stage` | the stage's name, when `Config.Names` is set |
+| `Want` | the effects to apply now; nil for every status but `Frontier` |
+| `Passes`, `Effects` | running totals since construction or `Reset` |
+
+Terminal statuses are idempotent — the same report comes back until
+`Reset()` — and name their stage, so an alarm can say what stuck without
+anyone counting indices.
+
+Runnable examples: the pod convergence and the named-stages status document
+live in the package's `example_test.go`; `ExampleChain` walks teardown
+against bringup on the same plan; `converge`'s example is the whole daemon
+loop in one page.
+
 ## Running it on velocity's runtime
 
 `teleos` itself imports nothing. [`converge`](converge) is the operational

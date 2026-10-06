@@ -9,6 +9,8 @@ import (
 	"github.com/apsis-io/velocity/teleos"
 )
 
+// An empty host, wanting a running workload, driven by the engine until it
+// rests.
 func Example_podConvergence() {
 	engine, err := teleos.New(teleos.Config[World, string]{Plan: PodInvariants})
 	if err != nil {
@@ -42,4 +44,52 @@ func Example_podConvergence() {
 	// Pass 1: Frontier active. Emitting: [NETNS_CREATE]
 	// Pass 2: Frontier active. Emitting: [UNIT_START]
 	// Pass 3: Equilibrium reached (Telos).
+}
+
+// Name the stages and the report is a status document: Stage says which
+// stage holds the frontier, and the satisfied prefix is what a readiness
+// endpoint renders — Kubernetes PodConditions are a projection of this.
+func ExampleEngine() {
+	names := []string{"NetworkReady", "ContainersReady"}
+
+	engine, err := teleos.New(teleos.Config[World, string]{
+		Plan:  PodInvariants,
+		Names: names,
+	})
+	if err != nil {
+		panic(err)
+	}
+
+	world := World{WantNet: true, WantUnit: "running"}
+
+	for {
+		report := engine.Step(world)
+
+		switch report.Status {
+		case teleos.Converged:
+			fmt.Println("converged")
+
+			return
+		case teleos.Frontier:
+			fmt.Printf("frontier at %s (done: %v); emitting %v\n",
+				report.Stage, names[:report.Frontier], report.Want)
+
+			for _, eff := range report.Want {
+				if eff == "NETNS_CREATE" {
+					world.HasNet = true
+				}
+
+				if eff == "UNIT_START" {
+					world.UnitState = "running"
+				}
+			}
+		default:
+			panic("unexpected status " + report.Status.String())
+		}
+	}
+
+	// Output:
+	// frontier at NetworkReady (done: []); emitting [NETNS_CREATE]
+	// frontier at ContainersReady (done: [NetworkReady]); emitting [UNIT_START]
+	// converged
 }
