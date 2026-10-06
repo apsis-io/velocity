@@ -135,9 +135,12 @@ is discarded, or has a path to a return on which it is never released, is
 reported at the acquisition and at the return.
 
 ```sh
-go -C analysis build -o /tmp/velocityvet ./cmd/velocityvet
-go vet -vettool=/tmp/velocityvet ./...
+go install github.com/apsis-io/velocity/analysis/cmd/velocityvet@analysis/v0.2.0
+go vet -vettool=velocityvet ./...
 ```
+
+Inside this checkout, build it from the tree instead: `just lint` does that
+for every module here.
 
 It learns what to track from the code rather than from a list it carries.
 A function that hands back something the caller must release says so at its

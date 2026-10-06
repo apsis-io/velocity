@@ -2684,3 +2684,49 @@ offered for review carries an implicit claim that it has been run**, and that
 claim was false. The rule: nothing goes to a peer as reviewable until it has
 been run *and* a mutation of it has been seen to fail. A green first run is not
 evidence either — the three defects above would all have produced one.
+
+## The analysis module went unreleased for every library release after v0.4.0 (implemented)
+
+A consumer adoption report — the periapsis port, pinning the library at
+v0.8.2 — closed with a versioning note: their analyzer tooling could not be
+expressed as a pin. The `analysis` module has exactly one tag,
+`analysis/v0.1.0`, cut when the library was at v0.4.0. Six commits have landed
+in it since — the `//velocity:acquires` directive, RWMutex's four handles in
+the fallback table, the dropped-`Shared.Clone` fix, the acquirer-table drift
+guard — and not one of them is installable. The consumer's working setup was
+`go -C analysis build` from a checkout, and this README documented that
+workaround as if it were the interface. Their adoption record asked for a
+re-baseline "on analyzer bumps", which is not possible to write down when the
+bump never produces a version.
+
+**The mechanism is one glob.** Tags are cut by hand here — there is no release
+recipe in the justfile, by the same stance that declines GoReleaser — and the
+only thing that would have noticed a forgotten module is CI, whose trigger was
+`tags: ['v*']`. Every nested module's tag space starts with something else:
+`analysis/`, `failsafeown/`, `benchmarks/`. So a nested tag was not merely
+unverified, it was unobserved: cutting one produced no run, no signal, and no
+reminder that the last module tagged was not the last module changed.
+`failsafeown` stayed current only because it was remembered; the rule that kept
+it current lived in someone's head, and the analysis module is what that rule
+is worth when it is not executed.
+
+**What changed, and what deliberately did not.** The trigger now names each
+module's tag space — `['v*', 'analysis/v*', 'failsafeown/v*',
+'benchmarks/v*']` — so every release tag of every module runs the same checks,
+and the next forgotten module is a red run on the tag rather than a consumer's
+observation. The README's install block is the versioned form
+(`go install .../cmd/velocityvet@analysis/v0.2.0`), because a versioned
+analyzer is the entire point of tagging it; the checkout build remains where
+it belongs, as the developer path in the justfile. The module itself is
+released as `analysis/v0.2.0` — a minor, because the directive is a new
+interface, on the same reasoning that took failsafeown from v0.1.0 to v0.2.0.
+
+**What did not change is release tooling.** One glob was the defect, so one
+glob is the fix; a release script that tags every touched module would
+automate a decision that is one line to get right by hand and would be a second
+place to configure what CI already enforces. The rule, written down where the
+glob cannot carry it: a library release that touches a nested module cuts that
+module's tag, and the tag's red or green CI run is the release's verification.
+The consumer report that found this justifies the fix under this record's
+standing rule — a version that cannot be pinned is a failure whoever reports
+it — and adds nothing about what else the analysis module ought to grow.
