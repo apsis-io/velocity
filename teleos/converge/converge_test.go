@@ -6,6 +6,7 @@ package converge_test
 import (
 	"context"
 	"errors"
+	"maps"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -749,5 +750,357 @@ func TestConvergerStallDiagnosisWaitsForReset(t *testing.T) {
 	case <-converged:
 	case <-time.After(5 * time.Second):
 		t.Fatal("the converger never recovered after Reset")
+	}
+}
+
+// TestCoalescerJoinsAcrossLoops pins the documented point of a shared
+// dedupe group: two convergers whose plans want the same resource emit the
+// same effect key, and the second apply JOINS the first's in-flight one
+// instead of hitting the host again. Loop one's raw apply blocks on a gate
+// while loop two wakes; the raw host function must be entered exactly once.
+func TestCoalescerJoinsAcrossLoops(t *testing.T) {
+	var (
+		rawCalls atomic.Int32
+		gate     = make(chan struct{})
+		exhausts = make(chan struct{}, 2)
+	)
+
+	rawApply := func(_ context.Context, eff string) error {
+		if rawCalls.Add(1) == 1 {
+			<-gate // the first apply is in flight while loop two wakes
+		}
+
+		return nil
+	}
+
+	group, gerr := dedupe.NewSingleflight[string, struct{}]()
+	if gerr != nil {
+		t.Fatal(gerr)
+	}
+
+	newLoop := func(t *testing.T, key string) *converge.Converger[struct{}, string] {
+		t.Helper()
+
+		engine, err := teleos.New(teleos.Config[struct{}, string]{
+			Plan: []teleos.Invariant[struct{}, string]{
+				teleos.Rule(
+					func(struct{}) bool { return false },
+					func(struct{}) []string { return []string{key} },
+				),
+			},
+			MaxPasses: 1,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		var c *converge.Converger[struct{}, string]
+
+		c, err = converge.New(
+			engine,
+			func(context.Context) (struct{}, error) { return struct{}{}, nil },
+			func(ctx context.Context, eff string) error {
+				_, err := group.Do(ctx, eff, func(context.Context) (struct{}, error) {
+					return struct{}{}, rawApply(ctx, eff)
+				})
+
+				return err
+			},
+			converge.Config[struct{}, string]{
+				OnError: func(error) {},
+				OnReport: func(_ context.Context, r teleos.Report[struct{}, string]) {
+					if r.Status == teleos.Exhausted {
+						select {
+						case exhausts <- struct{}{}:
+						default:
+						}
+					}
+				},
+			},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		return c
+	}
+
+	loop1 := newLoop(t, "SHARE")
+	loop2 := newLoop(t, "SHARE")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go loop1.Run(ctx)
+	go loop2.Run(ctx)
+
+	loop1.Wake()
+
+	deadline := time.After(5 * time.Second)
+
+	for rawCalls.Load() == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("loop one's apply never reached the host")
+		case <-time.After(time.Millisecond):
+		}
+	}
+
+	loop2.Wake()
+
+	// Give loop two every chance to hit the host independently; the join
+	// must keep it out.
+	time.Sleep(100 * time.Millisecond)
+
+	if got := rawCalls.Load(); got != 1 {
+		t.Fatalf("raw host calls = %d, want 1: loop two must join the in-flight apply", got)
+	}
+
+	close(gate) // the in-flight apply lands; both joins return
+
+	for range 2 {
+		select {
+		case <-exhausts:
+		case <-time.After(5 * time.Second):
+			t.Fatal("both loops never drained to their budget")
+		}
+	}
+
+	if got := rawCalls.Load(); got != 1 {
+		t.Fatalf("raw host calls = %d after both drained, want the single joined apply", got)
+	}
+}
+
+// TestRunnerBatchBarriersBeforeTheNextObservation: a want of three effects
+// applied through a Limited(2) Runner must all land before the loop's next
+// observation — the batch is one unit, and no pass begins on a half-applied
+// world.
+func TestRunnerBatchBarriersBeforeTheNextObservation(t *testing.T) {
+	var (
+		mu      sync.Mutex
+		applied = map[string]bool{}
+	)
+
+	engine, err := teleos.New(teleos.Config[[]string, string]{
+		Plan: []teleos.Invariant[[]string, string]{
+			teleos.Rule(
+				func(w []string) bool { return len(applied) == 3 },
+				func([]string) []string { return []string{"a", "b", "c"} },
+			),
+		},
+		MaxPasses: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runner, rerr := async.New(async.Limited(2))
+	if rerr != nil {
+		t.Fatal(rerr)
+	}
+
+	var (
+		peak      atomic.Int32
+		cur       atomic.Int32
+		passes    atomic.Int32
+		converged = make(chan struct{}, 1)
+	)
+
+	c, cerr := converge.New(
+		engine,
+		func(context.Context) ([]string, error) {
+			passes.Add(1)
+
+			mu.Lock()
+			keys := slices.Sorted(maps.Keys(applied))
+			mu.Unlock()
+
+			return keys, nil
+		},
+		func(_ context.Context, eff string) error {
+			n := cur.Add(1)
+			if p := peak.Load(); n > p {
+				peak.Store(n)
+			}
+
+			mu.Lock()
+			applied[eff] = true
+			mu.Unlock()
+
+			cur.Add(-1)
+
+			return nil
+		},
+		converge.Config[[]string, string]{
+			Runner: runner,
+			OnReport: func(_ context.Context, r teleos.Report[[]string, string]) {
+				if r.Status == teleos.Converged {
+					select {
+					case converged <- struct{}{}:
+					default:
+					}
+				}
+			},
+		},
+	)
+	if cerr != nil {
+		t.Fatal(cerr)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go c.Run(ctx)
+
+	c.Wake()
+
+	select {
+	case <-converged:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the batch never converged")
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(applied) != 3 {
+		t.Fatalf("applied = %v, want all three effects", applied)
+	}
+
+	if peak.Load() > 2 {
+		t.Fatalf("peak concurrency = %d, want at most 2 under Limited(2)", peak.Load())
+	}
+
+	// The barrier: the second observation — the one that reports
+	// convergence — happened after the third effect landed.
+	if passes.Load() != 2 {
+		t.Fatalf("passes = %d, want the gated pass and the convergence check", passes.Load())
+	}
+}
+
+// TestExhaustedHaltsApplicationUntilReset: once the engine's budget is
+// spent, further wakes return the same diagnosis and apply NOTHING — the
+// terminal really is terminal at the loop level, not just in the report.
+func TestExhaustedHaltsApplicationUntilReset(t *testing.T) {
+	var (
+		applies atomic.Int32
+		exhaust = make(chan struct{}, 8)
+	)
+
+	engine, err := teleos.New(teleos.Config[struct{}, string]{
+		Plan: []teleos.Invariant[struct{}, string]{
+			teleos.Rule(
+				func(struct{}) bool { return false },
+				func(struct{}) []string { return []string{"TRY"} },
+			),
+		},
+		MaxPasses: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := converge.New(
+		engine,
+		func(context.Context) (struct{}, error) { return struct{}{}, nil },
+		func(context.Context, string) error {
+			applies.Add(1)
+
+			return nil
+		},
+		converge.Config[struct{}, string]{
+			OnError: func(error) {},
+			OnReport: func(_ context.Context, r teleos.Report[struct{}, string]) {
+				if r.Status == teleos.Exhausted {
+					select {
+					case exhaust <- struct{}{}:
+					default:
+					}
+				}
+			},
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go c.Run(ctx)
+
+	c.Wake()
+
+	select {
+	case <-exhaust:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the budget never surfaced")
+	}
+
+	// Three more wakes — which collapse like any storm — produce more
+	// diagnoses and zero applications: the terminal halts the loop, and the
+	// budget, not the wakes, is what governs cost.
+	for range 3 {
+		c.Wake()
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	if got := applies.Load(); got != 1 {
+		t.Fatalf("applies = %d after the budget closed, want the single pre-budget attempt", got)
+	}
+
+	if len(exhaust) == 0 {
+		t.Fatal("no diagnosis after the extra wakes")
+	}
+}
+
+// TestConcurrentWakesAreRaceFree is a race-detector smoke: documented safe
+// from any goroutine, so prove it under load and under -race.
+func TestConcurrentWakesAreRaceFree(t *testing.T) {
+	h := &podHarness{world: pod{wantNet: true, wantUnit: "running"}}
+
+	engine, err := teleos.New(teleos.Config[pod, string]{Plan: podInvariants()})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	converged := make(chan struct{}, 1)
+
+	c, err := converge.New(engine, h.observe, h.apply, converge.Config[pod, string]{
+		OnReport: func(_ context.Context, r teleos.Report[pod, string]) {
+			if r.Status == teleos.Converged {
+				select {
+				case converged <- struct{}{}:
+				default:
+				}
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	go c.Run(ctx)
+
+	var wg sync.WaitGroup
+
+	for range 10 {
+		wg.Go(func() {
+			for range 50 {
+				c.Wake()
+			}
+		})
+	}
+
+	wg.Wait()
+
+	select {
+	case <-converged:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the wake storm never converged")
 	}
 }

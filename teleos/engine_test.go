@@ -631,3 +631,93 @@ func fightPlan() []Invariant[string, string] {
 		),
 	}
 }
+
+func TestEngineResetFromOscillatingResumes(t *testing.T) {
+	engine, err := New(Config[string, string]{
+		Plan:      fightPlan(),
+		EffectKey: func(s string) string { return s },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	world := "a"
+
+	for {
+		report := engine.Step(world)
+		if report.Status == Oscillating {
+			break
+		}
+
+		if report.Status == Frontier {
+			if report.Want[0] == "SET_A" {
+				world = "a"
+			} else {
+				world = "b"
+			}
+		}
+	}
+
+	engine.Reset()
+
+	// The fight is still there — Reset clears a diagnosis, not a conflict —
+	// so the engine re-reaches it from pass one.
+	report := engine.Step("a")
+	if report.Status != Frontier || report.Passes != 1 {
+		t.Fatalf("report = (%v, pass %d), want a fresh frontier at pass 1", report.Status, report.Passes)
+	}
+}
+
+func TestEngineOscillatingReportNamesItsStage(t *testing.T) {
+	engine, err := New(Config[string, string]{
+		Plan:      fightPlan(),
+		Names:     []string{"LowerHalf", "UpperHalf"},
+		EffectKey: func(s string) string { return s },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	world := "a"
+
+	for {
+		report := engine.Step(world)
+		if report.Status == Oscillating {
+			if report.Stage != "UpperHalf" {
+				t.Fatalf("oscillation stage = %q, want UpperHalf", report.Stage)
+			}
+
+			return
+		}
+
+		if report.Status == Frontier {
+			if report.Want[0] == "SET_A" {
+				world = "a"
+			} else {
+				world = "b"
+			}
+		}
+	}
+}
+
+func TestEngineNegativeConfigFallsBackToDefaults(t *testing.T) {
+	// A wedge of 200 effects trips the default 64 cap under negative
+	// configuration, proving the fallback rather than the literal.
+	engine, err := New(Config[testWorld, string]{
+		Plan: []Invariant[testWorld, string]{
+			Rule(
+				func(testWorld) bool { return false },
+				func(testWorld) []string { return make([]string, 200) },
+			),
+		},
+		MaxEffects: -5,
+		MaxPasses:  -5,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if report := engine.Step(testWorld{}); report.Status != Exhausted {
+		t.Fatalf("status = %v, want the default cap to catch a 200-effect want", report.Status)
+	}
+}
