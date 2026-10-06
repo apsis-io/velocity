@@ -2825,3 +2825,68 @@ choosing and its error has no channel left; the model fuzz target deliberately
 does not cover it, because a net whose whole semantics is GC timing cannot be
 asserted by a model that steps operations discretely — the targeted tests
 drive real collections instead.
+
+## teleos: the critics wrote the contract, and the record should say so (implemented)
+
+A nested module born on main with its engine, its daemon loop, and an
+evaluation, after a design day that ran the idea through three external
+critiques — a production audit, a counter-audit that killed the first fix,
+and a verdict on whether the library deserved to exist at all. The pattern
+is worth naming because it is the opposite of how modules usually arrive:
+the invariants were written first and the contract was written by the
+critics, and every one of the four audit findings resolved into either a
+mechanism or a documented refusal.
+
+**The teardown inversion was real, and the first fix was a mode flag.** A
+forward sweep over a bringup list, handed a terminating world, deletes the
+netns the process still lives in — the audit's trace, reproduced in a test
+that is kept failing-on-purpose as the reason the mechanism exists. The
+first shipped fix was `Lifecycle(isTerminating, up, down)`, and the
+counter-audit's killing of it is the better design record than the mechanism
+that replaced it: an `isTerminating` predicate is `if isDeleting` through
+the back door, and the thesis — there are no modes, only the gap — cannot
+survive one. What ships instead is `Chain`: direction derived per link, a
+release sweep leaf to root and an acquire sweep root to leaf, so deleting
+the pod stops the process first because a link may not remove itself while
+anything stands on it. Structural truth, not a lifecycle phase. Lifecycle
+and Reverse were deleted before they had a consumer, which is the cheapest
+a wrong abstraction will ever be.
+
+**The spin-cycle landmine was answered in units, not in machinery.** Where
+does backoff live in a purely amnesiac loop? In operations, never in time:
+one failing effect ends the pass, the pass budget caps total attempts,
+Exhausted halts every emission until a human Resets, and the stuck stage is
+named. Time-based backoff would have solved the same problem by putting a
+clock into a clock-free model, and the model's no-clocks property is what
+makes crash recovery the same evaluation as steady state. The record's
+standing rule about units generalizes: a budget that counted seconds would
+have been a defect wearing a feature's name.
+
+**Transit is observed, not modeled** — the refusal that kept the atom at
+two results. A third state (done, transiting, want) would have reintroduced
+memory through the back door; instead S carries the activating unit and the
+queued job, the executor coalesces or is idempotent, and Pending-versus-
+broken is the daemon's projection. An invariant reads no clock for the same
+reason: the barrier evaluation moved the controller's 30-second quiesce
+timeout into an observed fact computed by the watch loop, and the timeout
+got *more* honest, because the code that measures the window is now the
+code that owns clocks.
+
+**The verdict that the invariants are closure golf was accepted, and it is
+the library's justification.** A single pure `func Decide(w World) []Effect`
+with the ifs written by hand is exactly as pure and exactly as testable.
+What the ifs do not give — what nothing hand-rolled gives — is the machine
+around the closures: budgets, stall and oscillation diagnoses with the
+stuck stage named, and a plan structure that reports its own progress.
+That is why Config.Names exists and why the README says plainly: if you do
+not need those, write the ifs.
+
+**The evaluation methodology is the reusable part.** The barrier controller
+was re-expressed as a plan and driven by the engine before anyone migrated
+anything, its properties were asserted structurally rather than its phases
+replicated, and the consumer verified the re-expression line-by-line
+against its own source before recording it as the migration specification.
+The findings that survive such an evaluation — the timeout that became an
+observation, the phase machine that became a frontier — are the difference
+between a library and a manifesto. Related: the drop net's entry, whose
+consumer report and whose record entry this module's arrival mirrors.
