@@ -34,11 +34,13 @@ for features. Every design decision and its reasoning is recorded in
 | a condition to poll until it holds, bounded by a context | `resilience.RetryUntil` |
 | a lock whose wait has to be cancellable | `async.Mutex`, `async.RWMutex` |
 | fan-out where the result does not matter | `async.ForEachFuncs` |
+| a daemon that should converge to a declared state and stay there | [`teleos`](teleos/) — level-triggered invariant convergence, its own module |
 
 Every package follows the same rules: **nothing waits** except under the
 caller's context; errors are typed and `errors.Is` to sentinels; callbacks
 return normally; instrumentation is a `Hooks` struct the caller supplies,
-not metrics the package keeps.
+not metrics the package keeps. (`teleos` below is its own module with its
+own contract: a status report, not error sentinels.)
 
 ## ownership
 
@@ -516,6 +518,51 @@ because then the primary reads the counter before the hedge exists.
 
 It is a separate module, so the library itself keeps no dependency on
 failsafe-go.
+
+## teleos
+
+[`teleos`](teleos/) is a separate module — own `go.mod`, own tag,
+`teleos/v*` — for a different shape of problem: a long-running process that
+should converge to a declared resting state and stay there. Level-triggered
+invariant convergence: an invariant is a pure function from an observation
+to two facts — is this slice of reality at rest, and if not, what data
+effects would move it toward rest.
+
+```go
+engine := teleos.New(teleos.Config[World, Effect]{
+    Plan:  []teleos.Invariant[World, Effect]{net, mounts, process},
+    Names: []string{"NetworkReady", "MountsReady", "ContainersReady"},
+})
+
+report := engine.Step(observe())   // observe: reality into a struct
+if report.Status == teleos.Frontier {
+    apply(report.Want)             // data effects; then observe again
+}
+```
+
+`Plan` serialises — slice order is dependency order. `Concurrent` runs
+independent stages in one pass. `Chain` is for resources that both acquire
+and release: the acquire sweep runs root to leaf, the release sweep leaf to
+root, so deleting the pod stops the process before the netns it lives in
+disappears — no phase flags, the direction of every pass comes from the
+chain itself.
+
+The engine is what the loop's failure modes meet, and its bounds are
+counted in operations, never time: a per-pass effect cap (a plan that never
+stops emitting is a wedge, and a wedge is never handed to an executor), a
+pass budget, stall detection through a caller-supplied state oracle, and
+A-B-A oscillation detection. Terminal diagnoses are idempotent data, and
+`Reset` is the human's decision. [`converge`](teleos/converge) runs the
+loop on velocity's runtime: wake-driven passes, `Runner` batches with a
+barrier, `dedupe` coalescing, and effects as `opcodes.Instruction` through
+an `opruntime.Table`.
+
+It was evaluated before it was released: perigeos's coordinated-checkpoint
+barrier controller — a hand-rolled four-phase state machine — re-expressed
+as one plan, with its no-outage property asserted structurally
+([`barrier_eval_test.go`](teleos/barrier_eval_test.go)). Full model, engine
+contract, and the honest note about what the closures are:
+[`teleos/README.md`](teleos/README.md).
 
 ## Performance
 
