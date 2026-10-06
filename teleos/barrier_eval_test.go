@@ -84,6 +84,18 @@ type barrierWorld struct {
 	// has closed, and not every member quiesced. The clock read lives in
 	// the watch loop, not in the invariant.
 	quiesceDeadlineMissed bool
+
+	// barrierConvergedHistorically: the barrier stage converged at some
+	// point in the past, as recorded in a PERSISTED fact — the real
+	// controller's status.phase — and not re-derived from volatile state.
+	// The first cut of the real migration missed this and its plan re-armed
+	// restored pods: a real world UN-ARMS (the restore erases the arm and
+	// quiesce annotations when it recreates a member), so an observation
+	// that derives the barrier's convergence from volatile state would
+	// re-open a gap the barrier already closed. Facts have lifetimes;
+	// historical ones must be read from records that survive the effects
+	// erasing the volatile ones.
+	barrierConvergedHistorically bool
 }
 
 // quiesceInvariant is one member's arm-and-hold: arm if not armed, hold (an
@@ -92,7 +104,7 @@ type barrierWorld struct {
 // member reports quiesced.
 func quiesceInvariant(member string) teleos.Invariant[barrierWorld, string] {
 	return func(s barrierWorld) (bool, []string) {
-		if s.quiesced[member] {
+		if s.barrierConvergedHistorically || s.quiesced[member] {
 			return true, nil
 		}
 
@@ -227,6 +239,10 @@ func (h *barrierHost) apply(want []string) {
 			h.world.requested[m] = true
 		} else if m, ok := strings.CutPrefix(eff, "COPY:"); ok {
 			h.world.copied[m] = true
+			// The controller persists phase=Checkpointing on this same
+			// transition: the record that the barrier converged, which
+			// survives the un-arming restores.
+			h.world.barrierConvergedHistorically = true
 		} else if m, ok := strings.CutPrefix(eff, restoreEff); ok {
 			h.world.restored[m] = true
 		}
@@ -402,4 +418,56 @@ func TestBarrierPlanEndToEnd(t *testing.T) {
 	}
 
 	t.Fatal("the barrier never converged in 64 passes")
+}
+
+// TestBarrierPlanDoesNotReArmARestoredWorld pins the finding the real
+// migration hit that this evaluation's first world could not express: a real
+// world UN-ARMS. The restore erases the arm and quiesce annotations when it
+// recreates a member, so an observation that derives the barrier's
+// convergence from volatile state would re-arm restored pods and re-derive
+// the deadline away. The plan reads the barrier's convergence from the
+// persisted fact instead: after the world un-arms, a fully-restored graph is
+// at rest with zero effects.
+func TestBarrierPlanDoesNotReArmARestoredWorld(t *testing.T) {
+	h := newBarrierHost([]string{"alpha", "beta", "gamma"})
+
+	engine, err := teleos.New(teleos.Config[barrierWorld, string]{
+		Plan: barrierStages(h.members),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for range 64 {
+		report := engine.Step(h.observe())
+		if report.Status == teleos.Converged {
+			break
+		}
+
+		if report.Status != teleos.Frontier {
+			t.Fatalf("status = %v mid-barrier", report.Status)
+		}
+
+		h.apply(report.Want)
+	}
+
+	// The un-arm: the restores erased the volatile annotations. Only the
+	// persisted fact survives — and it must be enough. The engine is Reset
+	// first because its terminal Converged is idempotent: without Reset,
+	// the memoized report would answer for a world that changed under it,
+	// and this test would assert nothing.
+	engine.Reset()
+
+	h.world.armed = map[string]bool{}
+	h.world.quiesced = map[string]bool{}
+
+	w := h.world
+	w.barrierConvergedHistorically = true
+
+	for range 8 {
+		report := engine.Step(w)
+		if report.Status != teleos.Converged || report.Want != nil {
+			t.Fatalf("report = (%v, want %v) on an un-armed restored world, want rest with no re-arm", report.Status, report.Want)
+		}
+	}
 }
