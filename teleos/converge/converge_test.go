@@ -26,6 +26,29 @@ type pod struct {
 	wantUnit, unitState string
 }
 
+// anonStagesOp is anonStages for the opcode-flavoured plan.
+func anonStagesOp(invs []teleos.Invariant[pod, opcodes.Instruction]) []teleos.Stage[pod, opcodes.Instruction] {
+	out := make([]teleos.Stage[pod, opcodes.Instruction], len(invs))
+
+	for i, inv := range invs {
+		out[i] = teleos.Stage[pod, opcodes.Instruction]{Check: inv}
+	}
+
+	return out
+}
+
+// anonStages wraps bare invariants as unnamed stages, for tests of loop
+// mechanics that do not care about names.
+func anonStages(invs []teleos.Invariant[pod, string]) []teleos.Stage[pod, string] {
+	out := make([]teleos.Stage[pod, string], len(invs))
+
+	for i, inv := range invs {
+		out[i] = teleos.Stage[pod, string]{Check: inv}
+	}
+
+	return out
+}
+
 // podInvariants is the pod plan as string effects, for the loop tests.
 func podInvariants() []teleos.Invariant[pod, string] {
 	return []teleos.Invariant[pod, string]{
@@ -98,7 +121,7 @@ func (h *podHarness) snapshot() (pod, []string) {
 func TestConvergerRunsToEquilibriumOnOneWake(t *testing.T) {
 	h := &podHarness{world: pod{wantNet: true, wantUnit: "running"}}
 
-	engine, err := teleos.New(teleos.Config[pod, string]{Plan: podInvariants()})
+	engine, err := teleos.New(teleos.Config[pod, string]{Plan: anonStages(podInvariants())})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +228,7 @@ func TestConvergerAppliesOpcodesThroughATable(t *testing.T) {
 	}
 
 	engine, err := teleos.New(teleos.Config[pod, opcodes.Instruction]{
-		Plan:      opPlan,
+		Plan:      anonStagesOp(opPlan),
 		EffectKey: converge.InstructionKey,
 	})
 	if err != nil {
@@ -271,7 +294,7 @@ func TestConvergerObservationFailureIsTransient(t *testing.T) {
 		onError = make(chan error, 1)
 	)
 
-	engine, err := teleos.New(teleos.Config[pod, string]{Plan: podInvariants()})
+	engine, err := teleos.New(teleos.Config[pod, string]{Plan: anonStages(podInvariants())})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -343,11 +366,11 @@ func TestConvergerAppliesInOrderUnderARunner(t *testing.T) {
 	)
 
 	engine, err := teleos.New(teleos.Config[struct{}, string]{
-		Plan: []teleos.Invariant[struct{}, string]{
-			teleos.Rule(
+		Plan: []teleos.Stage[struct{}, string]{
+			{Check: teleos.Rule(
 				func(struct{}) bool { return false },
 				func(struct{}) []string { return []string{"first", "second", "third"} },
-			),
+			)},
 		},
 		MaxPasses: 1,
 	})
@@ -424,7 +447,7 @@ func TestConvergerAppliesInOrderUnderARunner(t *testing.T) {
 }
 
 func TestNewRejectsInvalidConstruction(t *testing.T) {
-	engine, engErr := teleos.New(teleos.Config[pod, string]{Plan: podInvariants()})
+	engine, engErr := teleos.New(teleos.Config[pod, string]{Plan: anonStages(podInvariants())})
 	if engErr != nil {
 		t.Fatal(engErr)
 	}
@@ -473,7 +496,7 @@ func mustGroup(t *testing.T) *dedupe.Group[string, struct{}] {
 func TestConvergerHonorsAWakeSentBeforeRun(t *testing.T) {
 	h := &podHarness{world: pod{wantNet: true, wantUnit: "running"}}
 
-	engine, err := teleos.New(teleos.Config[pod, string]{Plan: podInvariants()})
+	engine, err := teleos.New(teleos.Config[pod, string]{Plan: anonStages(podInvariants())})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -515,7 +538,7 @@ func TestConvergerHonorsAWakeSentBeforeRun(t *testing.T) {
 func TestConvergerCollapsesAwakeStorm(t *testing.T) {
 	h := &podHarness{world: pod{wantNet: true, wantUnit: "running"}}
 
-	engine, err := teleos.New(teleos.Config[pod, string]{Plan: podInvariants()})
+	engine, err := teleos.New(teleos.Config[pod, string]{Plan: anonStages(podInvariants())})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -594,7 +617,7 @@ func TestConvergerCollapsesAwakeStorm(t *testing.T) {
 func TestConvergerEffectFailureIsTransientAndRetriedOnWake(t *testing.T) {
 	h := &podHarness{world: pod{wantNet: true, wantUnit: "running"}}
 
-	engine, err := teleos.New(teleos.Config[pod, string]{Plan: podInvariants()})
+	engine, err := teleos.New(teleos.Config[pod, string]{Plan: anonStages(podInvariants())})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -678,11 +701,11 @@ func TestConvergerStallDiagnosisWaitsForReset(t *testing.T) {
 	h := &podHarness{world: pod{wantUnit: "activating"}}
 
 	engine, err := teleos.New(teleos.Config[pod, string]{
-		Plan: []teleos.Invariant[pod, string]{
-			teleos.Rule(
+		Plan: []teleos.Stage[pod, string]{
+			{Check: teleos.Rule(
 				func(w pod) bool { return w.unitState == "running" },
 				func(pod) []string { return []string{"UNIT_START"} },
-			),
+			)},
 		},
 		EffectKey: func(s string) string { return s },
 		Same: func(a, b pod) bool {
@@ -782,11 +805,11 @@ func TestCoalescerJoinsAcrossLoops(t *testing.T) {
 		t.Helper()
 
 		engine, err := teleos.New(teleos.Config[struct{}, string]{
-			Plan: []teleos.Invariant[struct{}, string]{
-				teleos.Rule(
+			Plan: []teleos.Stage[struct{}, string]{
+				{Check: teleos.Rule(
 					func(struct{}) bool { return false },
 					func(struct{}) []string { return []string{key} },
-				),
+				)},
 			},
 			MaxPasses: 1,
 		})
@@ -882,11 +905,11 @@ func TestRunnerBatchBarriersBeforeTheNextObservation(t *testing.T) {
 	)
 
 	engine, err := teleos.New(teleos.Config[[]string, string]{
-		Plan: []teleos.Invariant[[]string, string]{
-			teleos.Rule(
+		Plan: []teleos.Stage[[]string, string]{
+			{Check: teleos.Rule(
 				func(w []string) bool { return len(applied) == 3 },
 				func([]string) []string { return []string{"a", "b", "c"} },
-			),
+			)},
 		},
 		MaxPasses: 2,
 	})
@@ -988,11 +1011,11 @@ func TestExhaustedHaltsApplicationUntilReset(t *testing.T) {
 	)
 
 	engine, err := teleos.New(teleos.Config[struct{}, string]{
-		Plan: []teleos.Invariant[struct{}, string]{
-			teleos.Rule(
+		Plan: []teleos.Stage[struct{}, string]{
+			{Check: teleos.Rule(
 				func(struct{}) bool { return false },
 				func(struct{}) []string { return []string{"TRY"} },
-			),
+			)},
 		},
 		MaxPasses: 1,
 	})
@@ -1060,7 +1083,7 @@ func TestExhaustedHaltsApplicationUntilReset(t *testing.T) {
 func TestConcurrentWakesAreRaceFree(t *testing.T) {
 	h := &podHarness{world: pod{wantNet: true, wantUnit: "running"}}
 
-	engine, err := teleos.New(teleos.Config[pod, string]{Plan: podInvariants()})
+	engine, err := teleos.New(teleos.Config[pod, string]{Plan: anonStages(podInvariants())})
 	if err != nil {
 		t.Fatal(err)
 	}

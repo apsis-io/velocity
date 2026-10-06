@@ -30,17 +30,21 @@
 // anything stands on it. Concurrent composes without order, for stages that
 // are genuinely independent.
 //
-// Stages can be named, and the report is then a status document: Stage says
-// which stage holds the frontier, and Names[:Frontier] is what has already
-// converged. Kubernetes PodConditions, per-stage metrics, and progress
-// output are projections of that one report.
+// A stage carries its name, and the report is then a status document:
+// Stage says which stage holds the frontier, and the satisfied prefix — the
+// stages before it, in order — is what has already converged. Kubernetes
+// PodConditions, per-stage metrics, and progress output are projections of
+// that one report.
 //
 // The Engine is the pass machine over a plan. It is deliberately inert: it
 // never observes the world, never sleeps, and never spawns. The caller owns
 // the loop:
 //
 //	engine := teleos.New[World, Effect](teleos.Config[World, Effect]{
-//	    Plan: []teleos.Invariant[World, Effect]{netInvariant, unitInvariant},
+//	    Plan: []teleos.Stage[World, Effect]{
+//	        {Name: "NetworkReady", Check: netInvariant},
+//	        {Name: "ContainersReady", Check: unitInvariant},
+//	    },
 //	})
 //	for {
 //	    report := engine.Step(observe()) // observe: reality into S

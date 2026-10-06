@@ -37,7 +37,7 @@ func benchPlan() []Invariant[benchWorld, string] {
 }
 
 func BenchmarkEngineStepConverged(b *testing.B) {
-	engine, err := New(Config[benchWorld, string]{Plan: benchPlan()})
+	engine, err := New(Config[benchWorld, string]{Plan: anonStage(benchPlan())})
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -53,7 +53,7 @@ func BenchmarkEngineStepConverged(b *testing.B) {
 }
 
 func BenchmarkEngineStepOpenFrontier(b *testing.B) {
-	engine, err := New(Config[benchWorld, string]{Plan: benchPlan()})
+	engine, err := New(Config[benchWorld, string]{Plan: anonStage(benchPlan())})
 	if err != nil {
 		b.Fatal(err)
 	}

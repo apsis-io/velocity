@@ -47,3 +47,14 @@ var PodInvariants = []teleos.Invariant[World, string]{
 }
 
 var PodPlan = teleos.Plan(PodInvariants...)
+
+// PodStageNames is the ordered names PodStages carries, for the satisfied-
+// prefix rendering a status endpoint does with Report.Frontier.
+var PodStageNames = []string{"NetworkReady", "ContainersReady"}
+
+// PodStages is the same plan as named stages — the shape an Engine's plan
+// takes, so the report's Stage field says which stage holds the frontier.
+var PodStages = []teleos.Stage[World, string]{
+	{Name: "NetworkReady", Check: PodInvariants[0]},
+	{Name: "ContainersReady", Check: PodInvariants[1]},
+}

@@ -154,12 +154,14 @@ func memberChains(members []string) []teleos.Invariant[barrierWorld, string] {
 	return chains
 }
 
-// barrierStages is the whole controller as two stages: quiesce everyone
-// (the barrier), then every member's copy-then-restore chain runs
+// barrierStages is the whole controller as two named stages: quiesce
+// everyone (the barrier), then every member's copy-then-restore chain runs
 // concurrently — members progress independently, which is the property the
 // controller's own doc comment defends as "concurrent enough across ticks".
 // The barrier is the Plan gate; the concurrency is the Concurrent stage.
-func barrierStages(members []string) []teleos.Invariant[barrierWorld, string] {
+// The names are the controller's phases: Report.Stage renders
+// status.phase from these.
+func barrierStages(members []string) []teleos.Stage[barrierWorld, string] {
 	quiesceStage := teleos.Concurrent(
 		quiesceInvariant(members[0]),
 		quiesceInvariant(members[1]),
@@ -168,7 +170,10 @@ func barrierStages(members []string) []teleos.Invariant[barrierWorld, string] {
 
 	restoreStage := teleos.Concurrent(memberChains(members)...)
 
-	return []teleos.Invariant[barrierWorld, string]{quiesceStage, restoreStage}
+	return []teleos.Stage[barrierWorld, string]{
+		{Name: quiesceStageNm, Check: quiesceStage},
+		{Name: "Restoring", Check: restoreStage},
+	}
 }
 
 // barrierHost is the host model: effects change facts, and the next
@@ -348,8 +353,7 @@ func TestBarrierPlanEndToEnd(t *testing.T) {
 	h := newBarrierHost([]string{"alpha", "beta", "gamma"})
 
 	engine, err := teleos.New(teleos.Config[barrierWorld, string]{
-		Plan:  barrierStages(h.members),
-		Names: []string{quiesceStageNm, "Restoring"},
+		Plan: barrierStages(h.members),
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -57,7 +57,7 @@ func applyString(w *podWorld, eff string) {
 }
 
 func TestEngineConvergesThePodScenarioInThreePasses(t *testing.T) {
-	engine, err := New(Config[podWorld, string]{Plan: podPlan()})
+	engine, err := New(Config[podWorld, string]{Plan: anonStage(podPlan())})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestEngineConvergesThePodScenarioInThreePasses(t *testing.T) {
 }
 
 func TestEngineNamesTheOpenFrontier(t *testing.T) {
-	engine, err := New(Config[podWorld, string]{Plan: podPlan()})
+	engine, err := New(Config[podWorld, string]{Plan: anonStage(podPlan())})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -112,13 +112,27 @@ func TestEngineNamesTheOpenFrontier(t *testing.T) {
 	}
 }
 
+// podStages is podPlan as named stages, in the given order of names — the
+// shape an Engine's plan takes.
+func podStages(names []string) []Stage[podWorld, string] {
+	invs := podPlan()
+
+	out := make([]Stage[podWorld, string], len(invs))
+
+	for i, inv := range invs {
+		out[i] = Stage[podWorld, string]{Name: names[i], Check: inv}
+	}
+
+	return out
+}
+
 func TestEngineExhaustsOnAWedge(t *testing.T) {
 	wedge := Rule(
 		func(testWorld) bool { return false },
 		func(testWorld) []string { return make([]string, 200) },
 	)
 
-	engine, err := New(Config[testWorld, string]{Plan: []Invariant[testWorld, string]{wedge}})
+	engine, err := New(Config[testWorld, string]{Plan: anonStage([]Invariant[testWorld, string]{wedge})})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -140,12 +154,12 @@ func TestEngineReEmittingTheSameEffectIsNotOscillation(t *testing.T) {
 	// re-emits the same effect. That is convergence working, and the engine
 	// must hold the frontier for it, not diagnose a fight.
 	engine, err := New(Config[testWorld, string]{
-		Plan: []Invariant[testWorld, string]{
+		Plan: anonStage([]Invariant[testWorld, string]{
 			Rule(
 				func(w testWorld) bool { return w.unit == "running" },
 				func(testWorld) []string { return []string{"UNIT_START"} },
 			),
-		},
+		}),
 		EffectKey: func(s string) string { return s },
 	})
 	if err != nil {
@@ -169,15 +183,15 @@ func TestEngineReEmittingTheSameEffectIsNotOscillation(t *testing.T) {
 func TestEngineDetectsPingPongAsOscillating(t *testing.T) {
 	// Two invariants that fight: the first wants the world at "a", the
 	// second at "b". Applying either re-opens the other.
-	fight := []Invariant[string, string]{
-		Rule(
+	fight := []Stage[string, string]{
+		{Name: "Lower", Check: Rule(
 			func(s string) bool { return s == "a" },
 			func(string) []string { return []string{"SET_A"} },
-		),
-		Rule(
+		)},
+		{Name: "Upper", Check: Rule(
 			func(s string) bool { return s == "b" },
 			func(string) []string { return []string{"SET_B"} },
-		),
+		)},
 	}
 
 	apply := func(w *string, eff string) {
@@ -219,12 +233,12 @@ func TestEngineDetectsPingPongAsOscillating(t *testing.T) {
 
 func TestEngineStallsWhenNothingMoves(t *testing.T) {
 	engine, err := New(Config[testWorld, string]{
-		Plan: []Invariant[testWorld, string]{
+		Plan: anonStage([]Invariant[testWorld, string]{
 			Rule(
 				func(w testWorld) bool { return w.unit == "running" },
 				func(testWorld) []string { return []string{"UNIT_START"} },
 			),
-		},
+		}),
 		Same: func(a, b testWorld) bool { return a == b },
 	})
 	if err != nil {
@@ -251,12 +265,12 @@ func TestEngineStallsWhenNothingMoves(t *testing.T) {
 
 func TestEngineExhaustsAtThePassBudget(t *testing.T) {
 	engine, err := New(Config[testWorld, string]{
-		Plan: []Invariant[testWorld, string]{
+		Plan: anonStage([]Invariant[testWorld, string]{
 			Rule(
 				func(testWorld) bool { return false },
 				func(testWorld) []string { return []string{"TRY"} },
 			),
-		},
+		}),
 		MaxPasses: 3,
 	})
 	if err != nil {
@@ -277,12 +291,12 @@ func TestEngineExhaustsAtThePassBudget(t *testing.T) {
 
 func TestEngineTerminalReportIsIdempotentAndResetResumes(t *testing.T) {
 	engine, err := New(Config[testWorld, string]{
-		Plan: []Invariant[testWorld, string]{
+		Plan: anonStage([]Invariant[testWorld, string]{
 			Rule(
 				func(testWorld) bool { return false },
 				func(testWorld) []string { return make([]string, 100) },
 			),
-		},
+		}),
 		MaxEffects: 10,
 	})
 	if err != nil {
@@ -317,7 +331,7 @@ func TestNewRejectsAnEmptyPlan(t *testing.T) {
 func TestEngineNamesStagesForIntrospection(t *testing.T) {
 	names := []string{"NetworkReady", "ContainersReady"}
 
-	engine, err := New(Config[podWorld, string]{Plan: podPlan(), Names: names})
+	engine, err := New(Config[podWorld, string]{Plan: podStages(names)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -350,18 +364,18 @@ func TestEngineNamesStagesForIntrospection(t *testing.T) {
 	}
 }
 
-func TestNewRejectsMismatchedStageNames(t *testing.T) {
-	if _, err := New(Config[podWorld, string]{Plan: podPlan(), Names: []string{"only-one"}}); err == nil {
-		t.Fatal("New accepted one name for a two-stage plan")
+func TestNewRejectsNilStageChecks(t *testing.T) {
+	if _, err := New(Config[podWorld, string]{Plan: []Stage[podWorld, string]{{Name: "x"}}}); err == nil {
+		t.Fatal("New accepted a stage with a nil Check")
 	}
 }
 
 func TestNewRejectsNilPlanEntries(t *testing.T) {
 	_, err := New(Config[testWorld, string]{
-		Plan: []Invariant[testWorld, string]{
+		Plan: anonStage([]Invariant[testWorld, string]{
 			Rule(func(testWorld) bool { return true }, func(testWorld) []string { return nil }),
 			nil,
-		},
+		}),
 	})
 	if err == nil {
 		t.Fatal("New accepted a nil invariant — it would panic at the first Step")
@@ -374,7 +388,7 @@ func TestNewRejectsNilPlanEntries(t *testing.T) {
 // budget is what stops it.
 func TestEngineNilEffectKeyDisablesOscillationDetection(t *testing.T) {
 	engine, err := New(Config[string, string]{
-		Plan:      fightPlan(),
+		Plan:      anonStage(fightPlan()),
 		MaxPasses: 6,
 	})
 	if err != nil {
@@ -404,12 +418,12 @@ func TestEngineNilEffectKeyDisablesOscillationDetection(t *testing.T) {
 // diagnosis wins only when the signatures actually alternate.
 func TestEngineStallBeatsOscillationOnAFrozenWorld(t *testing.T) {
 	engine, err := New(Config[testWorld, string]{
-		Plan: []Invariant[testWorld, string]{
+		Plan: anonStage([]Invariant[testWorld, string]{
 			Rule(
 				func(w testWorld) bool { return w.unit == "running" },
 				func(testWorld) []string { return []string{"UNIT_START"} },
 			),
-		},
+		}),
 		EffectKey: func(s string) string { return s },
 		Same:      func(a, b testWorld) bool { return a == b },
 	})
@@ -438,7 +452,7 @@ func TestEngineLongerCyclesAreNotOscillation(t *testing.T) {
 	// A three-state cycle a → b → c → a: no signature is two passes back
 	// until it repeats exactly, which it never does.
 	engine, err := New(Config[string, string]{
-		Plan: []Invariant[string, string]{
+		Plan: anonStage([]Invariant[string, string]{
 			Rule(
 				func(s string) bool { return s == "a" },
 				func(string) []string { return []string{"TO_B"} },
@@ -447,7 +461,7 @@ func TestEngineLongerCyclesAreNotOscillation(t *testing.T) {
 				func(s string) bool { return s == "c" },
 				func(string) []string { return []string{"TO_A"} },
 			),
-		},
+		}),
 		EffectKey: func(s string) string { return s },
 		MaxPasses: 9,
 	})
@@ -488,7 +502,7 @@ func TestEngineWedgeBoundaryIsExactlyAtTheCap(t *testing.T) {
 			func(testWorld) []string { return make([]string, cap_) },
 		)
 
-		engine, err := New(Config[testWorld, string]{Plan: []Invariant[testWorld, string]{exact}, MaxEffects: cap_})
+		engine, err := New(Config[testWorld, string]{Plan: anonStage([]Invariant[testWorld, string]{exact}), MaxEffects: cap_})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -502,7 +516,7 @@ func TestEngineWedgeBoundaryIsExactlyAtTheCap(t *testing.T) {
 			func(testWorld) []string { return make([]string, cap_+1) },
 		)
 
-		engine, err = New(Config[testWorld, string]{Plan: []Invariant[testWorld, string]{over}, MaxEffects: cap_})
+		engine, err = New(Config[testWorld, string]{Plan: anonStage([]Invariant[testWorld, string]{over}), MaxEffects: cap_})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -518,14 +532,13 @@ func TestEngineWedgeBoundaryIsExactlyAtTheCap(t *testing.T) {
 // counting indices.
 func TestEngineWedgeNamesItsStage(t *testing.T) {
 	engine, err := New(Config[testWorld, string]{
-		Plan: []Invariant[testWorld, string]{
-			Rule(func(w testWorld) bool { return w.net }, func(testWorld) []string { return nil }),
-			Rule(
+		Plan: []Stage[testWorld, string]{
+			{Name: "NetworkReady", Check: Rule(func(w testWorld) bool { return w.net }, func(testWorld) []string { return nil })},
+			{Name: "UnitReady", Check: Rule(
 				func(testWorld) bool { return false },
 				func(testWorld) []string { return make([]string, 99) },
-			),
+			)},
 		},
-		Names: []string{"NetworkReady", "UnitReady"},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -539,14 +552,13 @@ func TestEngineWedgeNamesItsStage(t *testing.T) {
 
 func TestEngineStallReportNamesItsStage(t *testing.T) {
 	engine, err := New(Config[testWorld, string]{
-		Plan: []Invariant[testWorld, string]{
-			Rule(
+		Plan: []Stage[testWorld, string]{
+			{Name: "UnitReady", Check: Rule(
 				func(w testWorld) bool { return w.unit == "running" },
 				func(testWorld) []string { return []string{"UNIT_START"} },
-			),
+			)},
 		},
-		Names: []string{"UnitReady"},
-		Same:  func(a, b testWorld) bool { return a == b },
+		Same: func(a, b testWorld) bool { return a == b },
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -564,12 +576,12 @@ func TestEngineStallReportNamesItsStage(t *testing.T) {
 
 func TestEngineResetFromStalledResumes(t *testing.T) {
 	engine, err := New(Config[testWorld, string]{
-		Plan: []Invariant[testWorld, string]{
+		Plan: anonStage([]Invariant[testWorld, string]{
 			Rule(
 				func(w testWorld) bool { return w.unit == "running" },
 				func(testWorld) []string { return []string{"UNIT_START"} },
 			),
-		},
+		}),
 		EffectKey: func(s string) string { return s },
 		Same:      func(a, b testWorld) bool { return a == b },
 	})
@@ -594,7 +606,7 @@ func TestEngineResetFromStalledResumes(t *testing.T) {
 }
 
 func TestEngineEffectsCounterAccumulates(t *testing.T) {
-	engine, err := New(Config[podWorld, string]{Plan: podPlan()})
+	engine, err := New(Config[podWorld, string]{Plan: anonStage(podPlan())})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -617,6 +629,18 @@ func TestEngineEffectsCounterAccumulates(t *testing.T) {
 	}
 }
 
+// anonStage wraps bare invariants as anonymous stages, for tests of engine
+// mechanics that do not care about names.
+func anonStage[T any, E any](invs []Invariant[T, E]) []Stage[T, E] {
+	out := make([]Stage[T, E], len(invs))
+
+	for i, inv := range invs {
+		out[i] = Stage[T, E]{Check: inv}
+	}
+
+	return out
+}
+
 // fightPlan is the two-invariant ping-pong: a wants the world at "a", the
 // other at "b".
 func fightPlan() []Invariant[string, string] {
@@ -634,7 +658,7 @@ func fightPlan() []Invariant[string, string] {
 
 func TestEngineResetFromOscillatingResumes(t *testing.T) {
 	engine, err := New(Config[string, string]{
-		Plan:      fightPlan(),
+		Plan:      anonStage(fightPlan()),
 		EffectKey: func(s string) string { return s },
 	})
 	if err != nil {
@@ -670,8 +694,16 @@ func TestEngineResetFromOscillatingResumes(t *testing.T) {
 
 func TestEngineOscillatingReportNamesItsStage(t *testing.T) {
 	engine, err := New(Config[string, string]{
-		Plan:      fightPlan(),
-		Names:     []string{"LowerHalf", "UpperHalf"},
+		Plan: []Stage[string, string]{
+			{Name: "LowerHalf", Check: Rule(
+				func(s string) bool { return s == "a" },
+				func(string) []string { return []string{"SET_A"} },
+			)},
+			{Name: "UpperHalf", Check: Rule(
+				func(s string) bool { return s == "b" },
+				func(string) []string { return []string{"SET_B"} },
+			)},
+		},
 		EffectKey: func(s string) string { return s },
 	})
 	if err != nil {
@@ -704,12 +736,12 @@ func TestEngineNegativeConfigFallsBackToDefaults(t *testing.T) {
 	// A wedge of 200 effects trips the default 64 cap under negative
 	// configuration, proving the fallback rather than the literal.
 	engine, err := New(Config[testWorld, string]{
-		Plan: []Invariant[testWorld, string]{
+		Plan: anonStage([]Invariant[testWorld, string]{
 			Rule(
 				func(testWorld) bool { return false },
 				func(testWorld) []string { return make([]string, 200) },
 			),
-		},
+		}),
 		MaxEffects: -5,
 		MaxPasses:  -5,
 	})

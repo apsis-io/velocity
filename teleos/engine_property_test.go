@@ -37,21 +37,22 @@ func TestEnginePropertyHaltsEffectsOnlyOnFrontierAndTerminalStaysTerminal(t *tes
 	for iter := range 300 {
 		iter := iter
 
-		// A random plan: one to four rules over distinct bits.
+		// A random plan: one to four rules over distinct bits, each a
+		// named stage.
 		n := 1 + rng.Intn(4)
 
-		plan := make([]Invariant[propWorld, string], n)
-		names := make([]string, n)
+		plan := make([]Stage[propWorld, string], n)
 
 		for i := range plan {
 			bit := i
 
-			plan[i] = Rule(
-				func(w propWorld) bool { return w.bits[bit] },
-				func(propWorld) []string { return []string{string(rune('a' + bit))} },
-			)
-
-			names[i] = string(rune('A' + i))
+			plan[i] = Stage[propWorld, string]{
+				Name: string(rune('A' + i)),
+				Check: Rule(
+					func(w propWorld) bool { return w.bits[bit] },
+					func(propWorld) []string { return []string{string(rune('a' + bit))} },
+				),
+			}
 		}
 
 		// Sabotage: some iterations mis-apply effects, some run without the
@@ -61,7 +62,6 @@ func TestEnginePropertyHaltsEffectsOnlyOnFrontierAndTerminalStaysTerminal(t *tes
 
 		engine, err := New(Config[propWorld, string]{
 			Plan:      plan,
-			Names:     names,
 			EffectKey: func(s string) string { return s },
 			MaxPasses: 24,
 			Same: func(a, b propWorld) bool {

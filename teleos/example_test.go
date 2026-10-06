@@ -12,7 +12,7 @@ import (
 // An empty host, wanting a running workload, driven by the engine until it
 // rests.
 func Example_podConvergence() {
-	engine, err := teleos.New(teleos.Config[World, string]{Plan: PodInvariants})
+	engine, err := teleos.New(teleos.Config[World, string]{Plan: PodStages})
 	if err != nil {
 		panic(err)
 	}
@@ -50,12 +50,7 @@ func Example_podConvergence() {
 // stage holds the frontier, and the satisfied prefix is what a readiness
 // endpoint renders — Kubernetes PodConditions are a projection of this.
 func ExampleEngine() {
-	names := []string{"NetworkReady", "ContainersReady"}
-
-	engine, err := teleos.New(teleos.Config[World, string]{
-		Plan:  PodInvariants,
-		Names: names,
-	})
+	engine, err := teleos.New(teleos.Config[World, string]{Plan: PodStages})
 	if err != nil {
 		panic(err)
 	}
@@ -72,7 +67,7 @@ func ExampleEngine() {
 			return
 		case teleos.Frontier:
 			fmt.Printf("frontier at %s (done: %v); emitting %v\n",
-				report.Stage, names[:report.Frontier], report.Want)
+				report.Stage, PodStageNames[:report.Frontier], report.Want)
 
 			for _, eff := range report.Want {
 				if eff == "NETNS_CREATE" {

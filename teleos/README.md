@@ -41,8 +41,11 @@ Name the stages and the report becomes a status document:
 
 ```go
 engine := teleos.New(teleos.Config[World, Effect]{
-    Plan:  []teleos.Invariant[World, Effect]{net, mounts, process},
-    Names: []string{"NetworkReady", "MountsReady", "ContainersReady"},
+    Plan: []teleos.Stage[World, Effect]{
+        {Name: "NetworkReady", Check: net},
+        {Name: "MountsReady", Check: mounts},
+        {Name: "ContainersReady", Check: process},
+    },
 })
 
 // report.Stage == "MountsReady", report.Frontier == 1, and
@@ -75,7 +78,7 @@ pass and the daemon:
 | --- | --- |
 | `Status` | `Converged`, `Frontier` (working — apply `Want`), `Stalled`, `Oscillating`, `Exhausted` |
 | `Frontier` | index of the unsatisfied stage; `-1` at convergence |
-| `Stage` | the stage's name, when `Config.Names` is set |
+| `Stage` | the stage's own name, from the plan |
 | `Want` | the effects to apply now; nil for every status but `Frontier` |
 | `Passes`, `Effects` | running totals since construction or `Reset` |
 

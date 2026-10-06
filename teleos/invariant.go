@@ -74,6 +74,20 @@ func Align[S, E any, T comparable](
 	}
 }
 
+// Stage is one named entry in an Engine's plan: the name the report
+// carries while this invariant holds the frontier, and the invariant
+// itself. Plan and Concurrent compose bare invariants for pure evaluation;
+// an Engine's plan is stages, because a frontier without a name is an
+// index a human has to resolve against the source.
+//
+// An empty Name is an anonymous stage: the report's Stage field is empty
+// there, exactly as if the stage had no name to give. A Stage with a nil
+// Check is rejected at Engine construction.
+type Stage[S, E any] struct {
+	Name  string
+	Check Invariant[S, E]
+}
+
 // Concurrent composes invariants without order: every child is evaluated,
 // every unsatisfied child's effects are aggregated in child order, and the
 // composition is done only when all children are done.

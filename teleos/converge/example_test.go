@@ -51,8 +51,8 @@ func Example() {
 	h := &demoHost{wanted: true, firstApply: make(chan struct{})}
 
 	engine, err := teleos.New(teleos.Config[demoState, string]{
-		Plan: []teleos.Invariant[demoState, string]{
-			teleos.Align(
+		Plan: []teleos.Stage[demoState, string]{
+			{Check: teleos.Align(
 				func(s demoState) bool { return s.wanted },
 				func(s demoState) bool { return s.running },
 				func(target bool, _ demoState) string {
@@ -62,7 +62,7 @@ func Example() {
 
 					return "STOP_SERVICE"
 				},
-			),
+			)},
 		},
 	})
 	if err != nil {

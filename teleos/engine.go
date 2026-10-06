@@ -94,17 +94,10 @@ const (
 // EffectKey names an effect's identity for the oscillation signature; two
 // effects with the same key are the same effect re-emitted.
 type Config[S, E any] struct {
-	// Plan is the ordered invariant list. Slice order is dependency order.
-	Plan []Invariant[S, E]
-
-	// Names names the plan's stages, in order, for introspection: a
-	// converged-but-silent system says which stage holds the frontier
-	// (Report.Stage), and the satisfied prefix — Names[:Report.Frontier] —
-	// is the readiness conditions a status endpoint renders, Kubernetes
-	// PodConditions style. Empty means the stages are anonymous and the
-	// frontier is an index only. When non-empty its length must equal
-	// Plan's.
-	Names []string
+	// Plan is the ordered stage list. Slice order is dependency order, and
+	// each stage's Name is what the report's Stage field renders while
+	// that stage holds the frontier — an empty Name is an anonymous stage.
+	Plan []Stage[S, E]
 
 	// MaxEffects bounds one pass's want. Default 64.
 	MaxEffects int
@@ -156,13 +149,9 @@ func New[S, E any](cfg Config[S, E]) (*Engine[S, E], error) {
 		return nil, fmt.Errorf("teleos: plan is empty — an engine with no invariants has nothing to converge")
 	}
 
-	if len(cfg.Names) != 0 && len(cfg.Names) != len(cfg.Plan) {
-		return nil, fmt.Errorf("teleos: %d stage names for a plan of %d invariants — name every stage or none", len(cfg.Names), len(cfg.Plan))
-	}
-
-	for i, inv := range cfg.Plan {
-		if inv == nil {
-			return nil, fmt.Errorf("teleos: plan entry %d is nil — a nil invariant would panic at the first Step", i)
+	for i := range cfg.Plan {
+		if cfg.Plan[i].Check == nil {
+			return nil, fmt.Errorf("teleos: plan entry %d (%q) has a nil Check — a nil invariant would panic at the first Step", i, cfg.Plan[i].Name)
 		}
 	}
 
@@ -211,8 +200,8 @@ func (e *Engine[S, E]) Step(state S) Report[S, E] {
 
 	var want []E
 
-	for i, inv := range e.cfg.Plan {
-		done, w := inv(state)
+	for i := range e.cfg.Plan {
+		done, w := e.cfg.Plan[i].Check(state)
 		if !done {
 			frontier, want = i, w
 
@@ -297,14 +286,14 @@ func (e *Engine[S, E]) Step(state S) Report[S, E] {
 	}
 }
 
-// stageName is the named stage at a frontier, or empty when the plan's
-// stages are anonymous.
+// stageName is the named stage at a frontier, or empty when the stage is
+// anonymous or the plan has converged.
 func (e *Engine[S, E]) stageName(frontier int) string {
-	if len(e.cfg.Names) == 0 || frontier < 0 || frontier >= len(e.cfg.Names) {
+	if frontier < 0 || frontier >= len(e.cfg.Plan) {
 		return ""
 	}
 
-	return e.cfg.Names[frontier]
+	return e.cfg.Plan[frontier].Name
 }
 
 // Reset clears a terminal diagnosis and returns the engine to pass zero. Use
