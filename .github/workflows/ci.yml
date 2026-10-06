@@ -3,7 +3,13 @@ name: CI
 on:
   push:
     branches: [main]
-    tags: ['v*']
+    # Every module here is released by its own prefixed tag; the library's
+    # 'v*' matches none of the others, and a nested-module tag that CI ignores
+    # is how the analysis module went unreleased across every library release
+    # after v0.4.0 before a consumer noticed. See docs/decisions.md, "The
+    # analysis module went unreleased for every library release after
+    # v0.4.0".
+    tags: ['v*', 'analysis/v*', 'failsafeown/v*', 'benchmarks/v*']
   pull_request:
   workflow_dispatch:
 
