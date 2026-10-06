@@ -27,6 +27,12 @@ type Resource[S, E any] struct {
 //     stops the process before the netns it lives in disappears, with no
 //     mode switch and no human telling the plan which direction it is going.
 //
+// That order is a property the chain owns. Before it, an ordering like this
+// was enforced by a source grep — a test asserting the positional
+// relationship of two call sites. Sweep direction is stronger: the mutation
+// that breaks the order emits its violation against a live dependency, and
+// the behavioral test names what happened.
+//
 // A link that exists but is not at rest is treated as a release too: an
 // in-place change to a foundation preempts building downstream on it, which
 // is the conservative reading of "the foundation is moving".
