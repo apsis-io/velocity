@@ -20,8 +20,20 @@
 // Plan composes invariants in slice order and halts at the first unsatisfied
 // one — the convergence frontier. Slice order is dependency order: a later
 // invariant is neither evaluated nor satisfied while an earlier one stands
-// open, so creation, verification, repair, and teardown are one list read the
-// same way every pass.
+// open, so a later stage never acts on an unready foundation. Teardown is the
+// exception that proves the order — it is the topological inverse of
+// bringup — and it needs no phase flag: Chain composes resources whose links
+// acquire root to leaf and release leaf to root, deriving the direction of
+// every pass from the chain itself. A forward sweep over the bringup list
+// during teardown deletes the netns the process still lives in; the chain
+// stops the process first, because a link may not remove itself while
+// anything stands on it. Concurrent composes without order, for stages that
+// are genuinely independent.
+//
+// Stages can be named, and the report is then a status document: Stage says
+// which stage holds the frontier, and Names[:Frontier] is what has already
+// converged. Kubernetes PodConditions, per-stage metrics, and progress
+// output are projections of that one report.
 //
 // The Engine is the pass machine over a plan. It is deliberately inert: it
 // never observes the world, never sleeps, and never spawns. The caller owns
@@ -41,18 +53,26 @@
 // Three obligations make the contract work, and none of them live in this
 // package:
 //
-//   - Effects re-emit while done is false. Reality may take many passes to
-//     catch up — a unit that is activating, a mount that is settling — so the
-//     executor either applies an effect idempotently or coalesces identical
-//     in-flight effects by key. velocity's dedupe.Group keyed on the effect
-//     identity is the coalescing shape.
+//   - Transit is observed, not modeled. The engine is amnesiac on purpose: it
+//     cannot tell "broken" from "in flight", and a third atom state would
+//     reintroduce memory through the back door and break the property that
+//     crash recovery is the same evaluation as steady state. So S carries
+//     transit — a unit that is activating, a job queued to systemd, a mount
+//     still settling — and effects that move slowly REQUIRE the executor to
+//     coalesce identical in-flight effects by key (velocity's dedupe.Group)
+//     or be idempotent. Whether the system reports Pending or broken is the
+//     daemon's projection of S, not an engine status.
 //   - Observation cadence belongs to the daemon. A poll period or a watch
 //     wakeup is the caller's decision; nothing here measures time, because a
 //     budget that counted seconds would put a clock back into a clock-free
 //     model. Every bound the engine enforces is counted in operations.
 //   - An effect that fails is re-derived by the next pass, not retried by this
-//     one. The engine's budgets — per-pass effect cap, pass cap, stall and
-//     oscillation detection — are what turn an infinite re-emit into a
-//     diagnosed terminal status the daemon can log, alarm on, and Reset past
-//     once a human has intervened.
+//     one, and the failure path is already a circuit breaker — its unit is
+//     wakes and passes, not milliseconds. One failing effect ends the pass
+//     (converge waits for the next wake rather than spinning), the engine's
+//     pass budget caps total attempts at MaxPasses, and Exhausted then halts
+//     every emission until a human Resets. The stuck frontier is named, and
+//     converge's OnError carried each failure on the way. Cost is bounded at
+//     MaxPasses attempts, worst case, then silence — with no clock needed to
+//     make it so.
 package teleos

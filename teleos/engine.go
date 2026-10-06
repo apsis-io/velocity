@@ -63,6 +63,12 @@ type Report[S, E any] struct {
 	// when converged.
 	Frontier int
 
+	// Stage is the name of the unsatisfied invariant, when Config.Names is
+	// set; empty otherwise and at convergence. While the frontier is open,
+	// Names[:Frontier] is what has already converged; at convergence
+	// (Frontier -1) every stage is.
+	Stage string
+
 	// Want holds the effects to apply. It is nil for every status except
 	// Frontier.
 	Want []E
@@ -90,6 +96,15 @@ const (
 type Config[S, E any] struct {
 	// Plan is the ordered invariant list. Slice order is dependency order.
 	Plan []Invariant[S, E]
+
+	// Names names the plan's stages, in order, for introspection: a
+	// converged-but-silent system says which stage holds the frontier
+	// (Report.Stage), and the satisfied prefix — Names[:Report.Frontier] —
+	// is the readiness conditions a status endpoint renders, Kubernetes
+	// PodConditions style. Empty means the stages are anonymous and the
+	// frontier is an index only. When non-empty its length must equal
+	// Plan's.
+	Names []string
 
 	// MaxEffects bounds one pass's want. Default 64.
 	MaxEffects int
@@ -139,6 +154,10 @@ type Engine[S, E any] struct {
 func New[S, E any](cfg Config[S, E]) (*Engine[S, E], error) {
 	if len(cfg.Plan) == 0 {
 		return nil, fmt.Errorf("teleos: plan is empty — an engine with no invariants has nothing to converge")
+	}
+
+	if len(cfg.Names) != 0 && len(cfg.Names) != len(cfg.Plan) {
+		return nil, fmt.Errorf("teleos: %d stage names for a plan of %d invariants — name every stage or none", len(cfg.Names), len(cfg.Plan))
 	}
 
 	e := &Engine[S, E]{cfg: cfg, lastFront: -1}
@@ -265,10 +284,21 @@ func (e *Engine[S, E]) Step(state S) Report[S, E] {
 	return Report[S, E]{
 		Status:   Frontier,
 		Frontier: frontier,
+		Stage:    e.stageName(frontier),
 		Want:     want,
 		Passes:   e.passes,
 		Effects:  e.effects,
 	}
+}
+
+// stageName is the named stage at a frontier, or empty when the plan's
+// stages are anonymous.
+func (e *Engine[S, E]) stageName(frontier int) string {
+	if len(e.cfg.Names) == 0 || frontier < 0 || frontier >= len(e.cfg.Names) {
+		return ""
+	}
+
+	return e.cfg.Names[frontier]
 }
 
 // Reset clears a terminal diagnosis and returns the engine to pass zero. Use

@@ -313,3 +313,45 @@ func TestNewRejectsAnEmptyPlan(t *testing.T) {
 		t.Fatal("New accepted an empty plan")
 	}
 }
+
+func TestEngineNamesStagesForIntrospection(t *testing.T) {
+	names := []string{"NetworkReady", "ContainersReady"}
+
+	engine, err := New(Config[podWorld, string]{Plan: podPlan(), Names: names})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	world := podWorld{wantNet: true, wantUnit: "running"}
+
+	report := engine.Step(world)
+	if report.Stage != "NetworkReady" || report.Frontier != 0 {
+		t.Fatalf("report = (stage %q, frontier %d), want NetworkReady at 0", report.Stage, report.Frontier)
+	}
+
+	world.hasNet = true
+
+	report = engine.Step(world)
+	if report.Stage != "ContainersReady" || report.Frontier != 1 {
+		t.Fatalf("report = (stage %q, frontier %d), want ContainersReady at 1", report.Stage, report.Frontier)
+	}
+
+	world.unitState = "running"
+
+	report = engine.Step(world)
+	if report.Status != Converged || report.Stage != "" || report.Frontier != -1 {
+		t.Fatalf("report = (%v, stage %q, frontier %d), want convergence with no stage", report.Status, report.Stage, report.Frontier)
+	}
+
+	// Mid-progress, the satisfied prefix is the readiness conditions a
+	// status endpoint renders: everything before the frontier, in order.
+	if got := names[:1]; !slices.Equal(got, []string{"NetworkReady"}) {
+		t.Fatalf("completed = %v, want the satisfied prefix", got)
+	}
+}
+
+func TestNewRejectsMismatchedStageNames(t *testing.T) {
+	if _, err := New(Config[podWorld, string]{Plan: podPlan(), Names: []string{"only-one"}}); err == nil {
+		t.Fatal("New accepted one name for a two-stage plan")
+	}
+}

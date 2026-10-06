@@ -73,3 +73,41 @@ func Align[S, E any, T comparable](
 		return false, []E{restore(target, s)}
 	}
 }
+
+// Concurrent composes invariants without order: every child is evaluated,
+// every unsatisfied child's effects are aggregated in child order, and the
+// composition is done only when all children are done.
+//
+// Plan serialises and Concurrent parallelises; a real dependency graph is
+// both. Stages that must wait for each other go in a Plan, stages that are
+// genuinely independent go in a Concurrent, and the two nest:
+//
+//	teleos.Plan(
+//	    teleos.Concurrent(pullImages, createNetNS, formatVolumes),
+//	    startContainers,
+//	)
+//
+// The aggregated want is one pass's effects, so a wide fan-out counts against
+// the engine's per-pass effect cap — set MaxEffects to the width of the
+// widest stage. The executor bounds how the batch runs (velocity's Runner
+// takes it as one concurrent, barriered application); the next observation
+// happens after the batch resolves, which is what keeps a pass's answer
+// whole.
+func Concurrent[S, E any](invariants ...Invariant[S, E]) Invariant[S, E] {
+	return func(state S) (bool, []E) {
+		done := true
+
+		var want []E
+
+		for _, inv := range invariants {
+			d, w := inv(state)
+			if !d {
+				done = false
+
+				want = append(want, w...)
+			}
+		}
+
+		return done, want
+	}
+}

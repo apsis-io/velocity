@@ -27,6 +27,38 @@ passes. From that one shape, three properties fall out for free:
 - **The core tests in nanoseconds.** `(done, want)` asserted against a
   struct — nothing mocked, nothing slept.
 
+Composition covers the three real shapes of a dependency graph. `Plan`
+serialises — slice order is dependency order. `Concurrent` runs independent
+stages in one pass, aggregating their effects into a single batch. `Chain`
+is for resources that both acquire and release — a netns under a mount under
+a process: the acquire sweep runs root to leaf, the release sweep runs leaf
+to root, and the direction of every pass comes from the chain itself. There
+is no phase flag: deleting the pod stops the process before the netns it
+lives in disappears because nothing may remove itself while something stands
+on it — a structural truth, not a mode.
+
+Name the stages and the report becomes a status document:
+
+```go
+engine := teleos.New(teleos.Config[World, Effect]{
+    Plan:  []teleos.Invariant[World, Effect]{net, mounts, process},
+    Names: []string{"NetworkReady", "MountsReady", "ContainersReady"},
+})
+
+// report.Stage == "MountsReady", report.Frontier == 1, and
+// names[:report.Frontier] is what already converged — PodConditions,
+// per-stage metrics, and progress bars are projections of one report.
+```
+
+An honest note on what this library is: the invariants are closures over
+`if` statements, and a single pure `func Decide(w World) []Effect` with the
+ifs written by hand is just as pure and just as testable. What the ifs do
+not give you — what no hand-rolled decide function gives you — is the
+machine around them: budgets that bound a broken loop in operations, stall
+and oscillation diagnoses with the stuck stage named, and a plan structure
+that reports its own progress. If you do not need those, write the ifs. If
+your daemon needs them, they are this.
+
 The [engine](doc.go) is the interesting part: a pure pass machine that bounds
 the loop's failure modes in operations, never in time — a per-pass effect cap
 (a plan that never stops emitting is a wedge, and a wedge is never handed to

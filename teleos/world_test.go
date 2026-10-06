@@ -16,10 +16,11 @@ type World struct {
 }
 
 // PodInvariants is the declarative convergence plan: net first, unit second —
-// slice order is dependency order, and neither creation, verification,
-// repair, nor teardown gets its own code path. The engine consumes the slice
-// (it reports which one is open); PodPlan composes the same list for plain
-// evaluation without an engine.
+// slice order is dependency order, so creation, verification, and repair are
+// one list read the same way every pass. Teardown is not: it is the
+// topological inverse of bringup, which is what Lifecycle with Reverse is
+// for. The engine consumes the slice (it reports which one is open); PodPlan
+// composes the same list for plain evaluation without an engine.
 var PodInvariants = []teleos.Invariant[World, string]{
 	teleos.Align(
 		func(w World) bool { return w.WantNet },
