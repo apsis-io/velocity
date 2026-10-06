@@ -1,0 +1,4 @@
+github.com/apsis-io/velocity v0.8.2 h1:pWlNSPeWaHmDx12UF+O1EkDPiyDNfK7pWLdOjMMJz2o=
+github.com/apsis-io/velocity v0.8.2/go.mod h1:mMz9+7Upn8PemmDzTTTCITsXHjuO+XjcAgXMxkMb7ng=
+github.com/puzpuzpuz/xsync/v4 v4.5.0 h1:vOSWu6b57/emh+L/Cw0BeQfvxa/cogFywXHeGUxQxAg=
+github.com/puzpuzpuz/xsync/v4 v4.5.0/go.mod h1:VJDmTCJMBt8igNxnkQd86r+8KUeN1quSfNKu5bLYFQo=

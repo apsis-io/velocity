@@ -6,6 +6,7 @@ fmt:
 vet:
     go vet ./...
     go -C failsafeown vet ./...
+    go -C teleos vet ./...
     staticcheck ./...
 
 # Whitespace style, through golangci-lint's bundled wsl_v5. See .golangci.yml:
@@ -23,6 +24,7 @@ wsl:
     (cd failsafeown && golangci-lint run ./...)
     (cd analysis && golangci-lint run ./...)
     (cd benchmarks && golangci-lint run ./...)
+    (cd teleos && golangci-lint run ./...)
 
 # Apply the rules rather than report them. Mechanical, and reviewed as its own
 # commit.
@@ -31,6 +33,7 @@ wsl-fix:
     (cd failsafeown && golangci-lint run --fix ./...)
     (cd analysis && golangci-lint run --fix ./...)
     (cd benchmarks && golangci-lint run --fix ./...)
+    (cd teleos && golangci-lint run --fix ./...)
 
 # Run velocity's own analyzers (lostrelease) as a vet tool over every module.
 lint:
@@ -43,6 +46,7 @@ lint:
 test:
     go test ./...
     go -C failsafeown test ./...
+    go -C teleos test ./...
 
 race:
     go test -race ./...

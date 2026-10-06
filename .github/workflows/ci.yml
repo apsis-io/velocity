@@ -9,7 +9,7 @@ on:
     # after v0.4.0 before a consumer noticed. See docs/decisions.md, "The
     # analysis module went unreleased for every library release after
     # v0.4.0".
-    tags: ['v*', 'analysis/v*', 'failsafeown/v*', 'benchmarks/v*']
+    tags: ['v*', 'analysis/v*', 'failsafeown/v*', 'benchmarks/v*', 'teleos/v*']
   pull_request:
   workflow_dispatch:
 
@@ -37,6 +37,7 @@ jobs:
             analysis/go.sum
             benchmarks/go.sum
             failsafeown/go.sum
+            teleos/go.sum
 
       - name: gofmt
         run: |
@@ -51,6 +52,7 @@ jobs:
           go -C analysis vet ./...
           go -C benchmarks vet ./...
           go -C failsafeown vet ./...
+          go -C teleos vet ./...
 
       - name: staticcheck
         uses: dominikh/staticcheck-action@v1
@@ -75,6 +77,7 @@ jobs:
           (cd failsafeown && golangci-lint run ./...)
           (cd analysis && golangci-lint run ./...)
           (cd benchmarks && golangci-lint run ./...)
+          (cd teleos && golangci-lint run ./...)
 
       # velocity's own analyzer, over both modules that use the library.
       - name: lostrelease
@@ -89,6 +92,7 @@ jobs:
           go test ./...
           go -C analysis test ./...
           go -C failsafeown test ./...
+          go -C teleos test ./...
 
       - name: test -race
         run: |
@@ -103,6 +107,15 @@ jobs:
           go -C failsafeown mod edit -replace github.com/apsis-io/velocity=..
           go -C failsafeown test ./...
           git -C failsafeown checkout go.mod
+
+      # teleos pins a released velocity for the same reason failsafeown does;
+      # a working-tree change to async or dedupe that breaks it cannot be
+      # caught by its own tests against the pin.
+      - name: teleos against the working tree
+        run: |
+          go -C teleos mod edit -replace github.com/apsis-io/velocity=..
+          go -C teleos test ./...
+          git -C teleos checkout go.mod
 
       # Leak diagnostics for advanced borrows only compile under this tag.
       - name: test -tags=velocitydebug
