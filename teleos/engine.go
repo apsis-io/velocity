@@ -160,6 +160,12 @@ func New[S, E any](cfg Config[S, E]) (*Engine[S, E], error) {
 		return nil, fmt.Errorf("teleos: %d stage names for a plan of %d invariants — name every stage or none", len(cfg.Names), len(cfg.Plan))
 	}
 
+	for i, inv := range cfg.Plan {
+		if inv == nil {
+			return nil, fmt.Errorf("teleos: plan entry %d is nil — a nil invariant would panic at the first Step", i)
+		}
+	}
+
 	e := &Engine[S, E]{cfg: cfg, lastFront: -1}
 	e.maxEffects = cfg.MaxEffects
 
@@ -319,8 +325,14 @@ func (e *Engine[S, E]) Reset() {
 	e.terminal = nil
 }
 
-// halt freezes the engine on a terminal report and returns it.
+// halt freezes the engine on a terminal report and returns it. A diagnosis
+// that names a frontier names its stage too — an Exhausted or Stalled report
+// with an unnamed stage would send the reader counting indices.
 func (e *Engine[S, E]) halt(r Report[S, E]) Report[S, E] {
+	if r.Frontier >= 0 {
+		r.Stage = e.stageName(r.Frontier)
+	}
+
 	e.terminal = &r
 
 	return r

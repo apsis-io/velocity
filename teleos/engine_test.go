@@ -355,3 +355,279 @@ func TestNewRejectsMismatchedStageNames(t *testing.T) {
 		t.Fatal("New accepted one name for a two-stage plan")
 	}
 }
+
+func TestNewRejectsNilPlanEntries(t *testing.T) {
+	_, err := New(Config[testWorld, string]{
+		Plan: []Invariant[testWorld, string]{
+			Rule(func(testWorld) bool { return true }, func(testWorld) []string { return nil }),
+			nil,
+		},
+	})
+	if err == nil {
+		t.Fatal("New accepted a nil invariant — it would panic at the first Step")
+	}
+}
+
+// TestEngineNilEffectKeyDisablesOscillationDetection pins the documented
+// boundary: without an EffectKey the engine cannot tell one effect from
+// another, so it never cries oscillation — even on a genuine fight. The
+// budget is what stops it.
+func TestEngineNilEffectKeyDisablesOscillationDetection(t *testing.T) {
+	engine, err := New(Config[string, string]{
+		Plan:      fightPlan(),
+		MaxPasses: 6,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	world := "a"
+
+	for range 6 {
+		report := engine.Step(world)
+		if report.Status == Oscillating {
+			t.Fatal("oscillation diagnosed without an EffectKey to detect it with")
+		}
+
+		if report.Status == Frontier {
+			if report.Want[0] == "SET_A" {
+				world = "a"
+			} else {
+				world = "b"
+			}
+		}
+	}
+}
+
+// TestEngineStallBeatsOscillationOnAFrozenWorld: a world that does not move
+// with the same effect re-emitted is a stall, not a fight — the sharper
+// diagnosis wins only when the signatures actually alternate.
+func TestEngineStallBeatsOscillationOnAFrozenWorld(t *testing.T) {
+	engine, err := New(Config[testWorld, string]{
+		Plan: []Invariant[testWorld, string]{
+			Rule(
+				func(w testWorld) bool { return w.unit == "running" },
+				func(testWorld) []string { return []string{"UNIT_START"} },
+			),
+		},
+		EffectKey: func(s string) string { return s },
+		Same:      func(a, b testWorld) bool { return a == b },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	frozen := testWorld{unit: "activating"}
+
+	var last Report[testWorld, string]
+
+	for range 3 {
+		last = engine.Step(frozen)
+	}
+
+	if last.Status != Stalled {
+		t.Fatalf("status = %v, want stalled — the world never moved", last.Status)
+	}
+}
+
+// TestEngineLongerCyclesAreNotOscillation pins the documented bound: the
+// detector is a two-slot ring, so A-B-B-A slips past it and the pass budget
+// is what ends the run. If the ring ever grows, this test is the one to
+// turn into a positive.
+func TestEngineLongerCyclesAreNotOscillation(t *testing.T) {
+	// A three-state cycle a → b → c → a: no signature is two passes back
+	// until it repeats exactly, which it never does.
+	engine, err := New(Config[string, string]{
+		Plan: []Invariant[string, string]{
+			Rule(
+				func(s string) bool { return s == "a" },
+				func(string) []string { return []string{"TO_B"} },
+			),
+			Rule(
+				func(s string) bool { return s == "c" },
+				func(string) []string { return []string{"TO_A"} },
+			),
+		},
+		EffectKey: func(s string) string { return s },
+		MaxPasses: 9,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	world := "a"
+	sawOscillating := false
+
+	for range 9 {
+		report := engine.Step(world)
+		if report.Status == Oscillating {
+			sawOscillating = true
+
+			break
+		}
+
+		if report.Status == Frontier {
+			switch report.Want[0] {
+			case "TO_B":
+				world = "b"
+			case "TO_A":
+				world = "a"
+			}
+		}
+	}
+
+	if sawOscillating {
+		t.Fatal("a-b-c-a diagnosed as a two-pass ping-pong — the detector grew without this test being updated")
+	}
+}
+
+func TestEngineWedgeBoundaryIsExactlyAtTheCap(t *testing.T) {
+	for _, cap_ := range []int{1, 4, 64} {
+		exact := Rule(
+			func(testWorld) bool { return false },
+			func(testWorld) []string { return make([]string, cap_) },
+		)
+
+		engine, err := New(Config[testWorld, string]{Plan: []Invariant[testWorld, string]{exact}, MaxEffects: cap_})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if report := engine.Step(testWorld{}); report.Status != Frontier {
+			t.Fatalf("cap %d: status = %v for a want exactly at the cap, want frontier", cap_, report.Status)
+		}
+
+		over := Rule(
+			func(testWorld) bool { return false },
+			func(testWorld) []string { return make([]string, cap_+1) },
+		)
+
+		engine, err = New(Config[testWorld, string]{Plan: []Invariant[testWorld, string]{over}, MaxEffects: cap_})
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		if report := engine.Step(testWorld{}); report.Status != Exhausted {
+			t.Fatalf("cap %d: status = %v for a want one over, want exhausted", cap_, report.Status)
+		}
+	}
+}
+
+// TestEngineWedgeNamesItsStage: a diagnosis that names a frontier names the
+// stage too — an Exhausted report with an unnamed stage sends the reader
+// counting indices.
+func TestEngineWedgeNamesItsStage(t *testing.T) {
+	engine, err := New(Config[testWorld, string]{
+		Plan: []Invariant[testWorld, string]{
+			Rule(func(w testWorld) bool { return w.net }, func(testWorld) []string { return nil }),
+			Rule(
+				func(testWorld) bool { return false },
+				func(testWorld) []string { return make([]string, 99) },
+			),
+		},
+		Names: []string{"NetworkReady", "UnitReady"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	report := engine.Step(testWorld{net: true})
+	if report.Status != Exhausted || report.Stage != "UnitReady" {
+		t.Fatalf("report = (%v, stage %q), want the wedge named at UnitReady", report.Status, report.Stage)
+	}
+}
+
+func TestEngineStallReportNamesItsStage(t *testing.T) {
+	engine, err := New(Config[testWorld, string]{
+		Plan: []Invariant[testWorld, string]{
+			Rule(
+				func(w testWorld) bool { return w.unit == "running" },
+				func(testWorld) []string { return []string{"UNIT_START"} },
+			),
+		},
+		Names: []string{"UnitReady"},
+		Same:  func(a, b testWorld) bool { return a == b },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	frozen := testWorld{unit: "activating"}
+
+	for range 3 {
+		last := engine.Step(frozen)
+		if last.Status == Stalled && last.Stage != "UnitReady" {
+			t.Fatalf("stall stage = %q, want UnitReady", last.Stage)
+		}
+	}
+}
+
+func TestEngineResetFromStalledResumes(t *testing.T) {
+	engine, err := New(Config[testWorld, string]{
+		Plan: []Invariant[testWorld, string]{
+			Rule(
+				func(w testWorld) bool { return w.unit == "running" },
+				func(testWorld) []string { return []string{"UNIT_START"} },
+			),
+		},
+		EffectKey: func(s string) string { return s },
+		Same:      func(a, b testWorld) bool { return a == b },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	frozen := testWorld{unit: "activating"}
+
+	for range 3 {
+		engine.Step(frozen)
+	}
+
+	engine.Reset()
+
+	world := testWorld{unit: "running"}
+
+	report := engine.Step(world)
+	if report.Status != Converged {
+		t.Fatalf("status = %v after Reset onto a satisfied world, want converged", report.Status)
+	}
+}
+
+func TestEngineEffectsCounterAccumulates(t *testing.T) {
+	engine, err := New(Config[podWorld, string]{Plan: podPlan()})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	world := podWorld{wantNet: true, wantUnit: "running"}
+
+	var last Report[podWorld, string]
+
+	for {
+		last = engine.Step(world)
+		if last.Status != Frontier {
+			break
+		}
+
+		if last.Effects != last.Passes {
+			t.Fatalf("effects = %d at pass %d with one effect per pass", last.Effects, last.Passes)
+		}
+
+		applyString(&world, last.Want[0])
+	}
+}
+
+// fightPlan is the two-invariant ping-pong: a wants the world at "a", the
+// other at "b".
+func fightPlan() []Invariant[string, string] {
+	return []Invariant[string, string]{
+		Rule(
+			func(s string) bool { return s == "a" },
+			func(string) []string { return []string{"SET_A"} },
+		),
+		Rule(
+			func(s string) bool { return s == "b" },
+			func(string) []string { return []string{"SET_B"} },
+		),
+	}
+}

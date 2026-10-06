@@ -147,3 +147,40 @@ func TestAlignClosesAStringGap(t *testing.T) {
 		t.Fatal("align open on a running unit")
 	}
 }
+
+func TestConcurrentWithNoChildrenIsDone(t *testing.T) {
+	done, want := Concurrent[testWorld, string]()(testWorld{})
+	if !done || want != nil {
+		t.Fatalf("vacuous concurrent = (%v, %v), want done", done, want)
+	}
+}
+
+// TestRuleHoldsWithAnOpenGapAndNoEffects pins the hold shape at the atom
+// level: an invariant whose gap is being worked by physics emits nothing and
+// stays open — the armed-but-unacked case, which is convergence working.
+func TestRuleHoldsWithAnOpenGapAndNoEffects(t *testing.T) {
+	hold := Rule(
+		func(w testWorld) bool { return w.unit == "running" },
+		func(w testWorld) []string {
+			if w.unit == "activating" {
+				return nil // in transit: nothing to emit
+			}
+
+			return []string{"UNIT_START"}
+		},
+	)
+
+	done, want := hold(testWorld{unit: "activating"})
+	if done {
+		t.Fatal("hold reported done while in transit")
+	}
+
+	if want != nil {
+		t.Fatalf("hold want = %v, want nil", want)
+	}
+
+	done, _ = hold(testWorld{unit: "stopped"})
+	if done {
+		t.Fatal("hold reported done on a stopped unit")
+	}
+}

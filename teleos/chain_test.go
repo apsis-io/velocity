@@ -229,3 +229,57 @@ func TestForwardPlanDeletesTheNetnsUnderARunningUnit(t *testing.T) {
 		t.Fatalf("want = %v, want the trap: NETNS_DELETE first", want)
 	}
 }
+
+func TestChainWithNoLinksIsDone(t *testing.T) {
+	done, want := Chain[chainWorld, string]()(chainWorld{})
+	if !done || want != nil {
+		t.Fatalf("vacuous chain = (%v, %v), want done", done, want)
+	}
+}
+
+// TestChainReleasePreemptsAnUnrelatedAcquire pins the rolling-replacement
+// shape: one link releasing (the old process stopping) happens before a
+// different, independent link acquires (a netns being created) — the
+// release sweep runs to the bottom before the acquire sweep starts.
+func TestChainReleasePreemptsAnUnrelatedAcquire(t *testing.T) {
+	resources, apply := chainHarness()
+
+	// Mounts wanted gone (and present); netns wanted present (and absent).
+	// The chain is mounts under netns is not the physical story here — what
+	// matters is that a pending release anywhere preempts every acquire.
+	mixed := []Resource[chainWorld, string]{
+		{
+			Exists: func(w chainWorld) bool { return w.hasNet },
+			Invariant: Align(
+				func(w chainWorld) bool { return w.wantNet },
+				func(w chainWorld) bool { return w.hasNet },
+				func(target bool, _ chainWorld) string {
+					if target {
+						return "CREATE_NETNS"
+					}
+
+					return "DELETE_NETNS"
+				},
+			),
+		},
+		resources[1], // the mounts link, wanted gone
+	}
+
+	world := chainWorld{wantNet: true, hasMounts: true, wantMounts: false}
+
+	done, want := Chain(mixed...)(world)
+	if done {
+		t.Fatal("mixed chain reported done with both gaps open")
+	}
+
+	if len(want) != 1 || want[0] != "UNMOUNT" {
+		t.Fatalf("want = %v, want the release to preempt the acquire", want)
+	}
+
+	apply(&world, want[0])
+
+	done, want = Chain(mixed...)(world)
+	if done || len(want) != 1 || want[0] != "CREATE_NETNS" {
+		t.Fatalf("after the release: (%v, %v), want the acquire next", done, want)
+	}
+}
