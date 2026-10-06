@@ -535,8 +535,12 @@ func TestHooksReportWaitCreationAndDiscard(t *testing.T) {
 		t.Fatalf("waiter reported %v, want the ~20ms it queued", acquires[1].waited)
 	}
 
-	if !slices.Equal(releases, []bool{false, true}) {
-		t.Fatalf("releases = %v, want return then discard", releases)
+	// The order is not assertable: put returns the permit before it runs the
+	// OnRelease hook, so the woken waiter can discard before this
+	// goroutine's hook has run. What the sequence owes is one return and one
+	// discard, in either order.
+	if len(releases) != 2 || !slices.Contains(releases, false) || !slices.Contains(releases, true) {
+		t.Fatalf("releases = %v, want one return and one discard", releases)
 	}
 }
 
