@@ -2721,6 +2721,15 @@ it belongs, as the developer path in the justfile. The module itself is
 released as `analysis/v0.2.0` — a minor, because the directive is a new
 interface, on the same reasoning that took failsafeown from v0.1.0 to v0.2.0.
 
+**Measured at rest, post-adoption (2026-10-07).** The default-on stance
+took its production measurement on the two deployments that run v0.9.0: the
+drop net passive, zero observed overhead, flat RSS, no GC anomaly — and it
+is the reason the consumer's cgroup-fd handles can no longer leak silently.
+A default-on net whose measured cost at rest is indistinguishable from
+absent is the measurement the decision was waiting for; it arrived from the
+consumer's own monitoring rather than from this repository's benchmarks,
+which is the right direction for a number about production behavior.
+
 **What did not change is release tooling.** One glob was the defect, so one
 glob is the fix; a release script that tags every touched module would
 automate a decision that is one line to get right by hand and would be a second
@@ -2880,6 +2889,14 @@ around the closures: budgets, stall and oscillation diagnoses with the
 stuck stage named, and a plan structure that reports its own progress.
 That is why Config.Names exists and why the README says plainly: if you do
 not need those, write the ifs.
+
+**Held in production with zero effects (2026-10-07).** The first migrated
+site's stop path — the Chain in the consumer's stopMachine — held on its
+not-proof path under live load with zero effects emitted: the hot-spin
+failure mode the engine's budgets exist to bound is structurally dead in
+production, not merely tested. The hold shape — an open invariant, zero
+effects — carrying real traffic at zero cost is the property test and the
+benchmark made manifest.
 
 **The evaluation methodology is the reusable part.** The barrier controller
 was re-expressed as a plan and driven by the engine before anyone migrated
