@@ -3,7 +3,9 @@ package async
 import "time"
 
 // Hooks lets callers observe task timing without the package owning metrics
-// state. Nil callbacks are skipped.
+// state. Nil callbacks are skipped. A caller tracing spans closes the task's
+// span here: the hook carries the outcome and precedes the handle's
+// resolution, so closing a span in it is not racing the awaiter.
 type Hooks struct {
 	// OnTaskComplete runs once for every task. waited is time spent waiting for
 	// a concurrency permit, while duration is time spent in Task.Run.

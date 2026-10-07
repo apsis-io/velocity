@@ -623,6 +623,38 @@ The same port also corrected this repository's claims more than once, and
 [`docs/decisions.md`](docs/decisions.md) records which were wrong and why
 rather than quietly restating them.
 
+## Tracing and hooks
+
+velocity imports no tracer and keeps no metrics. Instrumentation is two
+mechanisms the caller owns, and together they are span support:
+
+**Hooks** — the packages that time work publish it. `async.Hooks.
+OnTaskComplete` fires in the task's own goroutine with the index, label,
+permit-wait, duration, and outcome — before the handle resolves, so closing
+a span there is not racing the awaiter. `dedupe.Hooks` carries the round's
+lifecycle: `OnJoin` with its leader flag (where a joining caller's span
+links) and `OnComplete` with duration and outcome (the round's End).
+
+**Context transparency** — every API passes the caller's context to its
+callbacks, so the span opened at the call site is already inside the work.
+Wrap any unit — a `Runner` task, a `converge` observe or apply, an
+`ownership` borrow's release — and it is traced.
+
+Two subtleties are load-bearing:
+
+- **A `dedupe` join links; it does not parent.** A round's execution
+  deliberately outlives its callers, so its context derives from the group's
+  base context (`WithBaseContext`), not from whichever caller led the round.
+  A joining caller's span is a *link* to the execution's span, and caller
+  context values are invisible to `fn` unless set on the base.
+- **The drop net fires without a context.** Its Drop runs on a runtime
+  goroutine from an unreachable cell, so any span it emits is a *root* span —
+  which is exactly right: a root span named "dropnet" is a leak report, not
+  a request flow.
+
+And a cost note: a span around `teleos`'s `Step` would cost more than the
+step. The pass's units — observe and apply — are your callbacks; wrap those.
+
 ## Development
 
 ```sh
