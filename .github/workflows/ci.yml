@@ -58,7 +58,8 @@ jobs:
         uses: dominikh/staticcheck-action@v1
         with:
           version: latest
-          install-go: false
+          install-go: true
+          min-go-version: module
 
       # Whitespace style, via golangci-lint's bundled wsl_v5, with its default
       # set. See .golangci.yml for what is on and why. Installed here rather
