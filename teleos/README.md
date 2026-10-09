@@ -69,6 +69,17 @@ an executor), a pass budget, stall detection (nothing moves), and oscillation
 detection (the plan fights itself, A-B-A). Terminal diagnoses are data, and
 `Reset` is the human's decision.
 
+## Testing a plan: entropy in, antientropy asserted
+
+[`entropy`](entropy) is the test harness for any plan — yours included. It
+runs the plan against a world under injected divergence (drift, erasure,
+sabotage — deterministic by seed) and asserts the antientropic invariants
+so you don't hand-roll the loop: the engine halts within its own budget,
+effects ship only on `Frontier`, a world at rest gets nothing, terminal
+stays terminal, and your `Audit` hook states the domain invariants (a
+Chain's sweep order, a barrier's no-crossing) on every pass. `Recover`
+asserts gravity: converge, drift, and the plan must pull the world back.
+
 ## The report
 
 Every `Step` returns one `Report`, and it is the whole interface between a

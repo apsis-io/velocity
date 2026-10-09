@@ -30,6 +30,14 @@
 // anything stands on it. Concurrent composes without order, for stages that
 // are genuinely independent.
 //
+// Everything that pushes a running system away from its declared rest —
+// drift, loss, erasure, contention, sabotage — is entropy, and the engine
+// is what fights it. Testing a plan means testing that fight:
+// [`entropy`](entropy) is the harness — it injects entropy and asserts the
+// antientropic invariants (halts in budget, effects only on the frontier,
+// quiescence at rest, your own audit on every pass) so a plan author writes
+// the world and the executor, and the guards are checked for them.
+//
 // A stage carries its name, and the report is then a status document:
 // Stage says which stage holds the frontier, and the satisfied prefix — the
 // stages before it, in order — is what has already converged. Kubernetes

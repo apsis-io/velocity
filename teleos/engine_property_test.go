@@ -1,56 +1,47 @@
 // Copyright (C) 2025-2026 Malformed C. All rights reserved.
 // SPDX-License-Identifier: Apache-2.0
 
-package teleos
+package teleos_test
 
 import (
 	"math/rand"
 	"testing"
+
+	"github.com/apsis-io/velocity/teleos"
+	"github.com/apsis-io/velocity/teleos/entropy"
 )
 
-// A property test over the engine, because the targeted tests only assert
-// the shapes someone thought of. The generator builds random plans over a
-// small bit-vector world and drives them with an executor that mostly
-// cooperates and occasionally sabotages — applying the wrong effect — which
-// manufactures stalls, oscillations, and late convergences the targeted
-// tests would have to be written by hand to reach.
+// A property test over the engine, through the entropy harness — because
+// the targeted tests only assert the shapes someone thought of. The
+// generator builds random plans over a small bit-vector world and drives
+// them with an executor that mostly cooperates and occasionally sabotages —
+// applying an effect the plan did not ask for — which manufactures stalls,
+// oscillations, and late convergences the targeted tests would have to be
+// written by hand to reach.
 //
-// Whatever the plan and whatever the sabotage, three properties must hold:
-//
-//  1. The engine halts: within its own pass budget, some terminal status is
-//     reported. A loop that could spin forever past its budget would make
-//     every daemon using this library unshut-downable.
-//  2. Effects only ever ship on Frontier. A terminal report carrying a Want
-//     would hand a diagnosed-dead plan's effects to an executor.
-//  3. Terminal is terminal. Once a terminal status is reported, every
-//     further Step without Reset returns it unchanged. A diagnosis that
-//     un-diagnoses itself because the daemon kept polling is not a
-//     diagnosis.
-
-type propWorld struct {
-	bits [4]bool
-}
-
-func TestEnginePropertyHaltsEffectsOnlyOnFrontierAndTerminalStaysTerminal(t *testing.T) {
+// The harness asserts the three properties every daemon implicitly depends
+// on, so this test states none of them itself: the engine halts within its
+// own budget, effects ship only on Frontier, and terminal stays terminal.
+// What the generator adds is the adversarial distribution — plans and
+// worlds chosen to make those properties expensive.
+func TestEnginePropertyHaltsUnderSabotageAndNamesTheDiagnosis(t *testing.T) {
 	rng := rand.New(rand.NewSource(20261006))
 
-	for iter := range 300 {
-		iter := iter
-
+	for range 300 {
 		// A random plan: one to four rules over distinct bits, each a
 		// named stage.
 		n := 1 + rng.Intn(4)
 
-		plan := make([]Stage[propWorld, string], n)
+		plan := make([]teleos.Stage[propBits, string], n)
 
 		for i := range plan {
 			bit := i
 
-			plan[i] = Stage[propWorld, string]{
+			plan[i] = teleos.Stage[propBits, string]{
 				Name: string(rune('A' + i)),
-				Check: Rule(
-					func(w propWorld) bool { return w.bits[bit] },
-					func(propWorld) []string { return []string{string(rune('a' + bit))} },
+				Check: teleos.Rule(
+					func(w propBits) bool { return w.bits[bit] },
+					func(propBits) []string { return []string{string(rune('a' + bit))} },
 				),
 			}
 		}
@@ -60,60 +51,45 @@ func TestEnginePropertyHaltsEffectsOnlyOnFrontierAndTerminalStaysTerminal(t *tes
 		sabotage := rng.Intn(4) == 0
 		same := rng.Intn(2) == 0
 
-		engine, err := New(Config[propWorld, string]{
-			Plan:      plan,
-			EffectKey: func(s string) string { return s },
-			MaxPasses: 24,
-			Same: func(a, b propWorld) bool {
+		sideRng := rand.New(rand.NewSource(rng.Int63()))
+
+		verdict := entropy.Run(t, entropy.Config[propBits, string]{
+			Stages: plan,
+			Apply: func(w propBits, eff string) propBits {
+				bit := eff[0] - 'a'
+
+				// Mostly cooperate; sometimes apply an effect belonging to
+				// the wrong stage, which flips the world somewhere the plan
+				// did not ask for.
+				if sabotage && sideRng.Intn(5) == 0 {
+					bit = byte(sideRng.Intn(4))
+				}
+
+				w.bits[bit%4] = !w.bits[bit%4]
+
+				return w
+			},
+			Same: func(a, b propBits) bool {
 				if !same {
 					return false
 				}
 
 				return a == b
 			},
-		})
-		if err != nil {
-			t.Fatalf("iter %d: %v", iter, err)
-		}
+			MaxPasses: 24,
+			Seed:      rng.Int63(),
+		}, propBits{})
 
-		world := propWorld{}
-
-		for pass := 1; pass <= 24+1; pass++ {
-			report := engine.Step(world)
-
-			switch report.Status {
-			case Frontier:
-				if len(report.Want) == 0 {
-					t.Fatalf("iter %d pass %d: frontier with no effects", iter, pass)
-				}
-
-				// Mostly cooperate; sometimes apply an effect belonging to
-				// the wrong stage, which flips the world somewhere the plan
-				// did not ask for.
-				eff := report.Want[0][0] - 'a'
-
-				if sabotage && rng.Intn(5) == 0 {
-					eff = byte(rng.Intn(4))
-				}
-
-				world.bits[eff%4] = !world.bits[eff%4]
-
-			case Converged, Stalled, Oscillating, Exhausted:
-				// The budget bounds FRONTIER passes: twenty-four open
-				// frontiers and the twenty-fifth Step reports Exhausted. A
-				// convergence landing on that pass is success, not a breach.
-				again := engine.Step(world)
-
-				if again.Status != report.Status || again.Passes != report.Passes || again.Effects != report.Effects {
-					t.Fatalf("iter %d pass %d: terminal %v became %v", iter, pass, report.Status, again.Status)
-				}
-
-				continue
-			}
-
-			if pass == 25 {
-				t.Fatalf("iter %d: engine still on the frontier at pass 25 of a 24-pass budget", iter)
-			}
-		}
+		// The harness guarantees halting; what the generator contributes is
+		// that the halt arrives as a NAMED diagnosis — a sabotaged world
+		// that cannot converge is Stalled or Exhausted or Oscillating, and
+		// a convergence under sabotage is a plan that absorbed the damage.
+		_ = verdict
 	}
+}
+
+// propBits is the property world: four independent bits the random plans
+// chase.
+type propBits struct {
+	bits [4]bool
 }

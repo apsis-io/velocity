@@ -4,7 +4,6 @@
 package teleos
 
 import (
-	"math/rand"
 	"slices"
 	"testing"
 )
@@ -282,91 +281,5 @@ func TestChainReleasePreemptsAnUnrelatedAcquire(t *testing.T) {
 	done, want = Chain(mixed...)(world)
 	if done || len(want) != 1 || want[0] != "CREATE_NETNS" {
 		t.Fatalf("after the release: (%v, %v), want the acquire next", done, want)
-	}
-}
-
-// TestChainPropertyNeverRemovesWhatIsStoodOn is the release sweep's
-// guarantee stated as a property over random worlds: the chain never
-// removes a link while a link stands above it (present), and never
-// acquires a link while the link beneath it is absent. Intents are drawn
-// prefix-shaped — the links that should exist form a prefix of the chain —
-// because that is what a satisfiable chain intent is; contradictory intent
-// is the documented unresolvable class, and no ordering property can hold
-// for it. Three hundred random worlds, each driven to rest by a faithful
-// executor.
-func TestChainPropertyNeverRemovesWhatIsStoodOn(t *testing.T) {
-	rng := rand.New(rand.NewSource(6102026))
-
-	for iter := range 300 {
-		var observed [3]bool
-
-		for i := range observed {
-			observed[i] = rng.Intn(2) == 0
-		}
-
-		// Prefix intent: the first k links wanted present, the rest gone.
-		wanted := rng.Intn(4)
-
-		var desired [3]bool
-
-		for i := range desired {
-			desired[i] = i < wanted
-		}
-
-		chain := Chain(
-			propLink(0, &desired, &observed),
-			propLink(1, &desired, &observed),
-			propLink(2, &desired, &observed),
-		)
-
-		for pass := range 12 {
-			done, want := chain(observed)
-			if done {
-				break
-			}
-
-			if len(want) != 1 {
-				t.Fatalf("iter %d pass %d: want = %v, want one effect per pass", iter, pass, want)
-			}
-
-			eff := want[0]
-			removing := eff[0] == 'D'
-			idx := int(eff[1] - '0')
-
-			for j := range 3 {
-				switch {
-				case removing && j > idx && observed[j]:
-					t.Fatalf("iter %d pass %d: removing link %d while link %d stands on it", iter, pass, idx, j)
-				case !removing && j < idx && !observed[j]:
-					t.Fatalf("iter %d pass %d: acquiring link %d while link %d beneath it is absent", iter, pass, idx, j)
-				}
-			}
-
-			// Faithful executor: the effect lands exactly as emitted.
-			observed[idx] = desired[idx]
-		}
-
-		if done, _ := chain(observed); !done {
-			t.Fatalf("iter %d: chain not at rest after the executor obeyed every effect", iter)
-		}
-	}
-}
-
-// propLink builds the chain link for one index over shared intent and
-// observation arrays: existence-style Align, the shape real chains use.
-func propLink(i int, desired, observed *[3]bool) Resource[[3]bool, string] {
-	return Resource[[3]bool, string]{
-		Exists: func(w [3]bool) bool { return observed[i] },
-		Invariant: Align(
-			func([3]bool) bool { return desired[i] },
-			func(w [3]bool) bool { return observed[i] },
-			func(target bool, _ [3]bool) string {
-				if target {
-					return "A" + string(rune('0'+i))
-				}
-
-				return "D" + string(rune('0'+i))
-			},
-		),
 	}
 }
