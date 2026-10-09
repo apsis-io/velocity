@@ -79,7 +79,6 @@ func TestPublishedNumbersHaveNotDrifted(t *testing.T) {
 	defer cancel()
 
 	for _, dc := range driftChecks {
-		dc := dc //nolint:modernize // the copy is the subtest's capture boundary, kept even though Go 1.22 makes it redundant
 		t.Run(dc.benchmark+"/"+dc.subkey, func(t *testing.T) {
 			median := runBenchmarkMedian(t, ctx, dc.benchmark, dc.subkey)
 			if median <= 0 {

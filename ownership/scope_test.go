@@ -115,8 +115,7 @@ func TestScopeRejectsEnrolmentAfterCloseOrDisarm(t *testing.T) {
 				t.Fatalf("OwnCloser after finish = %v", err)
 			}
 
-			var scopeErr *ownership.ScopeError
-			if !errors.As(err, &scopeErr) { //nolint:modernize // the suite's error assertions keep the errors.As form
+			if _, ok := errors.AsType[*ownership.ScopeError](err); !ok {
 				t.Fatalf("error = %T, want *ScopeError", err)
 			}
 

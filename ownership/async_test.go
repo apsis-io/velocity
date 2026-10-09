@@ -367,8 +367,7 @@ func TestMutateAsyncNilArguments(t *testing.T) {
 		t.Fatal("a nil-function mutation is pending")
 	}
 
-	var projection *ownership.ProjectionError
-	if !errors.As(res.Err, &projection) { //nolint:modernize // the suite's error assertions keep the errors.As form
+	if _, ok := errors.AsType[*ownership.ProjectionError](res.Err); !ok {
 		t.Fatalf("nil fn = %v, want a rejected mutation", res.Err)
 	}
 

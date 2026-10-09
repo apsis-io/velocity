@@ -31,8 +31,7 @@ func TestMutateAsyncReportsATerminalOwnerBeforeItStarts(t *testing.T) {
 			name:  "released",
 			leave: func(o *ownership.Owner[int]) { _ = o.Release() },
 			check: func(t *testing.T, err error) {
-				var released *ownership.ReleasedError
-				if !errors.As(err, &released) { //nolint:modernize // the suite's error assertions keep the errors.As form
+				if _, ok := errors.AsType[*ownership.ReleasedError](err); !ok {
 					t.Fatalf("err = %v, want a ReleasedError", err)
 				}
 			},
@@ -41,8 +40,7 @@ func TestMutateAsyncReportsATerminalOwnerBeforeItStarts(t *testing.T) {
 			name:  "moved",
 			leave: func(o *ownership.Owner[int]) { _, _ = o.Move() },
 			check: func(t *testing.T, err error) {
-				var moved *ownership.MovedError
-				if !errors.As(err, &moved) { //nolint:modernize // same idiom as the ReleasedError assertion above
+				if _, ok := errors.AsType[*ownership.MovedError](err); !ok {
 					t.Fatalf("err = %v, want a MovedError", err)
 				}
 			},
