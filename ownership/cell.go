@@ -62,17 +62,26 @@ type cell[T any] struct {
 	// already promised to run.
 	pending int
 
-	// changed is closed and replaced whenever admission-relevant state moves: a
-	// borrow ends, or the cell is sealed. It is a **broadcast, not a queue** —
-	// closing it hands every waiter a chance and holds nothing, so a waiter can
-	// never block a release and this package still contains no blocking
-	// operation. A waiter that loses the race simply re-reads the state.
+	// wait is the broadcast channel for admission waiters, built LAZILY by
+	// waitForChange and closed once by changedLocked. The inversion is the
+	// point: a state change with nobody waiting on it — the overwhelmingly
+	// common case, every View, Mutate, and Release in code that never uses
+	// MutateAsync — allocates nothing. The old channel was closed and
+	// rebuilt on every state move whether or not anyone would ever receive
+	// the close, which profiling showed as the single largest allocation in
+	// the package.
 	//
-	// Deliberately unordered. An ordered waiter list would be a queue the cell
-	// owns, and a re-entrant caller would silently queue behind itself with
-	// nothing timing it out, which is the deadlock this broadcast exists to
-	// avoid. Fairness is a question for a measurement, not a default.
-	changed chan struct{}
+	// Semantics are unchanged: a **broadcast, not a queue** — closing it
+	// hands every waiter a chance and holds nothing, so a waiter can never
+	// block a release and this package still contains no blocking operation.
+	// A waiter that loses the race simply re-reads the state.
+	//
+	// Deliberately unordered. An ordered waiter list would be a queue the
+	// cell owns, and a re-entrant caller would silently queue behind itself
+	// with nothing timing it out, which is the deadlock this broadcast
+	// exists to avoid. Fairness is a question for a measurement, not a
+	// default.
+	wait chan struct{}
 
 	drop    traits.Drop[T]
 	clone   traits.Clone[T]
@@ -215,7 +224,8 @@ func (c *cell[T]) endWriteLocked(h *handle) {
 
 // changedLocked wakes every goroutine waiting for admission to re-read the
 // cell's state. Closing a channel is not a wait, so this adds a signal without
-// adding a blocking operation.
+// adding a blocking operation — and builds nothing when nobody is waiting,
+// which is the path every non-async caller takes.
 // settlePending drops one submission's count. Called on every path a submitted
 // mutation can finish, because a count that only falls on the happy path
 // blocks Release and Move for good — and the paths that are easiest to forget
@@ -227,22 +237,23 @@ func (c *cell[T]) settlePending() {
 }
 
 func (c *cell[T]) changedLocked() {
-	if c.changed != nil {
-		close(c.changed)
+	if c.wait == nil {
+		return
 	}
 
-	c.changed = make(chan struct{})
+	close(c.wait)
+	c.wait = nil
 }
 
 // waitForChange returns the channel to select on until the cell's state next
 // moves, or ctx ends. Called with the lock held; the caller releases it before
 // selecting, which is what keeps a waiter from blocking a release.
 func (c *cell[T]) waitForChange() <-chan struct{} {
-	if c.changed == nil {
-		c.changed = make(chan struct{})
+	if c.wait == nil {
+		c.wait = make(chan struct{})
 	}
 
-	return c.changed
+	return c.wait
 }
 
 func (c *cell[T]) acquireRead(h *handle, expected mode) (*lease[T], error) {
