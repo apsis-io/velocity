@@ -105,9 +105,16 @@ jobs:
       - name: test
         run: |
           go test ./...
-          go -C analysis test ./...
           go -C failsafeown test ./...
           go -C teleos test ./...
+
+      # The acquirer-table drift test loads velocity's packages through the
+      # analysis module's x/tools, whose export-data reader stops at version
+      # 4 — the same ceiling the analysis tools below run under.
+      - name: analysis tests
+        run: go -C analysis test ./...
+        env:
+          GOTOOLCHAIN: go1.27.1
 
       - name: test -race
         run: |
