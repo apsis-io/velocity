@@ -41,6 +41,23 @@ func NewLease[T any](value T, release func(T) error) (*Lease[T], error) {
 	return &Lease[T]{value: value, release: release}, nil
 }
 
+// NewLeaseInto initializes a Lease that a caller has embedded in a larger
+// struct — one allocation for the whole of it, instead of one for the Lease
+// and one for the wrapper. It is a construction-time initializer: l must be
+// a zero Lease, and after use it is released exactly once like any other,
+// never re-initialized. Same contract as NewLease, reported as an error
+// instead of a nil Lease.
+func NewLeaseInto[T any](l *Lease[T], value T, release func(T) error) error {
+	if release == nil {
+		return &ConfigError{Option: "lease release", Reason: ErrNilOption}
+	}
+
+	l.value = value
+	l.release = release
+
+	return nil
+}
+
 // Value returns a copy of the leased value while the lease is still held, and
 // ErrReleased once it is not. That catches use-after-release, which is the
 // mistake this type exists to prevent.
@@ -94,6 +111,32 @@ func (l *Lease[T]) Move() (*Lease[T], error) {
 	l.released = true
 
 	return &Lease[T]{value: l.value, release: l.release}, nil
+}
+
+// MoveInto transfers the held resource into dst and spends the receiver —
+// the in-place form of Move, for a Lease embedded in a larger struct, where
+// Move's fresh allocation would be discarded. dst must be a zero Lease. The
+// original reports ErrReleased afterwards.
+func (l *Lease[T]) MoveInto(dst *Lease[T]) error {
+	if l == nil {
+		return &ReleasedError{Operation: OpMove}
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.released {
+		return &ReleasedError{Operation: OpMove}
+	}
+
+	l.released = true
+
+	dst.mu.Lock()
+	dst.value = l.value
+	dst.release = l.release
+	dst.mu.Unlock()
+
+	return nil
 }
 
 // Release hands the resource back, at most once. Later calls return the first

@@ -70,7 +70,7 @@ func Must[T any](p *Pool[T], err error) *Pool[T] {
 // own. Discard is the one addition: a resource the caller found broken is
 // closed instead of returned, and its capacity freed for a fresh one.
 type Checkout[T any] struct {
-	*ownership.Lease[T]
+	ownership.Lease[T]
 	// discard points at flag, or at the original handle's flag after a Move,
 	// so the release closure and every handle agree on it.
 	discard *atomic.Bool
@@ -84,12 +84,12 @@ func (c *Checkout[T]) Move() (*Checkout[T], error) {
 		return nil, &ownership.ReleasedError{Operation: ownership.OpMove}
 	}
 
-	lease, err := c.Lease.Move()
-	if err != nil {
+	next := &Checkout[T]{discard: c.discard}
+	if err := c.MoveInto(&next.Lease); err != nil {
 		return nil, err
 	}
 
-	return &Checkout[T]{Lease: lease, discard: c.discard}, nil
+	return next, nil
 }
 
 // Discard closes the resource rather than returning it to the pool, for a
@@ -174,8 +174,10 @@ func (p *Pool[T]) get(ctx context.Context) (*Checkout[T], bool, error) {
 func (p *Pool[T]) checkout(value T) *Checkout[T] {
 	c := &Checkout[T]{}
 	c.discard = &c.flag
-	// NewLease rejects only a nil release, which this is not.
-	c.Lease, _ = ownership.NewLease(value, func(value T) error {
+	// NewLeaseInto rejects only a nil release, which this is not. The Lease
+	// is embedded by value, so a checkout is two allocations where three
+	// were: the handle, and the release closure.
+	_ = ownership.NewLeaseInto(&c.Lease, value, func(value T) error {
 		return p.put(value, c.flag.Load())
 	})
 

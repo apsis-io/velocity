@@ -204,3 +204,69 @@ func TestLeaseEnrolsInScope(t *testing.T) {
 		t.Fatalf("returned %d times, want 1", returned.Load())
 	}
 }
+
+func TestNewLeaseIntoInitializesAnEmbeddedLease(t *testing.T) {
+	var lease ownership.Lease[string]
+
+	if err := ownership.NewLeaseInto(&lease, "held", func(string) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+
+	if got, err := lease.Value(); err != nil || got != "held" {
+		t.Fatalf("Value = (%q, %v), want held", got, err)
+	}
+
+	if err := lease.Release(); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := lease.Value(); !errors.Is(err, ownership.ErrReleased) {
+		t.Fatalf("Value after release = %v, want ownership.ErrReleased", err)
+	}
+}
+
+func TestNewLeaseIntoRejectsNilRelease(t *testing.T) {
+	var lease ownership.Lease[string]
+
+	if err := ownership.NewLeaseInto(&lease, "held", nil); !errors.Is(err, ownership.ErrInvalidConfig) {
+		t.Fatalf("err = %v, want the config refusal", err)
+	}
+
+	// A refused initialization must not have touched the lease; that is
+	// guaranteed by refusing before any field is written.
+}
+
+func TestLeaseMoveIntoTransfersAndSpends(t *testing.T) {
+	var (
+		src      ownership.Lease[string]
+		dst      ownership.Lease[string]
+		releases int
+	)
+
+	if err := ownership.NewLeaseInto(&src, "moved", func(string) error {
+		releases++
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := src.MoveInto(&dst); err != nil {
+		t.Fatal(err)
+	}
+
+	if src.Held() {
+		t.Fatal("the source still reports held after MoveInto")
+	}
+
+	if err := dst.Release(); err != nil {
+		t.Fatal(err)
+	}
+
+	if releases != 1 {
+		t.Fatalf("release ran %d times, want once through the moved lease", releases)
+	}
+
+	if err := src.MoveInto(&dst); !errors.Is(err, ownership.ErrReleased) {
+		t.Fatalf("second MoveInto = %v, want ownership.ErrReleased", err)
+	}
+}
