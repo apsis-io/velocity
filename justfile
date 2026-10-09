@@ -3,11 +3,16 @@ set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 fmt:
     test -z "$(gofmt -l .)"
 
+# staticcheck runs under the pinned go1.27.1 toolchain: its export-data
+# reader stops at version 4, and a local toolchain newer than that (1.27.2
+# writes version 5) feeds it what it cannot read. Same pin CI uses — the
+# two move together, and both move when staticcheck ships a reader for the
+# new format.
 vet:
     go vet ./...
     go -C failsafeown vet ./...
     go -C teleos vet ./...
-    staticcheck ./...
+    GOTOOLCHAIN=go1.27.1 staticcheck ./...
 
 # Whitespace style, through golangci-lint's bundled wsl_v5. See .golangci.yml:
 # it runs that one linter and nothing else, because the rest of velocity's

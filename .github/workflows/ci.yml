@@ -31,12 +31,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
         with:
-          # Pinned, not go-version-file: patch releases changed the stdlib's
-          # export data format (1.27.2 writes version 5), and staticcheck's
-          # reader stops at 4 — a floating patch made CI red on code that
-          # local staticcheck passes. Bump this with the staticcheck pin,
-          # deliberately.
-          go-version: '1.27.1'
+          go-version: '1.27'
           cache-dependency-path: |
             go.sum
             analysis/go.sum
@@ -59,11 +54,19 @@ jobs:
           go -C failsafeown vet ./...
           go -C teleos vet ./...
 
+      # The toolchain floats on 1.27.x, but staticcheck pins its own:
+      # 2026.2.1's export-data reader stops at version 4, and 1.27.2's
+      # stdlib writes version 5. GOTOOLCHAIN hands the step a 1.27.1
+      # GOROOT whose export data it can read, analyzing a module that
+      # still targets the same language version. Bump the pin when
+      # staticcheck ships a reader for the new format.
       - name: staticcheck
         uses: dominikh/staticcheck-action@v1
         with:
           version: latest
           install-go: false
+        env:
+          GOTOOLCHAIN: go1.27.1
 
       # Whitespace style, via golangci-lint's bundled wsl_v5, with its default
       # set. See .golangci.yml for what is on and why. Installed here rather
@@ -138,7 +141,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.27.1'
+          go-version: '1.27'
           cache-dependency-path: go.sum
       # The seed corpus in testdata runs under `go test`; this is the
       # randomized pass, kept short enough for every push.
@@ -166,7 +169,7 @@ jobs:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
         with:
-          go-version: '1.27.1'
+          go-version: '1.27'
           cache-dependency-path: benchmarks/go.sum
       - name: compile benchmarks
         run: |
