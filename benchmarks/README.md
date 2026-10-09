@@ -135,6 +135,33 @@ that runs it once, after the last caller releases. An earlier design built that
 cell on every `Do` whether or not anything would ever drop it; the comparison
 made the price visible, and no consumer depended on the old shape.
 
+**ownership's scoped paths are allocation-free, after the broadcast channel
+was found holding 56% of the package's allocations.** The cell's admission
+broadcast — a channel closed and rebuilt on every state move — was
+allocated whether or not any goroutine waited on it; profiling the
+in-module benchmarks put more of the package's allocations there than
+everywhere else combined. The channel is now built lazily by the waiter
+and closed once:
+
+| | ns/op | B/op | allocs/op |
+|---|---|---|---|
+| `View` (scoped read), before | 105 | 112 | 1 |
+| `View`, after | 43 | 0 | 0 |
+| `Mutate` (scoped write), before | 103 | 112 | 1 |
+| `Mutate`, after | 41 | 0 | 0 |
+| construct + release, before | 147 | 272 | 2 |
+| construct + release, after | 104 | 160 | 1 |
+
+Same host as the tables above. The advanced borrow tier was measured and
+left as documented: inlining its lease into the borrow would save a single
+allocation on the explicitly opt-in tier while churning lease identity
+through the debug cleanup and async's queued mutations.
+
+**pool** got the same treatment through two ownership API additions:
+`NewLeaseInto` and `Lease.MoveInto`, the in-place forms, let a Checkout
+embed its Lease by value — a Get+Release is two allocations (96 B) where
+three were (104 B), and `Move` no longer allocates on the handoff path.
+
 **velocity beats hunch on async and loses to errgroup**, both for structural
 reasons. hunch boxes every result through `interface{}` and restores source
 order by sorting afterwards; velocity is generic and assigns into a pre-sized
@@ -211,7 +238,15 @@ repeatable.
 
 ## Scope
 
-`ownership` is not benchmarked against anything — it has no comparable library;
-it is the novel piece. `traits` is not either: a comparison against
-`enetx/g` and `fogfish/golem` was evaluated and rejected, with reasoning
-recorded in [`../docs/decisions.md`](../docs/decisions.md).
+`ownership` and `pool` are not benchmarked against other libraries — there
+is nothing comparable to lose against; ownership is the novel piece. Their
+benchmarks are in-module (`ownership/benchmark_test.go`,
+`pool/benchmark_test.go`) and measure each package against itself; the
+optimization history is in "What the numbers mean". `traits` is not either:
+a comparison against `enetx/g` and `fogfish/golem` was evaluated and
+rejected, with reasoning recorded in
+[`../docs/decisions.md`](../docs/decisions.md). And `teleos` is its own
+module with its own benchmarks (`teleos/benchmark_test.go`): the engine
+`Step` a daemon repeats forever is ~78 ns converged, ~120 ns at an open
+frontier, and its test harness (`teleos/entropy`) is pure — a plan test
+cannot flake.
