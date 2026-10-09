@@ -590,9 +590,12 @@ use-after-release detection and discard semantics are what those bytes
 buy); `dedupe`'s ~6 allocations per
 round front a call expensive enough to be worth deduplicating, and they buy
 the owned-result handles, the hooks, and the panic capture. Production
-numbers from the two deployments running v0.9.0 are in
+numbers from the two deployments running v0.10.0 are in
 [`docs/decisions.md`](docs/decisions.md): no resident library goroutines,
-zero mutex contention, the pool amortized to near-zero at rest.
+zero mutex contention, and the pool amortizing to near-zero at rest — its
+counters re-arm whenever the consumer's migrations recreate identities,
+so the long-run reuse-rate is the number to re-read, not the first day
+after a re-arm.
 
 ## Field use
 
