@@ -89,6 +89,10 @@ type Verdict[S any] struct {
 // never on a spin, because a spin is the first thing the harness exists to
 // catch.
 func Run[S, E any](t *testing.T, cfg Config[S, E], world S) Verdict[S] {
+	if t == nil {
+		panic("entropy: Run requires a non-nil *testing.T — it is a test harness, not a runtime loop")
+	}
+
 	t.Helper()
 
 	engine, err := teleos.New(teleos.Config[S, E]{
@@ -159,6 +163,10 @@ func Run[S, E any](t *testing.T, cfg Config[S, E], world S) Verdict[S] {
 // Reset, and the plan must pull the drifted world back. A plan that cannot
 // survive its own success is not done.
 func Recover[S, E any](t *testing.T, cfg Config[S, E], world S, drift func(S) S) Verdict[S] {
+	if t == nil {
+		panic("entropy: Recover requires a non-nil *testing.T — it is a test harness, not a runtime loop")
+	}
+
 	t.Helper()
 
 	first := Run(t, cfg, world)
