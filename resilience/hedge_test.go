@@ -140,7 +140,7 @@ func TestHedgeStopsOnNonRetryableError(t *testing.T) {
 	}
 
 	var re *resilience.RetryError
-	if errors.As(err, &re) {
+	if errors.As(err, &re) { //nolint:modernize // the negative assertion reads against the As form, like every hedge test
 		t.Fatal("a non-retryable error was wrapped as a RetryError")
 	}
 }

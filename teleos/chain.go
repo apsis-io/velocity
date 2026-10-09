@@ -3,6 +3,8 @@
 
 package teleos
 
+import "slices"
+
 // Resource is one physical resource in a dependency chain: a netns under a
 // mount under a process. Exists reports whether the resource is physically
 // present on the host right now — the one fact the atom deliberately does
@@ -51,9 +53,9 @@ func Chain[S, E any](resources ...Resource[S, E]) Invariant[S, E] {
 	return func(s S) (bool, []E) {
 		// Release first, leaf to root: what stands above must be gone
 		// before what stands below may go.
-		for i := len(resources) - 1; i >= 0; i-- {
-			done, want := resources[i].Invariant(s)
-			if !done && resources[i].Exists(s) {
+		for _, r := range slices.Backward(resources) {
+			done, want := r.Invariant(s)
+			if !done && r.Exists(s) {
 				return false, want
 			}
 		}

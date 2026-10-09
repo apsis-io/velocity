@@ -142,7 +142,7 @@ func TestConvergerRunsToEquilibriumOnOneWake(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background()) //nolint:modernize // the cancel is part of the test: Run must return nil on it, and t.Context defers cancellation to cleanup, after the assertions
 	defer cancel()
 
 	runErr := make(chan error, 1)
@@ -264,7 +264,7 @@ func TestConvergerAppliesOpcodesThroughATable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background()) //nolint:modernize // the cancel is part of the test: Run must return nil on it, and t.Context defers cancellation to cleanup, after the assertions
 	defer cancel()
 
 	go c.Run(ctx)
@@ -329,7 +329,7 @@ func TestConvergerObservationFailureIsTransient(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background()) //nolint:modernize // the cancel is part of the test: Run must return nil on it, and t.Context defers cancellation to cleanup, after the assertions
 	defer cancel()
 
 	go c.Run(ctx)
@@ -418,7 +418,7 @@ func TestConvergerAppliesInOrderUnderARunner(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background()) //nolint:modernize // the cancel is part of the test: Run must return nil on it, and t.Context defers cancellation to cleanup, after the assertions
 	defer cancel()
 
 	go c.Run(ctx)
@@ -519,7 +519,7 @@ func TestConvergerHonorsAWakeSentBeforeRun(t *testing.T) {
 
 	c.Wake() // before Run
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background()) //nolint:modernize // the cancel is part of the test: Run must return nil on it, and t.Context defers cancellation to cleanup, after the assertions
 	defer cancel()
 
 	go c.Run(ctx)
@@ -575,7 +575,7 @@ func TestConvergerCollapsesAwakeStorm(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background()) //nolint:modernize // the cancel is part of the test: Run must return nil on it, and t.Context defers cancellation to cleanup, after the assertions
 	defer cancel()
 
 	go c.Run(ctx)
@@ -668,7 +668,7 @@ func TestConvergerEffectFailureIsTransientAndRetriedOnWake(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background()) //nolint:modernize // the cancel is part of the test: Run must return nil on it, and t.Context defers cancellation to cleanup, after the assertions
 	defer cancel()
 
 	go c.Run(ctx)
@@ -745,7 +745,7 @@ func TestConvergerStallDiagnosisWaitsForReset(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background()) //nolint:modernize // the cancel is part of the test: Run must return nil on it, and t.Context defers cancellation to cleanup, after the assertions
 	defer cancel()
 
 	go c.Run(ctx)
@@ -851,7 +851,7 @@ func TestCoalescerJoinsAcrossLoops(t *testing.T) {
 	loop1 := newLoop(t, "SHARE")
 	loop2 := newLoop(t, "SHARE")
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background()) //nolint:modernize // the cancel is part of the test: Run must return nil on it, and t.Context defers cancellation to cleanup, after the assertions
 	defer cancel()
 
 	go loop1.Run(ctx)
@@ -970,7 +970,7 @@ func TestRunnerBatchBarriersBeforeTheNextObservation(t *testing.T) {
 		t.Fatal(cerr)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background()) //nolint:modernize // the cancel is part of the test: Run must return nil on it, and t.Context defers cancellation to cleanup, after the assertions
 	defer cancel()
 
 	go c.Run(ctx)
@@ -1047,7 +1047,7 @@ func TestExhaustedHaltsApplicationUntilReset(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background()) //nolint:modernize // the cancel is part of the test: Run must return nil on it, and t.Context defers cancellation to cleanup, after the assertions
 	defer cancel()
 
 	go c.Run(ctx)
@@ -1104,7 +1104,7 @@ func TestConcurrentWakesAreRaceFree(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(context.Background()) //nolint:modernize // the cancel is part of the test: Run must return nil on it, and t.Context defers cancellation to cleanup, after the assertions
 	defer cancel()
 
 	go c.Run(ctx)
