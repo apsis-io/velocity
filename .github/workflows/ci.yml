@@ -79,6 +79,9 @@ jobs:
           go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
+      # Same pin as staticcheck: the analyzers' export-data readers lag the
+      # floating toolchain's writer, so the analysis steps run on the
+      # toolchain they can read while build and test take the new format.
       - name: wsl
         run: |
           golangci-lint run ./...
@@ -86,6 +89,8 @@ jobs:
           (cd analysis && golangci-lint run ./...)
           (cd benchmarks && golangci-lint run ./...)
           (cd teleos && golangci-lint run ./...)
+        env:
+          GOTOOLCHAIN: go1.27.1
 
       # velocity's own analyzer, over both modules that use the library.
       - name: lostrelease
@@ -94,6 +99,8 @@ jobs:
           go vet -vettool="$VELOCITYVET" ./...
           go -C benchmarks vet -vettool="$VELOCITYVET" ./...
           go -C failsafeown vet -vettool="$VELOCITYVET" ./...
+        env:
+          GOTOOLCHAIN: go1.27.1
 
       - name: test
         run: |
