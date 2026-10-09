@@ -571,6 +571,28 @@ Head-to-head numbers against the libraries these packages drew from —
 with fairness rules and an honest account of where velocity is slower and
 why, live in [`benchmarks/README.md`](benchmarks/README.md).
 
+Package-level costs, measured (ownership, after the lazy-broadcast
+optimization): the scoped paths — `View`, `Mutate` — are **allocation-free**
+at ~41–43ns; construct-and-release is one allocation at ~104ns; the
+advanced borrow tier keeps its documented per-borrow allocations, on
+purpose — it is the explicit, auditable tier. `teleos`'s engine `Step` is
+~78ns converged, ~120ns at an open frontier, and its harness is pure.
+Every number here is reproducible from the in-module benchmarks; the
+benchmark job compiles them in CI so they cannot rot.
+
+The rest of the survey (measured, and left as they are on purpose):
+`ErrGroup.Go` is at par with `x/sync`'s (~1.1µs, same allocs); `Gather`'s
+one-goroutine-per-task cost is its documented trade against `Map`'s fixed
+pool — `Map` wins per-task cost by construction, and the benchmark pairing
+exists to show it; `pool`'s 3 allocations per checkout are the safety model
+itself (Checkout, Lease, release closure — use-after-release detection and
+discard semantics are what those bytes buy); `dedupe`'s ~6 allocations per
+round front a call expensive enough to be worth deduplicating, and they buy
+the owned-result handles, the hooks, and the panic capture. Production
+numbers from the two deployments running v0.9.0 are in
+[`docs/decisions.md`](docs/decisions.md): no resident library goroutines,
+zero mutex contention, the pool amortized to near-zero at rest.
+
 ## Field use
 
 Both consumers are the author's own projects, which is the honest scope and a
