@@ -3,11 +3,11 @@ package pool
 import (
 	"context"
 	"errors"
-	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/apsis-io/velocity/ownership"
+	"github.com/vburenin/nsync"
 )
 
 // Config describes how a Pool makes and unmakes resources. New and Max are
@@ -32,10 +32,13 @@ type Config[T any] struct {
 // Get waits for capacity and is the only operation that waits; it does so
 // under the caller's context. Releasing never blocks.
 type Pool[T any] struct {
-	cfg     Config[T]
-	permits chan struct{} // one per resource that may exist
+	cfg Config[T]
+	// permits is one slot per resource that may exist. Acquiring it is the
+	// capacity wait; releasing it is the last thing a put does, so a waiter
+	// admitted by a release finds the idle set already updated.
+	permits *nsync.Semaphore
 
-	mu     sync.Mutex
+	mu     nsync.TryMutex
 	idle   []T
 	total  int // idle plus checked out
 	closed bool
@@ -59,7 +62,7 @@ func New[T any](cfg Config[T]) (*Pool[T], error) {
 		return nil, &ConfigError{Option: "Max", Reason: ErrInvalidMax}
 	}
 
-	return &Pool[T]{cfg: cfg, permits: make(chan struct{}, cfg.Max)}, nil
+	return &Pool[T]{cfg: cfg, permits: nsync.NewSemaphore(cfg.Max), mu: *nsync.NewTryMutex()}, nil
 }
 
 // Must is New for a Config that cannot fail, in the manner of
@@ -208,17 +211,20 @@ func (p *Pool[T]) Get(ctx context.Context) (*Checkout[T], error) {
 }
 
 func (p *Pool[T]) get(ctx context.Context) (*Checkout[T], bool, error) {
-	select {
-	case p.permits <- struct{}{}:
-	case <-ctx.Done():
-		return nil, false, context.Cause(ctx)
+	// A free permit is taken even when ctx is already done — a Get that can
+	// return instantly should — and waiting honours the context. Either way
+	// the pool reports the context's cause, not the semaphore's error shape.
+	if !p.permits.TryAcquire() {
+		if err := p.permits.AcquireContext(ctx); err != nil {
+			return nil, false, context.Cause(ctx)
+		}
 	}
 	// From here the permit is held; every exit either keeps it in the
 	// checkout or hands it back.
 	p.mu.Lock()
 	if p.closed {
 		p.mu.Unlock()
-		<-p.permits
+		p.permits.Release()
 
 		return nil, false, ErrClosed
 	}
@@ -238,7 +244,7 @@ func (p *Pool[T]) get(ctx context.Context) (*Checkout[T], bool, error) {
 
 	value, err := p.cfg.New(ctx)
 	if err != nil {
-		<-p.permits
+		p.permits.Release()
 		return nil, true, err
 	}
 
@@ -246,7 +252,7 @@ func (p *Pool[T]) get(ctx context.Context) (*Checkout[T], bool, error) {
 	if p.closed {
 		// Closed while constructing; the pool will never hand this out.
 		p.mu.Unlock()
-		<-p.permits
+		p.permits.Release()
 
 		return nil, true, errors.Join(ErrClosed, p.destroy(value))
 	}
@@ -276,7 +282,7 @@ func (p *Pool[T]) put(value T, discard bool) error {
 	if !discard && !p.closed {
 		p.idle = append(p.idle, value)
 		p.mu.Unlock()
-		<-p.permits
+		p.permits.Release()
 		p.released(false, nil)
 
 		return nil
@@ -292,7 +298,7 @@ func (p *Pool[T]) put(value T, discard bool) error {
 	p.retired.Add(1)
 
 	err := p.destroy(value)
-	<-p.permits
+	p.permits.Release()
 	p.released(true, err)
 
 	return err

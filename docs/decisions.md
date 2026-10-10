@@ -3050,3 +3050,28 @@ The record's rule asks for the author's judgment or a measurement. This
 seam has an in-repo consumer, a measured win on that consumer's hottest
 cycle, and it completes the arc the in-place leases started: three
 allocations per checkout became two, and now one.
+
+## The pool's permit and its lock: the channel was the cliff, then the mu (implemented)
+
+The pool's capacity permit was a buffered channel — one send per Get, one
+receive per put — and the earlier TryMutex trial of `pool.mu` measured
+parity and was kept out. Both facts were true and both were incomplete.
+The permit moved to `nsync.Semaphore` (TryAcquire first, so a Get that can
+return instantly still does on a done context; waiting honours ctx and
+reports `context.Cause` as before) and took the channel's internal lock
+and scheduler round-trips out of every cycle — solo 264-279 to 206 ns.
+And with the channel tax gone, `pool.mu` stopped measuring at parity:
+the same TryMutex swap that did nothing before the handler landed now
+took the contended cycle from ~536-602 to ~229-231 ns at four workers and
+~648-728 to ~242-245 ns at twenty-eight — three times the aggregate
+throughput where the pool used to get slower with every worker.
+
+The lesson is about verdicts, not locks: a parity measurement is parity
+under a specific set of co-contention sources. When another source
+disappears, re-run the trial. The earlier entry's verdict was correct on
+that day's pool; this entry supersedes it.
+
+Get's context contract is preserved and sharpened: free capacity is
+served even when the caller's context is already done (the channel's
+select chose randomly between exactly those cases), waiting reports
+`context.Cause` as before, and `Max`'s slot count is unchanged.
