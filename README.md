@@ -26,7 +26,7 @@ for features. Every design decision and its reasoning is recorded in
 | you have | use |
 |---|---|
 | a resource whose cleanup must run exactly once, at a known time | [`ownership`](#ownership) |
-| a bounded set of connections, buffers, or handles to reuse | [`pool`](#pool) |
+| a bounded set of connections, buffers, or handles to reuse | [`pool`](#pool), with `Stats()` for the reuse rate |
 | N tasks or a collection to run concurrently, bounded | [`async`](#async) |
 | many concurrent callers wanting the same expensive result | [`dedupe`](#dedupe) |
 | a flaky dependency to retry or stop calling | [`resilience`](#resilience) |

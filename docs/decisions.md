@@ -2835,6 +2835,26 @@ does not cover it, because a net whose whole semantics is GC timing cannot be
 asserted by a model that steps operations discretely — the targeted tests
 drive real collections instead.
 
+## pool.Stats: the instrumentation rule's first amendment, on demand (implemented)
+
+The README's standing rule — instrumentation is a Hooks struct the caller
+supplies, not metrics the package keeps — has now held for every package
+but one, and the exception arrived the way the record says good exceptions
+do: not as a wish, but as a wrapper a consumer built and carried to
+production. The kinetics runtime pool sat on velocity/pool and grew its
+own counters — created, passes served, retired, failed passes, and a
+reuse rate — because the operator's question ("is the pool earning its
+keep, or is every checkout a miss?") has no answer in Get/put/Hooks
+alone. Hooks report events; they do not accumulate into a rate.
+
+pool.Stats is the absorbed surface, with the semantics the wrapper
+proved: two allocations still, one atomic add per counter on paths that
+already ran, and the reuse rate derived rather than stored. It is
+counters, not a metrics system — no registry, no exporter, no labels —
+so the rule's substance (the package does not grow an observability
+stack) holds while its letter gains its first clause. The rule's text is
+amended in place rather than left to contradict this entry.
+
 ## teleos: the critics wrote the contract, and the record should say so (implemented)
 
 A nested module born on main with its engine, its daemon loop, and an

@@ -124,7 +124,7 @@ func TestGetReusesMostRecentlyReturned(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got := p.Stats(); got != (pool.Stats{InUse: 2, Max: 4}) {
+	if got := p.Stats(); got != (pool.Stats{InUse: 2, Max: 4, Created: 2, PassesServed: 2}) {
 		t.Fatalf("stats = %+v", got)
 	}
 	// Return first then second: second is on top and is reused next.
@@ -136,7 +136,7 @@ func TestGetReusesMostRecentlyReturned(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got := p.Stats(); got != (pool.Stats{Idle: 2, Max: 4}) {
+	if got := p.Stats(); got != (pool.Stats{Idle: 2, Max: 4, Created: 2, PassesServed: 2}) {
 		t.Fatalf("stats = %+v", got)
 	}
 
@@ -179,7 +179,7 @@ func TestCheckoutIsALease(t *testing.T) {
 		t.Fatalf("second Release = %v", err)
 	}
 
-	if got := p.Stats(); got != (pool.Stats{Idle: 1, Max: 1}) {
+	if got := p.Stats(); got != (pool.Stats{Idle: 1, Max: 1, Created: 1, PassesServed: 1}) {
 		t.Fatalf("double return changed stats: %+v", got)
 	}
 	// Discard after Release does not close a resource now owned by the pool.
@@ -213,7 +213,7 @@ func TestDiscardClosesAndFreesCapacity(t *testing.T) {
 		t.Fatalf("closed = %v, want [1]", closed)
 	}
 
-	if got := p.Stats(); got != (pool.Stats{Max: 1}) {
+	if got := p.Stats(); got != (pool.Stats{Max: 1, Created: 1, PassesServed: 1, Retired: 1, FailedPasses: 1}) {
 		t.Fatalf("stats after discard = %+v", got)
 	}
 	// The capacity is free again and a fresh resource is made.
@@ -437,7 +437,7 @@ func TestCloseDestroysIdleAndOutstandingOnReturn(t *testing.T) {
 		t.Fatalf("closed after return = %v, want [2 1]", closed)
 	}
 
-	if got := p.Stats(); got != (pool.Stats{Max: 2}) {
+	if got := p.Stats(); got != (pool.Stats{Max: 2, Created: 2, PassesServed: 2, Retired: 2}) {
 		t.Fatalf("stats after teardown = %+v", got)
 	}
 
@@ -567,7 +567,94 @@ func TestCheckoutInScope(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got := p.Stats(); got != (pool.Stats{Idle: 1, Max: 1}) {
+	if got := p.Stats(); got != (pool.Stats{Idle: 1, Max: 1, Created: 1, PassesServed: 1}) {
 		t.Fatalf("stats after scope unwind = %+v", got)
+	}
+}
+
+// TestStatsLifecycle pins the counters across a scenario that touches every
+// one: two resources constructed, three checkouts served, one discarded and
+// one retired at Close — and the reuse rate those numbers imply.
+func TestStatsLifecycle(t *testing.T) {
+	p, err := pool.New(pool.Config[string]{
+		New: func(context.Context) (string, error) { return "r", nil },
+		Max: 2,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	a, _ := p.Get(context.Background())
+	b, _ := p.Get(context.Background())
+
+	if err := a.Discard(); err != nil { // failed pass: the caller found it unusable
+		t.Fatal(err)
+	}
+
+	if err := b.Release(); err != nil {
+		t.Fatal(err)
+	}
+
+	c, _ := p.Get(context.Background())
+	_ = c
+
+	stats := p.Stats()
+	if stats.Created != 2 || stats.PassesServed != 3 || stats.Retired != 1 || stats.FailedPasses != 1 {
+		t.Fatalf("stats = %+v, want 2 created / 3 served / 1 retired / 1 failed", stats)
+	}
+
+	if got := stats.ReuseRate(); got != 1.0/3.0 {
+		t.Fatalf("ReuseRate = %v, want 1/3 — one of three checkouts was a miss", got)
+	}
+
+	// Release hands the resource back to idle; Close then retires it, which
+	// is the second destroy the pool performs in this scenario.
+	if err := c.Release(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := p.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	stats = p.Stats()
+	if stats.Retired != 2 {
+		t.Fatalf("retired after Close = %d, want 2: the discarded one and the idle one Close tore down", stats.Retired)
+	}
+}
+
+// TestStatsReuseRateNearZeroOnChurn: a workload whose callers discard
+// everything shows a near-zero reuse rate — the number that tells the
+// operator the pool is not earning its keep, which is the reason Stats
+// exists rather than the hooks alone.
+func TestStatsReuseRateNearZeroOnChurn(t *testing.T) {
+	p, err := pool.New(pool.Config[string]{
+		New:   func(context.Context) (string, error) { return "fresh", nil },
+		Max:   4,
+		Close: func(string) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for range 4 {
+		c, cerr := p.Get(context.Background())
+		if cerr != nil {
+			t.Fatal(cerr)
+		}
+
+		if err := c.Discard(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	stats := p.Stats()
+
+	if got := stats.ReuseRate(); got != 0 {
+		t.Fatalf("ReuseRate = %v under full churn, want 0", got)
+	}
+
+	if stats.FailedPasses != 4 {
+		t.Fatalf("failed passes = %d, want 4", stats.FailedPasses)
 	}
 }

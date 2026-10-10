@@ -39,6 +39,14 @@ type Pool[T any] struct {
 	idle   []T
 	total  int // idle plus checked out
 	closed bool
+
+	// The lifecycle counters Stats reports. Atomics because Get and put are
+	// the hot paths they measure — a counter that cost a lock on the path
+	// it measures would distort the number it reports.
+	created      atomic.Uint64 // constructed resources (pool misses)
+	passesServed atomic.Uint64 // checkouts handed out
+	retired      atomic.Uint64 // resources destroyed
+	failedPasses atomic.Uint64 // checkouts discarded by the caller
 }
 
 // New validates cfg and returns an empty pool. Resources are made on demand.
@@ -62,6 +70,59 @@ func Must[T any](p *Pool[T], err error) *Pool[T] {
 	}
 
 	return p
+}
+
+// Stats is a point-in-time view of the pool: the capacity gauges, and the
+// lifecycle counters since New.
+type Stats struct {
+	// Idle resources ready for the next Get.
+	Idle int
+	// InUse resources currently checked out.
+	InUse int
+	// Max is the configured bound on Idle+InUse.
+	Max int
+
+	// Created is the resources constructed because a Get found nothing
+	// idle — the pool misses.
+	Created uint64
+	// PassesServed is the checkouts handed out.
+	PassesServed uint64
+	// Retired is the resources destroyed: discarded by a caller, or
+	// destroyed because the pool closed while they were idle.
+	Retired uint64
+	// FailedPasses is the checkouts a caller discarded — found unusable.
+	FailedPasses uint64
+}
+
+// ReuseRate is the fraction of checkouts served by a resource that already
+// existed. Near 1 means the pool is earning its keep; near 0 means the
+// workload's concurrency reaches Max and every Get constructs, or callers
+// discard what they get.
+func (s Stats) ReuseRate() float64 {
+	if s.PassesServed == 0 {
+		return 0
+	}
+
+	return float64(s.PassesServed-s.Created) / float64(s.PassesServed)
+}
+
+// Stats reports the capacity gauges and the lifecycle counters. Safe for
+// concurrent use: the gauges are read under the pool lock, the counters
+// atomically — a snapshot, not a synchronized instant, with each field
+// consistent with itself.
+func (p *Pool[T]) Stats() Stats {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	return Stats{
+		Idle:         len(p.idle),
+		InUse:        p.total - len(p.idle),
+		Max:          p.cfg.Max,
+		Created:      p.created.Load(),
+		PassesServed: p.passesServed.Load(),
+		Retired:      p.retired.Load(),
+		FailedPasses: p.failedPasses.Load(),
+	}
 }
 
 // Checkout is one held resource. It is an ownership.Lease, so Value reports
@@ -114,6 +175,14 @@ func (p *Pool[T]) Get(ctx context.Context) (*Checkout[T], error) {
 	start := time.Now()
 
 	checkout, created, err := p.get(ctx)
+	if err == nil {
+		p.passesServed.Add(1)
+
+		if created {
+			p.created.Add(1)
+		}
+	}
+
 	if hook := p.cfg.Hooks.OnAcquire; hook != nil {
 		hook(time.Since(start), created, err)
 	}
@@ -200,6 +269,13 @@ func (p *Pool[T]) put(value T, discard bool) error {
 
 	p.total--
 	p.mu.Unlock()
+
+	if discard {
+		p.failedPasses.Add(1)
+	}
+
+	p.retired.Add(1)
+
 	err := p.destroy(value)
 	<-p.permits
 	p.released(true, err)
@@ -219,24 +295,6 @@ func (p *Pool[T]) destroy(value T) error {
 	}
 
 	return p.cfg.Close(value)
-}
-
-// Stats is a point-in-time view of the pool.
-type Stats struct {
-	// Idle resources ready for the next Get.
-	Idle int
-	// InUse resources currently checked out.
-	InUse int
-	// Max is the configured bound on Idle+InUse.
-	Max int
-}
-
-// Stats reports how many resources exist and how many are checked out.
-func (p *Pool[T]) Stats() Stats {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	return Stats{Idle: len(p.idle), InUse: p.total - len(p.idle), Max: p.cfg.Max}
 }
 
 // Close destroys every idle resource and refuses further Gets. It does not
@@ -259,6 +317,8 @@ func (p *Pool[T]) Close() error {
 	var errs []error
 
 	for _, value := range idle {
+		p.retired.Add(1)
+
 		if err := p.destroy(value); err != nil {
 			errs = append(errs, err)
 		}
