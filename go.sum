@@ -1,2 +1,4 @@
 github.com/puzpuzpuz/xsync/v4 v4.5.0 h1:vOSWu6b57/emh+L/Cw0BeQfvxa/cogFywXHeGUxQxAg=
 github.com/puzpuzpuz/xsync/v4 v4.5.0/go.mod h1:VJDmTCJMBt8igNxnkQd86r+8KUeN1quSfNKu5bLYFQo=
+github.com/vburenin/nsync v1.0.0 h1:88XkFlHokqArfWMf1adIe0He91K2Q6iL6z7Dq8E3ZaA=
+github.com/vburenin/nsync v1.0.0/go.mod h1:F1Z9drvZmN4G7az5lvrkk6VubZyap3EzoGt/p+ffepU=

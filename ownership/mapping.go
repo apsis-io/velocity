@@ -79,12 +79,7 @@ func (o *Owner[T]) Map[U any](fn func(T) (U, error), opts ...Option[U]) (*Owner[
 	c.changedLocked()
 	c.mu.Unlock()
 
-	derivedCell := &cell[U]{
-		value: derived,
-		mode:  modeUnique,
-		drop:  chainDrop(cfg.drop, sourceDrop, value),
-		clone: cfg.clone,
-	}
+	derivedCell := newCell(derived, modeUnique, 0, chainDrop(cfg.drop, sourceDrop, value), cfg.clone)
 	armNet(derivedCell)
 
 	return &Owner[U]{c: derivedCell}, nil

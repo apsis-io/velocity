@@ -18,11 +18,7 @@ import (
 // It cannot fail, so it returns no error. Use New with WithDrop when cleanup is
 // not exactly Close, or WithClone alongside it.
 func NewCloser[T io.Closer](value T) *Owner[T] {
-	c := &cell[T]{
-		value: value,
-		mode:  modeUnique,
-		drop:  func(closer T) error { return closer.Close() },
-	}
+	c := newCell(value, modeUnique, 0, func(closer T) error { return closer.Close() }, nil)
 	armNet(c)
 
 	return &Owner[T]{c: c}
@@ -40,7 +36,7 @@ type Owner[T any] struct {
 // returns no error; it is New for the case where there is nothing to
 // configure, which is most of them.
 func Own[T any](value T) *Owner[T] {
-	return &Owner[T]{c: &cell[T]{value: value, mode: modeUnique}}
+	return &Owner[T]{c: newCell(value, modeUnique, 0, nil, nil)}
 }
 
 // New creates a unique owner with options. Without options it is exactly
@@ -61,7 +57,7 @@ func New[T any](value T, opts ...Option[T]) (*Owner[T], error) {
 		return nil, err
 	}
 
-	c := &cell[T]{value: value, mode: modeUnique, drop: cfg.drop, clone: cfg.clone}
+	c := newCell(value, modeUnique, 0, cfg.drop, cfg.clone)
 	armNet(c)
 
 	return &Owner[T]{c: c}, nil

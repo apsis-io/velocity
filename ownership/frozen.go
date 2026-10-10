@@ -15,7 +15,7 @@ import "runtime"
 // results, or use an opaque value type, when interior mutation matters.
 func NewFrozen[T any](value T, opts ...Option[T]) (*Frozen[T], error) {
 	if len(opts) == 0 {
-		return &Frozen[T]{c: &cell[T]{value: value, mode: modeFrozen, shares: 1}}, nil
+		return &Frozen[T]{c: newCell(value, modeFrozen, 1, nil, nil)}, nil
 	}
 
 	cfg, err := buildConfig(opts)
@@ -23,7 +23,7 @@ func NewFrozen[T any](value T, opts ...Option[T]) (*Frozen[T], error) {
 		return nil, err
 	}
 
-	c := &cell[T]{value: value, mode: modeFrozen, shares: 1, drop: cfg.drop, clone: cfg.clone}
+	c := newCell(value, modeFrozen, 1, cfg.drop, cfg.clone)
 	armNet(c)
 
 	return &Frozen[T]{c: c}, nil

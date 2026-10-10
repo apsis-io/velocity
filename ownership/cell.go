@@ -2,9 +2,9 @@ package ownership
 
 import (
 	"runtime"
-	"sync"
 
 	"github.com/apsis-io/velocity/traits"
+	"github.com/vburenin/nsync"
 )
 
 type mode uint8
@@ -39,7 +39,7 @@ type State struct {
 }
 
 type cell[T any] struct {
-	mu sync.Mutex
+	mu nsync.TryMutex
 
 	value T
 	mode  mode
@@ -97,6 +97,21 @@ type cell[T any] struct {
 type handle struct {
 	state   handleState
 	borrows int
+}
+
+// newCell builds a cell with its lock initialized; every constructor goes
+// through it, so no cell can exist with a nil lock state. See trymutex.go:
+// a TryMutex's zero value is not usable, and the constructor pairs the
+// public handle with its shared state in one allocation.
+func newCell[T any](value T, m mode, shares int, drop traits.Drop[T], clone traits.Clone[T]) *cell[T] {
+	return &cell[T]{
+		mu:     *nsync.NewTryMutex(),
+		value:  value,
+		mode:   m,
+		shares: shares,
+		drop:   drop,
+		clone:  clone,
+	}
 }
 
 func (c *cell[T]) stateFor(h *handle) State {

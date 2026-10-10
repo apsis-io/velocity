@@ -1,6 +1,6 @@
 module github.com/apsis-io/velocity/benchmarks
 
-go 1.27
+go 1.27.0
 
 replace github.com/apsis-io/velocity => ../
 
@@ -15,6 +15,7 @@ require (
 
 require (
 	github.com/puzpuzpuz/xsync/v4 v4.5.0 // indirect
+	github.com/vburenin/nsync v1.0.0 // indirect
 	go.uber.org/atomic v1.7.0 // indirect
 	go.uber.org/multierr v1.9.0 // indirect
 )

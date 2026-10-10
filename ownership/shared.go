@@ -8,7 +8,7 @@ import "runtime"
 // guarantees.
 func NewShared[T any](value T, opts ...Option[T]) (*Shared[T], error) {
 	if len(opts) == 0 {
-		return &Shared[T]{c: &cell[T]{value: value, mode: modeShared, shares: 1}}, nil
+		return &Shared[T]{c: newCell(value, modeShared, 1, nil, nil)}, nil
 	}
 
 	cfg, err := buildConfig(opts)
@@ -16,7 +16,7 @@ func NewShared[T any](value T, opts ...Option[T]) (*Shared[T], error) {
 		return nil, err
 	}
 
-	c := &cell[T]{value: value, mode: modeShared, shares: 1, drop: cfg.drop, clone: cfg.clone}
+	c := newCell(value, modeShared, 1, cfg.drop, cfg.clone)
 	armNet(c)
 
 	return &Shared[T]{c: c}, nil
