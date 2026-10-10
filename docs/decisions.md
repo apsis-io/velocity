@@ -2927,3 +2927,57 @@ The findings that survive such an evaluation — the timeout that became an
 observation, the phase machine that became a frontier — are the difference
 between a library and a manifesto. Related: the drop net's entry, whose
 consumer report and whose record entry this module's arrival mirrors.
+
+## The ownership cell's mutex: the RWMutex conversion measured and rejected (recorded)
+
+The read paths of the ownership cell serialize on `c.mu`, a plain
+`sync.Mutex`: every `View`, scoped read, and `Shared` borrow takes the
+exclusive lock to admit itself and copy the value. The hypothesis was that
+converting the cell to `sync.RWMutex` — readers taking `RLock` together —
+would let read streams scale across cores, and the conversion was built in
+full: atomic `readers` and `borrows` counters (the race the conversion
+itself exposed), a lock-free exit path so admitted readers could drain while
+a writer waited, and a swap-based lazy broadcast so the signal arms needed no
+lock either.
+
+Two instruments were built to judge it, and both stay in the package:
+`BenchmarkSharedReadScaling` (parallel readers against one cell) and
+`BenchmarkSharedContention` (read/write mixes where every operation retries
+until it succeeds, because the scoped paths fail fast — a bench that alternates
+blindly measures the error path doing nothing). Building the first one caught
+its own classic bug: a shared sink write per operation measures cache-line
+ping-pong, not the cell. The verdicts below come from the fixed harness, one
+host, back-to-back runs.
+
+- **Uncontended, the conversion is a 2.1-2.6x tax.** Canonical single-goroutine
+  `View` went 43 to 92 ns/op and `Mutate` 41 to 108, because counted admission
+  is four atomic read-modify-writes to shared lines where the old path had a
+  plain increment inside one uncontended lock. Every one of the common,
+  single-goroutine paths pays.
+- **Contended, it wins big.** The read stream's serialized constant dropped
+  ~300 to ~128 ns/op (2.3x aggregate), and the mixed workloads improved 4-8x:
+  at 12.5% writes, ~5.6 us/op with ~27 conflict allocations per operation
+  became ~0.7 us/op with 2. The lock-free exit is what does it — freezing
+  reader exits behind an exclusive lock strands the count a waiting writer
+  checks above zero, so a tight retry could starve indefinitely; draining
+  readers fixed that.
+- **Neither result scales with worker count.** Aggregate throughput is flat
+  across worker counts on both versions (four and twenty-eight measured). The cell's accounting is the
+  serializer: the atomic counter lines, not the lock, bound aggregate read
+  throughput at roughly one operation per 110-130 ns no matter how many
+  readers run.
+
+That last line is the decision. The conversion trades 2x on every
+uncontended call — the default shape for a borrow-checked value — for
+contended wins that top out at 2.3x because the accounting, not the lock,
+is the ceiling. Paying double everywhere to make a workload no consumer runs
+somewhat faster, under a ceiling the conversion cannot lift, is not a
+trade this record can defend. The conversion is reverted; the full tree is
+parked on the `ownership-rwmutex-conversion` branch with its race battery
+green.
+
+What would reopen it: a consumer workload whose hot path is genuinely
+contended reads through one cell, and an accounting redesign that removes the
+shared-line serialization — per-handle sharded counters or an epoch scheme —
+at which point the parked branch is the map, not the destination. The
+instruments stay either way; they are how the next candidate gets judged.

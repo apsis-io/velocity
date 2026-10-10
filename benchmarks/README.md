@@ -157,6 +157,22 @@ left as documented: inlining its lease into the borrow would save a single
 allocation on the explicitly opt-in tier while churning lease identity
 through the debug cleanup and async's queued mutations.
 
+**what the cell costs under contention is measured, not guessed.** Two
+instruments stay in the package: `BenchmarkSharedReadScaling` (parallel
+readers against one cell) and `BenchmarkSharedContention` (read/write mixes
+where each operation retries until it succeeds — the scoped paths fail fast,
+so a bench that alternates blindly measures the error path doing nothing).
+They exist because an RWMutex conversion of the cell was built, measured, and
+rejected: it taxed every uncontended path 2.1-2.6x (43 to 92 ns/op for a
+scoped read), the read stream's serialized constant only dropped ~300 to
+~128 ns/op, and iteration counts stayed flat from one worker to sixteen —
+the counters' shared cache lines, not the lock, bound aggregate read
+throughput. The full record is in docs/decisions.md; the instruments are how
+the next candidate gets judged. On the shipped cell, the contention table
+reads: pure reads ~310 ns/op per operation (serialized admissions), mixes
+5.5-7.8 us/op with 26-38 conflict allocations per operation as the write
+share grows, and a writer-versus-writer storm ~7 us/op.
+
 **pool** got the same treatment through two ownership API additions:
 `NewLeaseInto` and `Lease.MoveInto`, the in-place forms, let a Checkout
 embed its Lease by value — a Get+Release is two allocations (96 B) where
