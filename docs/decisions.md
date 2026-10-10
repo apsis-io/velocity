@@ -3014,3 +3014,15 @@ there.
 Every cell is built through one `newCell` helper so none can exist with a
 nil lock state — `Map`'s derived cell, constructed by direct literal, was
 found by the race suite as exactly that bug.
+
+**The pool's lock was tried and kept as it was.** `pool.Pool.mu` guards a
+slice pop, an append, and a flag — sections of a few dozen nanoseconds —
+and on interleaved rounds the TryMutex swap measured parity at every
+worker count: 274-292 ns solo, ~303-309 ns at four workers, ~321-328 ns at
+twenty-eight, both versions. A pool's contention lives in its capacity
+channel and its checkout machinery, not in a lock that never parks, so
+the dependency stops at ownership. The churn instrument stays —
+`pool.BenchmarkPoolReuse`, varied with -cpu — which is also what caught
+its own first lesson: a single baseline run measured a 582 ns cliff that
+the controlled interleaved rounds could not reproduce. Only interleaved
+rounds count.
