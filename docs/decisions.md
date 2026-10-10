@@ -3075,3 +3075,29 @@ Get's context contract is preserved and sharpened: free capacity is
 served even when the caller's context is already done (the channel's
 select chose randomly between exactly those cases), waiting reports
 `context.Cause` as before, and `Max`'s slot count is unchanged.
+
+## The async primitives' permits leave the channel (implemented)
+
+`async.Semaphore` was a buffered channel and `async.Mutex` was that
+semaphore at capacity one — the exact shape whose channel the pool
+already left. The permits are now `nsync.Semaphore`, whose
+`AcquireContext` checks the context before trying, matching the
+documented contract verbatim: a cancelled caller never proceeds by luck.
+`Permit` keeps its exactly-once `sync.Once`, and the release path's
+panic-on-over-release can never fire from valid use because the once
+guards it. The analyzer's story is untouched — it reads caller permit
+discipline, and `Permit` is still the returned value.
+
+Interleaved rounds: uncontended 132-138 to 74-81 ns (the channel
+send/receive pair was half of every cycle), semaphore churn at
+twenty-eight workers 312-326 to 154-155 ns, mutex churn 371-376 to
+85-89 ns — near-flat from one worker to twenty-eight, the cliff gone.
+`RWMutex`'s admission lock went to TryMutex in the same window and its
+parallel-read bench answered for it: 359 to 101 ns, writes 245 to 135.
+The reader/writer machinery itself stays hand-rolled; nsync has no
+reader-writer lock.
+
+The Mutex doc's x/sync comparison numbers described the channel version
+and are now marked as history rather than deleted: the advice they
+supported — choose on the call site, the lock is a few percent of the
+work it guards — is the part that survived.

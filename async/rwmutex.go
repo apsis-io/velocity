@@ -2,7 +2,8 @@ package async
 
 import (
 	"context"
-	"sync"
+
+	"github.com/vburenin/nsync"
 )
 
 // RWMutex is a read/write lock whose RLock and Lock both wait under the
@@ -45,7 +46,7 @@ import (
 // lock for as long as the write lock waits for it. The context bounds the wait;
 // it does not break the cycle.
 type RWMutex struct {
-	mu      sync.Mutex
+	mu      nsync.TryMutex
 	readers int  // read permits currently held
 	waiting int  // writers blocked in Lock
 	held    bool // a writer holds the lock
@@ -53,7 +54,9 @@ type RWMutex struct {
 }
 
 // NewRWMutex returns an unlocked RWMutex.
-func NewRWMutex() *RWMutex { return &RWMutex{} }
+func NewRWMutex() *RWMutex {
+	return &RWMutex{mu: *nsync.NewTryMutex()}
+}
 
 // RLock takes a read lock, waiting under ctx. Any number of readers may hold
 // the lock at once; a writer excludes them all, and once a writer is waiting

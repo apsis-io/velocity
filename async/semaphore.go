@@ -3,6 +3,8 @@ package async
 import (
 	"context"
 	"sync"
+
+	"github.com/vburenin/nsync"
 )
 
 // Semaphore is a counting semaphore whose Acquire waits under the caller's
@@ -16,7 +18,7 @@ import (
 //	}
 //	defer permit.Release()
 type Semaphore struct {
-	permits chan struct{}
+	permits *nsync.Semaphore
 }
 
 // NewSemaphore returns a semaphore admitting n holders at once.
@@ -25,7 +27,7 @@ func NewSemaphore(n int) (*Semaphore, error) {
 		return nil, &TaskError{Index: -1, Cause: ErrInvalidLimit}
 	}
 
-	return &Semaphore{permits: make(chan struct{}, n)}, nil
+	return &Semaphore{permits: nsync.NewSemaphore(n)}, nil
 }
 
 // Acquire takes a permit, waiting under ctx for one to be released. A
@@ -42,12 +44,14 @@ func (s *Semaphore) Acquire(ctx context.Context) (*Permit, error) {
 		return nil, context.Cause(ctx)
 	}
 
-	select {
-	case s.permits <- struct{}{}:
-		return &Permit{permits: s.permits}, nil
-	case <-ctx.Done():
+	// AcquireContext checks ctx before trying, matching the contract above:
+	// a cancelled caller never proceeds by luck. The pool reports the
+	// context's cause, as the channel select did.
+	if err := s.permits.AcquireContext(ctx); err != nil {
 		return nil, context.Cause(ctx)
 	}
+
+	return &Permit{permits: s.permits}, nil
 }
 
 // TryAcquire takes a permit if one is free, without waiting.
@@ -58,19 +62,18 @@ func (s *Semaphore) TryAcquire() (*Permit, bool) {
 		return nil, false
 	}
 
-	select {
-	case s.permits <- struct{}{}:
-		return &Permit{permits: s.permits}, true
-	default:
+	if !s.permits.TryAcquire() {
 		return nil, false
 	}
+
+	return &Permit{permits: s.permits}, true
 }
 
 // Permit is one held unit of a Semaphore, the lock of a Mutex, or a read or
 // write lock of an RWMutex. Release hands it back exactly once; later calls do
 // nothing.
 type Permit struct {
-	permits chan struct{}
+	permits *nsync.Semaphore
 	once    sync.Once
 	// rw is set only by RWMutex, whose read and write locks are not tokens in a
 	// channel. It is nil on the Semaphore path, which is the hot one, and
@@ -101,7 +104,7 @@ func (p *Permit) Release() {
 			return
 		}
 
-		<-p.permits
+		p.permits.Release()
 	})
 }
 
@@ -119,10 +122,10 @@ func (p *Permit) Release() {
 //
 // The Permit costs one allocation on every acquire, which x/sync's
 // semaphore.NewWeighted(1) does not pay uncontended — but x/sync allocates
-// a waiter per blocked acquire, which this does not. Measured as a
-// primitive on one machine, both arms interleaved in one process: ~4x more
-// expensive uncontended, ~1.3x cheaper and a seventh of the allocations
-// under contention.
+// a waiter per blocked acquire, which this does not. The interleaved
+// measurement against x/sync in the record's history described the
+// channel-permit version; the internals have since moved, so treat any
+// inherited number as stale and measure the site you care about.
 //
 // Choose on the call site, not on those numbers. End to end at the sites
 // this replaces, the difference was below run-to-run variance: re-running
@@ -136,7 +139,7 @@ type Mutex struct {
 
 // NewMutex returns an unlocked Mutex.
 func NewMutex() *Mutex {
-	return &Mutex{sem: Semaphore{permits: make(chan struct{}, 1)}}
+	return &Mutex{sem: Semaphore{permits: nsync.NewSemaphore(1)}}
 }
 
 // Lock takes the lock, waiting under ctx.
