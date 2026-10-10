@@ -2981,3 +2981,36 @@ contended reads through one cell, and an accounting redesign that removes the
 shared-line serialization — per-handle sharded counters or an epoch scheme —
 at which point the parked branch is the map, not the destination. The
 instruments stay either way; they are how the next candidate gets judged.
+
+## The cell's mutex: parking latency was the cliff, accounting is the ceiling (implemented)
+
+The RWMutex rejection above recorded that the lock "was not the whole
+ceiling" without splitting the two effects apart. The cell's mutex is now
+`nsync.TryMutex` — `github.com/vburenin/nsync` v1.0.0, MIT, velocity's
+second dependency, byte-verified against the author's tree through the
+module proxy — and the split is now measured: the lock's parking latency
+was the contention cliff, and the accounting is the ceiling.
+
+Interleaved main-vs-candidate rounds on one host: every uncontended path
+at parity (View ~40 ns, Mutate ~39 ns), construction 1.6x faster (106 to
+65 ns, and 160 to 24 B/op — the TryMutex constructor pairs the public
+handle with its shared state in one allocation), and at twenty-eight
+workers the contention profiles collapsed: pure reads 261-279 to 45-47
+ns/op, the 12.5% write mix 1141-1273 to 192-204 ns/op, the writer storm
+twelve-fold, and conflict allocations fell from 10-15 per operation to
+1-2 — the barging lock admits a writer into a gap instead of parking it
+in FIFO order behind a reader cohort. The conflict-retry storms the
+contention bench exposed on the RWMutex candidate were never an RWMutex
+property; they were parking latency, and they are gone.
+
+What did not move: aggregate read throughput still tops out at the solo
+rate, one operation per ~45 ns, because the readers and borrows counters
+inside the admission critical section serialize the stream. That is the
+accounting ceiling the RWMutex record described, unchanged. The parked
+`ownership-rwmutex-conversion` branch's lock is obsolete; its accounting
+lesson is not, and any future sharded or epoch counter design starts
+there.
+
+Every cell is built through one `newCell` helper so none can exist with a
+nil lock state — `Map`'s derived cell, constructed by direct literal, was
+found by the race suite as exactly that bug.
