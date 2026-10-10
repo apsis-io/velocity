@@ -161,7 +161,13 @@ func (c *Checkout[T]) Discard() error {
 		return nil
 	}
 
-	c.discard.Store(true)
+	// Only a holder may arm the discard. The flag is shared with every
+	// handle this one moved to — that is how Discard stays available on the
+	// moved-to handle — so a spent handle storing on it would silently
+	// convert that handle's Release into a destroy.
+	if c.Held() {
+		c.discard.Store(true)
+	}
 
 	return c.Release()
 }
