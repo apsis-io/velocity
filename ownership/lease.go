@@ -22,8 +22,20 @@ type Lease[T any] struct {
 	mu       sync.Mutex
 	value    T
 	release  func(T) error
+	handler  LeaseHandler[T]
 	released bool
 	relErr   error
+}
+
+// LeaseHandler is the handler form of the release callback: a value whose
+// ReleaseLease returns the leased value when the lease lets it go. It exists
+// for a Lease embedded in a per-operation struct — a pool checkout, a request
+// scope — whose release is a method on that very struct: the interface holds
+// the pointer without boxing, so the per-operation release closure, which
+// would capture the struct and allocate, disappears. Set it with
+// NewLeaseIntoHandler; exactly one of release and handler is set.
+type LeaseHandler[T any] interface {
+	ReleaseLease(value T) error
 }
 
 // NewLease holds value until Release hands it back through release. The release
@@ -54,6 +66,21 @@ func NewLeaseInto[T any](l *Lease[T], value T, release func(T) error) error {
 
 	l.value = value
 	l.release = release
+
+	return nil
+}
+
+// NewLeaseIntoHandler is NewLeaseInto for a handler: the Lease embedded in a
+// struct whose method releases the value, one allocation for the whole of it
+// and no release closure. h must not be nil, and the same rules as NewLease
+// apply — the method returns normally and is bounded. l must be a zero Lease.
+func NewLeaseIntoHandler[T any](l *Lease[T], value T, h LeaseHandler[T]) error {
+	if h == nil {
+		return &ConfigError{Option: "lease release", Reason: ErrNilOption}
+	}
+
+	l.value = value
+	l.handler = h
 
 	return nil
 }
@@ -110,7 +137,7 @@ func (l *Lease[T]) Move() (*Lease[T], error) {
 
 	l.released = true
 
-	return &Lease[T]{value: l.value, release: l.release}, nil
+	return &Lease[T]{value: l.value, release: l.release, handler: l.handler}, nil
 }
 
 // MoveInto transfers the held resource into dst and spends the receiver —
@@ -134,6 +161,7 @@ func (l *Lease[T]) MoveInto(dst *Lease[T]) error {
 	dst.mu.Lock()
 	dst.value = l.value
 	dst.release = l.release
+	dst.handler = l.handler
 	dst.mu.Unlock()
 
 	return nil
@@ -156,14 +184,19 @@ func (l *Lease[T]) Release() error {
 	}
 
 	l.released = true
-	value, release := l.value, l.release
+	value, release, handler := l.value, l.release, l.handler
 
 	var zero T
 
 	l.value = zero
 	l.mu.Unlock()
 
-	err := release(value)
+	var err error
+	if handler != nil {
+		err = handler.ReleaseLease(value)
+	} else {
+		err = release(value)
+	}
 
 	l.mu.Lock()
 	l.relErr = err

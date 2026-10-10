@@ -178,8 +178,10 @@ tops out at the solo rate: the accounting, not the lock, is the ceiling.
 
 **pool** got the same treatment through two ownership API additions:
 `NewLeaseInto` and `Lease.MoveInto`, the in-place forms, let a Checkout
-embed its Lease by value — a Get+Release is two allocations (96 B) where
-three were (104 B), and `Move` no longer allocates on the handoff path.
+embed its Lease by value and let the checkout be its own release handler —
+a Get+Release is one allocation (96 B) where the closure form was two and
+the original three were (104 B), and `Move` no longer allocates on the
+handoff path.
 
 **velocity beats hunch on async and loses to errgroup**, both for structural
 reasons. hunch boxes every result through `interface{}` and restores source

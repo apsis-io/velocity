@@ -132,10 +132,21 @@ func (p *Pool[T]) Stats() Stats {
 // closed instead of returned, and its capacity freed for a fresh one.
 type Checkout[T any] struct {
 	ownership.Lease[T]
+	// p is the pool this checkout came from; the Lease's release handler is
+	// this checkout itself, so the value can come back without a per-cycle
+	// closure.
+	p *Pool[T]
 	// discard points at flag, or at the original handle's flag after a Move,
-	// so the release closure and every handle agree on it.
+	// so the release handler and every handle agree on it.
 	discard *atomic.Bool
 	flag    atomic.Bool
+}
+
+// ReleaseLease is the Checkout's LeaseHandler half: the Lease calls it with
+// the value when the checkout releases. It reads this checkout's discard
+// flag, which after a Move is shared with the original handle — see Move.
+func (c *Checkout[T]) ReleaseLease(value T) error {
+	return c.p.put(value, c.flag.Load())
 }
 
 // Move transfers the checkout to a fresh handle and spends this one, exactly
@@ -247,14 +258,12 @@ func (p *Pool[T]) get(ctx context.Context) (*Checkout[T], bool, error) {
 }
 
 func (p *Pool[T]) checkout(value T) *Checkout[T] {
-	c := &Checkout[T]{}
+	c := &Checkout[T]{p: p}
 	c.discard = &c.flag
-	// NewLeaseInto rejects only a nil release, which this is not. The Lease
-	// is embedded by value, so a checkout is two allocations where three
-	// were: the handle, and the release closure.
-	_ = ownership.NewLeaseInto(&c.Lease, value, func(value T) error {
-		return p.put(value, c.flag.Load())
-	})
+	// The Lease is embedded by value and this checkout is its release
+	// handler, so a checkout is one allocation where the closure form was
+	// two.
+	_ = ownership.NewLeaseIntoHandler(&c.Lease, value, c)
 
 	return c
 }

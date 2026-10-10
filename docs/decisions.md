@@ -3026,3 +3026,27 @@ the dependency stops at ownership. The churn instrument stays —
 its own first lesson: a single baseline run measured a 582 ns cliff that
 the controlled interleaved rounds could not reproduce. Only interleaved
 rounds count.
+
+## The lease grows a handler form, and a checkout is its own release (implemented)
+
+The pool's Get/Release cycle allocated two objects: the checkout, and a
+release closure capturing the pool and the checkout. A closure capturing
+anything allocates, so the closure could not go while the Lease's release
+was a func — the discard flag it reads at release time is per-cycle state
+that has to be reached somehow. The Lease therefore grows `LeaseHandler`
+and `NewLeaseIntoHandler`: a value whose method returns the leased value,
+stored in the interface without boxing. The checkout implements it; the
+release closure disappears and the cycle is one allocation — bytes
+unchanged at 96 B, the struct grew as the closure vanished.
+
+Interleaved rounds, verified by source hits after one round measured the
+candidate against itself because the working tree rode an uncommitted
+branch switch: solo 282-286 to 263-265 ns, contended parity. `Move` and
+`MoveInto` transfer the handler exactly as they transfer the func, and the
+shared-discard-flag semantics are untouched — the handler is the
+moved-from checkout, precisely the capture the closure held.
+
+The record's rule asks for the author's judgment or a measurement. This
+seam has an in-repo consumer, a measured win on that consumer's hottest
+cycle, and it completes the arc the in-place leases started: three
+allocations per checkout became two, and now one.
