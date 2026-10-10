@@ -23,6 +23,10 @@ concurrency:
 env:
   # The analyzer is built once and reused by every vet step below.
   VELOCITYVET: ${{ github.workspace }}/bin/velocityvet
+  # The analysis tools (staticcheck, golangci-lint, velocityvet, the drift
+  # test) run on this pinned toolchain — their export-data readers lag the
+  # floating toolchain's writer. Bump alongside their releases.
+  GOTOOLCHAIN: go1.27.1
 
 jobs:
   check:
@@ -65,8 +69,6 @@ jobs:
         with:
           version: latest
           install-go: false
-        env:
-          GOTOOLCHAIN: go1.27.1
 
       # Whitespace style, via golangci-lint's bundled wsl_v5, with its default
       # set. See .golangci.yml for what is on and why. Installed here rather
@@ -89,8 +91,6 @@ jobs:
           (cd analysis && golangci-lint run ./...)
           (cd benchmarks && golangci-lint run ./...)
           (cd teleos && golangci-lint run ./...)
-        env:
-          GOTOOLCHAIN: go1.27.1
 
       # velocity's own analyzer, over both modules that use the library.
       - name: lostrelease
@@ -99,8 +99,6 @@ jobs:
           go vet -vettool="$VELOCITYVET" ./...
           go -C benchmarks vet -vettool="$VELOCITYVET" ./...
           go -C failsafeown vet -vettool="$VELOCITYVET" ./...
-        env:
-          GOTOOLCHAIN: go1.27.1
 
       - name: test
         run: |
@@ -113,8 +111,6 @@ jobs:
       # 4 — the same ceiling the analysis tools below run under.
       - name: analysis tests
         run: go -C analysis test ./...
-        env:
-          GOTOOLCHAIN: go1.27.1
 
       - name: test -race
         run: |

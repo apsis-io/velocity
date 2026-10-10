@@ -3,16 +3,18 @@ set shell := ["bash", "-eu", "-o", "pipefail", "-c"]
 fmt:
     test -z "$(gofmt -l .)"
 
-# staticcheck runs under the pinned go1.27.1 toolchain: its export-data
-# reader stops at version 4, and a local toolchain newer than that (1.27.2
-# writes version 5) feeds it what it cannot read. Same pin CI uses — the
-# two move together, and both move when staticcheck ships a reader for the
-# new format.
+# The analysis tools run under one pinned toolchain, declared once: their
+# export-data readers stop at version 4, and a floating toolchain newer
+# than that (1.27.2 writes version 5) feeds them what they cannot read.
+# Same pin CI uses — the two move together, and both move when the
+# analyzers ship readers for the new format.
+export GOTOOLCHAIN := "go1.27.1"
+
 vet:
     go vet ./...
     go -C failsafeown vet ./...
     go -C teleos vet ./...
-    GOTOOLCHAIN=go1.27.1 staticcheck ./...
+    staticcheck ./...
 
 # Whitespace style, through golangci-lint's bundled wsl_v5. See .golangci.yml:
 # it runs that one linter and nothing else, because the rest of velocity's
@@ -25,11 +27,11 @@ vet:
 #
 #   go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
 wsl:
-    GOTOOLCHAIN=go1.27.1 golangci-lint run ./...
-    (cd failsafeown && GOTOOLCHAIN=go1.27.1 golangci-lint run ./...)
-    (cd analysis && GOTOOLCHAIN=go1.27.1 golangci-lint run ./...)
-    (cd benchmarks && GOTOOLCHAIN=go1.27.1 golangci-lint run ./...)
-    (cd teleos && GOTOOLCHAIN=go1.27.1 golangci-lint run ./...)
+    golangci-lint run ./...
+    (cd failsafeown && golangci-lint run ./...)
+    (cd analysis && golangci-lint run ./...)
+    (cd benchmarks && golangci-lint run ./...)
+    (cd teleos && golangci-lint run ./...)
 
 # Apply the rules rather than report them. Mechanical, and reviewed as its own
 # commit.
@@ -42,11 +44,11 @@ wsl-fix:
 
 # Run velocity's own analyzers (lostrelease) as a vet tool over every module.
 lint:
-    GOTOOLCHAIN=go1.27.1 go -C analysis build -o "${TMPDIR:-/tmp}/velocityvet" ./cmd/velocityvet
-    GOTOOLCHAIN=go1.27.1 go vet -vettool="${TMPDIR:-/tmp}/velocityvet" ./...
-    GOTOOLCHAIN=go1.27.1 go -C benchmarks vet -vettool="${TMPDIR:-/tmp}/velocityvet" ./...
-    GOTOOLCHAIN=go1.27.1 go -C analysis test ./...
-    GOTOOLCHAIN=go1.27.1 go -C failsafeown vet -vettool="${TMPDIR:-/tmp}/velocityvet" ./...
+    go -C analysis build -o "${TMPDIR:-/tmp}/velocityvet" ./cmd/velocityvet
+    go vet -vettool="${TMPDIR:-/tmp}/velocityvet" ./...
+    go -C benchmarks vet -vettool="${TMPDIR:-/tmp}/velocityvet" ./...
+    go -C analysis test ./...
+    go -C failsafeown vet -vettool="${TMPDIR:-/tmp}/velocityvet" ./...
 
 test:
     go test ./...
