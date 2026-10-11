@@ -1,5 +1,7 @@
-github.com/apsis-io/velocity v0.4.0 h1:ySEEPycULwDK1oJRuo3udepE7ctV3AwGtwz1clASvMU=
-github.com/apsis-io/velocity v0.4.0/go.mod h1:mMz9+7Upn8PemmDzTTTCITsXHjuO+XjcAgXMxkMb7ng=
+github.com/apsis-io/nsync v1.2.0 h1:eQcR8AMoupuz1Wt5+ggczdoYumOuBAcDak+QmUIgNSU=
+github.com/apsis-io/nsync v1.2.0/go.mod h1:CeHkLPahryw50rhnUC/QFHONtM6+pi4avAj9Ov34Qtc=
+github.com/apsis-io/velocity v0.13.1 h1:TyUwebb+npV85fPFG5WqxUjUQac7AnDEwSf0nS9gQYw=
+github.com/apsis-io/velocity v0.13.1/go.mod h1:IN+XR9T749GzYIeK3fVDq1NlhjIejs6TIgc9XGL6ptY=
 github.com/bits-and-blooms/bitset v1.24.4 h1:95H15Og1clikBrKr/DuzMXkQzECs1M6hhoGXLwLQOZE=
 github.com/bits-and-blooms/bitset v1.24.4/go.mod h1:7hO7Gc7Pp1vODcmWvKMRA9BNmbv6a/7QIWpPxHddWR8=
 github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c=
