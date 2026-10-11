@@ -1,6 +1,6 @@
 module github.com/apsis-io/velocity/failsafeown
 
-go 1.27
+go 1.27.0
 
 require (
 	github.com/apsis-io/velocity v0.13.1
@@ -8,6 +8,6 @@ require (
 )
 
 require (
-	github.com/apsis-io/nsync v1.2.0
+	github.com/apsis-io/nsync v1.2.0 // indirect
 	github.com/bits-and-blooms/bitset v1.24.4 // indirect
 )
