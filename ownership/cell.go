@@ -3,7 +3,7 @@ package ownership
 import (
 	"runtime"
 
-	"github.com/apsis-io/velocity/internal/nsync"
+	"github.com/apsis-io/nsync"
 	"github.com/apsis-io/velocity/traits"
 )
 
