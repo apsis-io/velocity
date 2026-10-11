@@ -30,9 +30,13 @@ import (
 // cross-primitive probe.
 func FuzzSyncModel(f *testing.F) {
 	f.Add([]byte{0, 0, 2, 0, 1, 3, 6})
+
 	f.Add([]byte{4, 5, 6, 4, 8, 9, 14, 6})
+
 	f.Add([]byte{8, 8, 10, 15, 12, 8, 13, 14})
+
 	f.Add([]byte{0, 4, 8, 10, 1, 5, 9, 11, 15, 12, 6, 14, 2})
+
 	f.Fuzz(func(t *testing.T, ops []byte) {
 		ctx := context.Background()
 
@@ -42,7 +46,11 @@ func FuzzSyncModel(f *testing.F) {
 		}
 
 		mu := async.NewMutex()
-		rw := async.NewRWMutex()
+		// The zero RWMutex, deliberately: constructor-only coverage is the
+		// input blind spot that let the v0.13.0 zero-value break ship, so
+		// the model drives the zero value and its exact-model assertions
+		// exercise the embed shape the consumer audit called out.
+		var rw async.RWMutex
 
 		var (
 			semHeld    int
@@ -73,6 +81,7 @@ func FuzzSyncModel(f *testing.F) {
 				}
 
 				semHeld++
+
 				semLive = append(semLive, p)
 
 			case 1:
@@ -83,6 +92,7 @@ func FuzzSyncModel(f *testing.F) {
 
 				if ok {
 					semHeld++
+
 					semLive = append(semLive, p)
 				}
 
@@ -95,7 +105,9 @@ func FuzzSyncModel(f *testing.F) {
 				semLive = semLive[1:]
 
 				p.Release()
+
 				semHeld--
+
 				semSpent = append(semSpent, p)
 
 			case 3:
@@ -118,6 +130,7 @@ func FuzzSyncModel(f *testing.F) {
 				}
 
 				muHeld = true
+
 				muLive = append(muLive, p)
 
 			case 5:
@@ -128,6 +141,7 @@ func FuzzSyncModel(f *testing.F) {
 
 				if ok {
 					muHeld = true
+
 					muLive = append(muLive, p)
 				}
 
@@ -140,7 +154,9 @@ func FuzzSyncModel(f *testing.F) {
 				muLive = muLive[1:]
 
 				p.Release()
+
 				muHeld = false
+
 				muSpent = append(muSpent, p)
 
 			case 7:
@@ -162,6 +178,7 @@ func FuzzSyncModel(f *testing.F) {
 				}
 
 				rwReaders++
+
 				rwReadLive = append(rwReadLive, p)
 
 			case 9:
@@ -172,6 +189,7 @@ func FuzzSyncModel(f *testing.F) {
 
 				if ok {
 					rwReaders++
+
 					rwReadLive = append(rwReadLive, p)
 				}
 
@@ -186,6 +204,7 @@ func FuzzSyncModel(f *testing.F) {
 				}
 
 				rwWriter = true
+
 				rwWriteLiv = append(rwWriteLiv, p)
 
 			case 11:
@@ -196,6 +215,7 @@ func FuzzSyncModel(f *testing.F) {
 
 				if ok {
 					rwWriter = true
+
 					rwWriteLiv = append(rwWriteLiv, p)
 				}
 
@@ -205,14 +225,18 @@ func FuzzSyncModel(f *testing.F) {
 					rwWriteLiv = rwWriteLiv[1:]
 
 					p.Release()
+
 					rwWriter = false
+
 					rwSpent = append(rwSpent, p)
 				} else if len(rwReadLive) > 0 {
 					p := rwReadLive[0]
 					rwReadLive = rwReadLive[1:]
 
 					p.Release()
+
 					rwReaders--
+
 					rwSpent = append(rwSpent, p)
 				}
 
@@ -232,7 +256,9 @@ func FuzzSyncModel(f *testing.F) {
 				rwReadLive = rwReadLive[1:]
 
 				p.Release()
+
 				rwReaders--
+
 				rwSpent = append(rwSpent, p)
 
 			case 15:
@@ -241,17 +267,13 @@ func FuzzSyncModel(f *testing.F) {
 				if p, ok := sem.TryAcquire(); ok != (semHeld < 8) {
 					t.Fatalf("probe: TryAcquire = %v with %d of 8 held", ok, semHeld)
 				} else if ok {
-					semHeld++
 					p.Release()
-					semHeld--
 				}
 
 				if p, ok := mu.TryLock(); ok != !muHeld {
 					t.Fatalf("probe: TryLock = %v with mutex held=%v", ok, muHeld)
 				} else if ok {
-					muHeld = true
 					p.Release()
-					muHeld = false
 				}
 
 				p, ok := rw.TryRLock()
@@ -260,9 +282,7 @@ func FuzzSyncModel(f *testing.F) {
 				}
 
 				if ok {
-					rwReaders++
 					p.Release()
-					rwReaders--
 				}
 			}
 		}
@@ -274,6 +294,7 @@ func FuzzSyncModel(f *testing.F) {
 			semLive = semLive[1:]
 
 			p.Release()
+
 			semHeld--
 		}
 
@@ -282,7 +303,6 @@ func FuzzSyncModel(f *testing.F) {
 			muLive = muLive[1:]
 
 			p.Release()
-			muHeld = false
 		}
 
 		for len(rwWriteLiv) > 0 {
@@ -290,7 +310,6 @@ func FuzzSyncModel(f *testing.F) {
 			rwWriteLiv = rwWriteLiv[1:]
 
 			p.Release()
-			rwWriter = false
 		}
 
 		for len(rwReadLive) > 0 {
@@ -298,8 +317,10 @@ func FuzzSyncModel(f *testing.F) {
 			rwReadLive = rwReadLive[1:]
 
 			p.Release()
-			rwReaders--
 		}
+
+		// Everything live is released, so every primitive has drained to
+		// its empty state.
 
 		if p, ok := sem.TryAcquire(); !ok {
 			t.Fatal("drain: semaphore offers no slot")

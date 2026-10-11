@@ -3,7 +3,7 @@ package async
 import (
 	"context"
 
-	"github.com/vburenin/nsync"
+	"github.com/apsis-io/nsync"
 )
 
 // RWMutex is a read/write lock whose RLock and Lock both wait under the
@@ -46,17 +46,21 @@ import (
 // lock for as long as the write lock waits for it. The context bounds the wait;
 // it does not break the cycle.
 type RWMutex struct {
-	mu      nsync.TryMutex
+	mu      nsync.Mutex
 	readers int  // read permits currently held
 	waiting int  // writers blocked in Lock
 	held    bool // a writer holds the lock
 	waiters []chan struct{}
 }
 
+// The zero RWMutex is a working unlocked RWMutex, so an embed by value is a
+// documented shape: the admission lock's state is inline, like sync.Mutex's,
+// and its zero value is unlocked. Copies of the struct are independent locks
+// rather than shared ones; never copy an RWMutex after first use, which is
+// the standard mutex rule.
+
 // NewRWMutex returns an unlocked RWMutex.
-func NewRWMutex() *RWMutex {
-	return &RWMutex{mu: *nsync.NewTryMutex()}
-}
+func NewRWMutex() *RWMutex { return &RWMutex{} }
 
 // RLock takes a read lock, waiting under ctx. Any number of readers may hold
 // the lock at once; a writer excludes them all, and once a writer is waiting

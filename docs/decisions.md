@@ -3101,3 +3101,37 @@ The Mutex doc's x/sync comparison numbers described the channel version
 and are now marked as history rather than deleted: the advice they
 supported — choose on the call site, the lock is a few percent of the
 work it guards — is the part that survived.
+
+## The zero value of async.RWMutex: the break that shipped, and the fork that fixed it (fixed)
+
+v0.13.0's TryMutex swap broke the zero value of `async.RWMutex`. v0.12's
+`NewRWMutex` returned `&RWMutex{}`, which made the zero value the
+documented shape for a value-field embed; a consumer's pawn registry
+holds one as exactly that, and their suite caught the nil lockState
+SIGSEGV on first borrow the day v0.13.0 landed. The defect report also
+named the instrument gap that let it ship: FuzzSyncModel constructed
+only through constructors, and the zero value is the input it never
+saw. Both halves are fixed — the model drives a zero RWMutex, and the
+admission lock is `apsis-io/nsync` v1.1.0's `Mutex`.
+
+The Mutex type is the reason the fix lives in a fork. Restoring the
+zero value lazily cost 6-15% on the RWMutex's parallel paths (two extra
+atomic loads per admission cycle, measured across interleaved rounds);
+restoring it eagerly required the lock state to be inline and
+zero-valid, which nsync's pointer-based TryMutex exists precisely to
+not be. The fork adds `Mutex` — sync.Mutex's shape on the rewritten
+lock core: inline, zero-valid, cache-line-padded state, value copies
+independent — and the pad was not decoration: without it the inline
+state shared a line with the RWMutex's counters and parallel acquire
+ran ~5% behind the pointer form, a false-sharing tax the pointer shape
+had been avoiding by accident. Padded, four interleaved rounds measure
+parity everywhere. The upstream MIT license and history travel with the
+fork; the module path moved with it, so velocity's imports follow.
+
+The copy caveat the consumer flagged in review is welded into the type's
+documentation: a zero value copied before first use initializes
+independent locks — the same independence sync.Mutex always had — so
+embeds are constructed-or-never-copied-before-first-use, and never
+copied after first use at all. `go vet`'s copylocks enforces the second
+half mechanically, through the atomic pointer the fork's Mutex keeps for
+its queue.

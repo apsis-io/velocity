@@ -6,8 +6,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/apsis-io/nsync"
 	"github.com/apsis-io/velocity/ownership"
-	"github.com/vburenin/nsync"
 )
 
 // Config describes how a Pool makes and unmakes resources. New and Max are

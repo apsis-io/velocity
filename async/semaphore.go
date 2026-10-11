@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/vburenin/nsync"
+	"github.com/apsis-io/nsync"
 )
 
 // Semaphore is a counting semaphore whose Acquire waits under the caller's
