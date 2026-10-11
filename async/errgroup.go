@@ -262,8 +262,11 @@ func (g *ErrGroup) TryGo(fn func(context.Context) error) bool {
 
 func (g *ErrGroup) start(fn func(context.Context) error, waited time.Duration) {
 	index := g.next()
-	// Add/go rather than WaitGroup.Go: the latter wraps f in a second
-	// closure, which is an allocation and an indirection per function.
+	// Add/go rather than WaitGroup.Go. Measured at parity on go1.27 —
+	// WaitGroup.Go no longer wraps f in a second allocation — this keeps
+	// the direct call and the explicit count anyway: the shape reads as
+	// exactly what the runtime does, and the indirect call through the
+	// closure argument is the only cost WaitGroup.Go still has.
 	g.wg.Add(1)
 	go g.exec(fn, index, waited)
 }
