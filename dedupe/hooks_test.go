@@ -18,13 +18,19 @@ func TestHooksObserveLeaderAndFollowerJoins(t *testing.T) {
 	var mu sync.Mutex
 
 	joins := make([]join, 0, 2)
+	joined := make(chan struct{})
 
 	group, err := dedupe.New[string, int](dedupe.WithHooks[string, int](dedupe.Hooks[string]{
 		OnJoin: func(key string, leader bool) {
 			mu.Lock()
 
 			joins = append(joins, join{key: key, leader: leader})
+
 			mu.Unlock()
+
+			if !leader {
+				close(joined)
+			}
 		},
 	}))
 	if err != nil {
@@ -58,7 +64,12 @@ func TestHooksObserveLeaderAndFollowerJoins(t *testing.T) {
 		<-started
 	}
 
-	time.Sleep(time.Millisecond)
+	// The follower must be parked inside the leader's round before the
+	// leader is released: a sleep cannot promise that on a loaded runner,
+	// where the follower goroutine can first run after the leader has
+	// completed and left the table — and then the follower becomes a
+	// second leader and fn runs twice. OnJoin is the proof of the join.
+	<-joined
 	close(release)
 	<-done
 	<-done
@@ -119,9 +130,17 @@ func TestHooksObserveCallbackDuration(t *testing.T) {
 	)
 
 	completes := make(chan time.Duration, 1)
+	joined := make(chan struct{})
+
+	var joinOnce sync.Once
 
 	group, err := dedupe.New[string, int](dedupe.WithHooks[string, int](dedupe.Hooks[string]{
 		OnComplete: func(_ string, duration time.Duration, _ error) { completes <- duration },
+		OnJoin: func(_ string, leader bool) {
+			if !leader {
+				joinOnce.Do(func() { close(joined) })
+			}
+		},
 	}))
 	if err != nil {
 		t.Fatal(err)
