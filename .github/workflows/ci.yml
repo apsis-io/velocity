@@ -24,8 +24,11 @@ env:
   # The analyzer is built once and reused by every vet step below.
   VELOCITYVET: ${{ github.workspace }}/bin/velocityvet
   # The analysis tools (staticcheck, golangci-lint, velocityvet, the drift
-  # test) run on this pinned toolchain — their export-data readers lag the
-  # floating toolchain's writer. Bump alongside their releases.
+  # test) run on a pinned toolchain — their export-data readers lag the
+  # floating toolchain's writer. Bump alongside their releases. The pin
+  # itself lives ON the steps that need it, not here: setup-go exports
+  # GOTOOLCHAIN=local through GITHUB_ENV, and GITHUB_ENV outranks workflow
+  # and job env — only step-level env wins over it.
   GOTOOLCHAIN: go1.27.1
 
 jobs:
@@ -70,6 +73,8 @@ jobs:
       # handing staticcheck a toolchain whose export data it cannot read.
       # A run step inherits the workflow env, which is the whole pin.
       - name: staticcheck
+        env:
+          GOTOOLCHAIN: go1.27.1
         run: |
           go install honnef.co/go/tools/cmd/staticcheck@2026.2.1
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
@@ -90,6 +95,8 @@ jobs:
       # floating toolchain's writer, so the analysis steps run on the
       # toolchain they can read while build and test take the new format.
       - name: wsl
+        env:
+          GOTOOLCHAIN: go1.27.1
         run: |
           golangci-lint run ./...
           (cd failsafeown && golangci-lint run ./...)
@@ -99,6 +106,8 @@ jobs:
 
       # velocity's own analyzer, over both modules that use the library.
       - name: lostrelease
+        env:
+          GOTOOLCHAIN: go1.27.1
         run: |
           go -C analysis build -o "$VELOCITYVET" ./cmd/velocityvet
           go vet -vettool="$VELOCITYVET" ./...
@@ -115,6 +124,8 @@ jobs:
       # analysis module's x/tools, whose export-data reader stops at version
       # 4 — the same ceiling the analysis tools below run under.
       - name: analysis tests
+        env:
+          GOTOOLCHAIN: go1.27.1
         run: go -C analysis test ./...
 
       - name: test -race
