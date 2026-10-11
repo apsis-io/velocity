@@ -123,9 +123,14 @@ jobs:
       # The acquirer-table drift test loads velocity's packages through the
       # analysis module's x/tools, whose export-data reader stops at version
       # 4 — the same ceiling the analysis tools below run under.
+      # -mod=mod: the fixture module's go.sum follows the nsync version the
+      # working tree requires, and a readonly load on a fresh runner fails
+      # the drift test on every bump. The checkout is ephemeral; the sums
+      # it generates are not committed.
       - name: analysis tests
         env:
           GOTOOLCHAIN: go1.27.1
+          GOFLAGS: -mod=mod
         run: go -C analysis test ./...
 
       - name: test -race
@@ -140,7 +145,7 @@ jobs:
       - name: failsafeown against the working tree
         run: |
           go -C failsafeown mod edit -replace github.com/apsis-io/velocity=..
-          go -C failsafeown test ./...
+          GOFLAGS=-mod=mod go -C failsafeown test ./...
           git -C failsafeown checkout go.mod
 
       # teleos pins a released velocity for the same reason failsafeown does;
@@ -149,7 +154,7 @@ jobs:
       - name: teleos against the working tree
         run: |
           go -C teleos mod edit -replace github.com/apsis-io/velocity=..
-          go -C teleos test ./...
+          GOFLAGS=-mod=mod go -C teleos test ./...
           git -C teleos checkout go.mod
 
       # Leak diagnostics for advanced borrows only compile under this tag.
