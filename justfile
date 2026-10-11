@@ -76,6 +76,7 @@ fuzz duration="30s":
     go test ./ownership -run '^$' -fuzz '^FuzzOwnershipModel$' -fuzztime {{duration}}
     go test ./pool -run '^$' -fuzz '^FuzzPoolModel$' -fuzztime {{duration}}
     go test ./async -run '^$' -fuzz '^FuzzErrGroupModel$' -fuzztime {{duration}}
+    go test ./async -run '^$' -fuzz '^FuzzSyncModel$' -fuzztime {{duration}}
 
 bench:
     go test ./... -run '^$' -bench . -benchmem

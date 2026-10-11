@@ -14,8 +14,8 @@ import (
 // FuzzErrGroupModel checks invariants of ErrGroup that must hold for every
 // interleaving, rather than any particular schedule. It is the randomised
 // counterpart to the hand-written tests, and it exists because the package
-// people actually use had none: the repository's one fuzz target covers
-// ownership, which no consumer has found a site for.
+// people actually use had none: the repository's other fuzz targets cover
+// ownership, pool, and now these primitives in sync_model_test.go.
 //
 // Every invariant here is a statement about counts. None is a statement about
 // timing, because a bound derived from idealised arithmetic is the thing that
