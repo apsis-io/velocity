@@ -111,10 +111,15 @@ func Hedge[T any](ctx context.Context, policy HedgePolicy[T], fn func(context.Co
 	policy.Budget.credit()
 	run.launch()
 	value, err := run.collect(ctx)
-	// Whatever happened, attempts may still be running. Reap them on one
-	// goroutine that exits when the last one reports, discarding any result
-	// that arrives too late to be returned.
-	go run.reap()
+	// Attempts may still be running — a hedge whose delay had not elapsed,
+	// or a slow loser the winner beat. Reap them on one goroutine that
+	// exits when the last one reports, discarding any result that arrives
+	// too late to be returned. When every attempt already reported, the
+	// goroutine would have nothing to reap and would still pay its spawn,
+	// so the fast backend that never hedges does not pay for it.
+	if run.completed < run.launched {
+		go run.reap()
+	}
 
 	return value, err
 }
