@@ -64,11 +64,16 @@ jobs:
       # GOROOT whose export data it can read, analyzing a module that
       # still targets the same language version. Bump the pin when
       # staticcheck ships a reader for the new format.
+      # Installed and run as a plain step rather than through
+      # staticcheck-action: with install-go: false the action forces
+      # GOTOOLCHAIN=local on its own steps, overriding the workflow pin and
+      # handing staticcheck a toolchain whose export data it cannot read.
+      # A run step inherits the workflow env, which is the whole pin.
       - name: staticcheck
-        uses: dominikh/staticcheck-action@v1
-        with:
-          version: latest
-          install-go: false
+        run: |
+          go install honnef.co/go/tools/cmd/staticcheck@2026.2.1
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          staticcheck ./...
 
       # Whitespace style, via golangci-lint's bundled wsl_v5, with its default
       # set. See .golangci.yml for what is on and why. Installed here rather
@@ -78,7 +83,7 @@ jobs:
       # non-go binary, so each is run from a subshell.
       - name: install golangci-lint
         run: |
-          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.2
+          go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
       # Same pin as staticcheck: the analyzers' export-data readers lag the
