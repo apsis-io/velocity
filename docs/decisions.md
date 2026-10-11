@@ -3071,6 +3071,15 @@ under a specific set of co-contention sources. When another source
 disappears, re-run the trial. The earlier entry's verdict was correct on
 that day's pool; this entry supersedes it.
 
+Production postscript (2026-10-11): the split shipped to a node actively
+suffering a processqueue freeze, as the fix riding a real incident on
+engifire and inventx — the first time the nsync core ran through
+production failure conditions rather than past them. The consumer's
+watchdog design also leans on the context-determinism guarantee the
+entry sharpened, which makes that guarantee load-bearing for silent
+event-path recovery. Both facts are the consumer's report, and both are
+recorded as the strongest evidence this arrangement has.
+
 Get's context contract is preserved and sharpened: free capacity is
 served even when the caller's context is already done (the channel's
 select chose randomly between exactly those cases), waiting reports
