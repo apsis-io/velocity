@@ -45,3 +45,41 @@ func BenchmarkBreaker(b *testing.B) {
 		}
 	})
 }
+
+func BenchmarkHedgePrimaryWins(b *testing.B) {
+	// Delay longer than the bench: no hedge ever fires, so this measures
+	// the machinery a fast backend pays for the option to hedge.
+	policy := resilience.HedgePolicy[int]{
+		MaxAttempts: 3,
+		Delay:       func(int) time.Duration { return time.Hour },
+	}
+
+	b.ReportAllocs()
+
+	for b.Loop() {
+		resilienceSink, _ = resilience.Hedge(context.Background(), policy, func(context.Context, int) (int, error) {
+			return 1, nil
+		})
+	}
+}
+
+func BenchmarkHedgeRaced(b *testing.B) {
+	// The primary is slow; the hedge fires at 1ms and wins. One result is
+	// discarded per iteration — the shape Hedge exists for.
+	policy := resilience.HedgePolicy[int]{
+		MaxAttempts: 2,
+		Delay:       func(int) time.Duration { return time.Millisecond },
+	}
+
+	b.ReportAllocs()
+
+	for b.Loop() {
+		resilienceSink, _ = resilience.Hedge(context.Background(), policy, func(_ context.Context, attempt int) (int, error) {
+			if attempt == 0 {
+				time.Sleep(3 * time.Millisecond)
+			}
+
+			return 1, nil
+		})
+	}
+}
