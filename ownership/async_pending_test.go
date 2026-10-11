@@ -39,8 +39,15 @@ func TestReleaseRefusesWhileAMutationIsQueued(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	entered := make(chan struct{})
+	releaseFn := make(chan struct{})
+
 	queued := owner.MutateAsync(ctx, func(v *int) (int, error) {
+		close(entered)
+		<-releaseFn
+
 		*v = 99
+
 		return *v, nil
 	})
 	if _, ready := queued.Try(); ready {
@@ -50,6 +57,13 @@ func TestReleaseRefusesWhileAMutationIsQueued(t *testing.T) {
 	if err := held.Release(); err != nil {
 		t.Fatal(err)
 	}
+
+	// Releasing the borrow unblocks the queued mutation's admission, and
+	// admission plus completion of a trivial fn can beat this goroutine to
+	// the next line on a loaded runner. The mutation signals entry instead:
+	// once it is running, the outstanding count is at its peak and the
+	// refusal below is deterministic rather than a won race.
+	<-entered
 
 	// The submission is outstanding, so ending the handle must be refused. It
 	// is not a borrow — no address is exposed and nothing is excluded by it —
@@ -63,7 +77,10 @@ func TestReleaseRefusesWhileAMutationIsQueued(t *testing.T) {
 		t.Fatal("the Drop ran while a submitted mutation was still outstanding")
 	}
 
-	// Await it: the work the caller committed runs, and the count falls with it.
+	// Let it finish: the work the caller committed runs, and the count falls
+	// with it.
+	close(releaseFn)
+
 	res, err := queued.Await(ctx)
 	if err != nil || res.Value != 99 {
 		t.Fatalf("the mutation = (%+v, %v), want 99 and no error", res, err)
