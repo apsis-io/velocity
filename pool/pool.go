@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/apsis-io/nsync"
+	"github.com/apsis-io/velocity/internal/nsync"
 	"github.com/apsis-io/velocity/ownership"
 )
 

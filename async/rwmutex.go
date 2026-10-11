@@ -3,7 +3,7 @@ package async
 import (
 	"context"
 
-	"github.com/apsis-io/nsync"
+	"github.com/apsis-io/velocity/internal/nsync"
 )
 
 // RWMutex is a read/write lock whose RLock and Lock both wait under the
