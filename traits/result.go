@@ -8,7 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
+	"sync/atomic"
 )
 
 // ErrNilContext is what Future.Await returns for a nil context. A Future is
@@ -46,7 +46,14 @@ func (r Result[R]) Ok() bool { return r.Err == nil }
 // the two facts never collapse into one.
 type Future[R any] struct {
 	done chan struct{}
-	once sync.Once
+
+	// state carries the round a Future is in: unresolved, claimed by the
+	// one Complete that won, or published with its Result readable. The
+	// fast path for Try and Await is a load — a published Future answers
+	// without the select — and a Complete that loses its claim touches
+	// nothing, which is what makes the worker-and-cleanup race in the doc
+	// comment above safe: the loser writes nothing at all.
+	state atomic.Int32
 
 	// Written by whoever completes the future before done is closed, and read
 	// by whoever observes the close. The happens-before comes from the close, so
@@ -71,10 +78,17 @@ func (f *Future[R]) Complete(value R, err error) {
 		return
 	}
 
-	f.once.Do(func() {
-		f.res = Result[R]{Value: value, Err: err}
-		close(f.done)
-	})
+	// Claim first: the winner is the sole writer of res, so the write
+	// cannot race a losing Complete. Publishing after the write — and
+	// before the close — is what lets a reading load of published see the
+	// Result; Go's atomics are sequentially consistent.
+	if !f.state.CompareAndSwap(stateUnresolved, stateClaimed) {
+		return
+	}
+
+	f.res = Result[R]{Value: value, Err: err}
+	f.state.Store(statePublished)
+	close(f.done)
 }
 
 // CompleteResult resolves the Future with a Result already in hand.
@@ -94,6 +108,15 @@ func (f *Future[R]) Done() <-chan struct{} {
 	return f.done
 }
 
+// A Future's state: nothing has completed it, a Complete has claimed the
+// sole writer role and is writing the Result, or the Result is published
+// and readable by any load.
+const (
+	stateUnresolved int32 = iota
+	stateClaimed
+	statePublished
+)
+
 var closedDone = func() <-chan struct{} {
 	ch := make(chan struct{})
 	close(ch)
@@ -112,6 +135,10 @@ var closedDone = func() <-chan struct{} {
 func (f *Future[R]) Try() (Result[R], bool) {
 	if f == nil {
 		return Result[R]{}, true
+	}
+
+	if f.state.Load() == statePublished {
+		return f.res, true
 	}
 
 	select {
@@ -147,19 +174,30 @@ func (f *Future[R]) Await(ctx context.Context) (Result[R], error) {
 		return Result[R]{}, ErrNilContext
 	}
 
+	if f.state.Load() == statePublished {
+		return f.awaitResult()
+	}
+
 	select {
 	case <-f.done:
-		if f.res.Err != nil {
-			return f.res, fmt.Errorf("traits: work failed: %w", f.res.Err)
-		}
-
-		return f.res, nil
+		return f.awaitResult()
 	case <-ctx.Done():
 		// Not wrapped: a context cause is already a typed, comparable error,
 		// and errors.Is against context.Canceled or DeadlineExceeded is a
 		// caller's first move with it.
 		return Result[R]{}, context.Cause(ctx)
 	}
+}
+
+// awaitResult shapes a resolved Future's Result for Await: the work's
+// failure is wrapped so a caller's `if err != nil` catches it without
+// looking inside the Result first.
+func (f *Future[R]) awaitResult() (Result[R], error) {
+	if f.res.Err != nil {
+		return f.res, fmt.Errorf("traits: work failed: %w", f.res.Err)
+	}
+
+	return f.res, nil
 }
 
 // ErrInvalidConfig is the shared cause for a rejected option. Every package
