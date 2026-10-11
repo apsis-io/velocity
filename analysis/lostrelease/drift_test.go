@@ -76,6 +76,13 @@ func TestAcquirerTableHasNotDrifted(t *testing.T) {
 				t.Errorf("loading %s: %v", pkg.PkgPath, e)
 			}
 
+			// A load can fail without producing package errors — a missing
+			// go.sum entry in this fixture surfaces as nil Types and an
+			// empty Errors. Say so, or the only symptom is a bare count.
+			if pkg.Types == nil && len(pkg.Errors) == 0 {
+				t.Errorf("loading %s: no types and no errors — usually a module or go.sum problem in the fixture", pkg.PkgPath)
+			}
+
 			continue
 		}
 
