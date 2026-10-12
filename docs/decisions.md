@@ -3144,3 +3144,29 @@ embeds are constructed-or-never-copied-before-first-use, and never
 copied after first use at all. `go vet`'s copylocks enforces the second
 half mechanically, through the atomic pointer the fork's Mutex keeps for
 its queue.
+
+## anacrolix/stm: evaluated for the multi-var atomicity gap, not adopted (evaluated)
+
+Velocity has no primitive for atomically updating several owned values at
+once — ownership cells are per-value by design, and the coordinated-shape
+answer today is fixed lock order. anacrolix/stm (v0.6.0) offers exactly
+that gap: composable multi-variable transactions with Haskell-style
+blocking retries, and it was evaluated for it.
+
+Measured on the single-var increment — the shape STM is worst at and
+every velocity primitive is built for — a transaction costs 2,229 ns,
+958 B, and eleven allocations, against 13 ns for a raw mutex, 41 ns for
+the ownership cell's borrow-checked mutation, and 9 ns for an atomic.
+The two-variable transaction STM exists for runs 3,088 ns against
+26.6 ns for two mutexes taken in a fixed order. The profile names the
+dominant cost: every value change spawns a wakeWatchers goroutine
+unconditionally, watcher or not — 40.8% of all allocations in the
+benchmark, one spawn per Set.
+
+The evaluation is recorded rather than forgotten because the gap is
+real: if a consumer ever needs multi-value atomicity across owned
+cells, this is the measurement the comparison starts from, and the
+first thing any adoption would demand is the death of the
+goroutine-per-change spawn. Nothing in velocity's current contracts
+needs the capability, so nothing adopts it; fixed lock order remains
+the documented answer, as it was for the routing package.
