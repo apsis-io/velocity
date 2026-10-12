@@ -3170,3 +3170,16 @@ first thing any adoption would demand is the death of the
 goroutine-per-change spawn. Nothing in velocity's current contracts
 needs the capability, so nothing adopts it; fixed lock order remains
 the documented answer, as it was for the routing package.
+
+The counterfactual is also measured now. A ~60-line lock-free PoC in
+the GHC shape — versioned cells read by atomic load, writes buffered
+per transaction, commit as pointer-identity validation plus one
+compare-and-swap per write — runs the same two benchmarks at 40.9 and
+67-69 ns: the idea is roughly forty times faster than that
+implementation when the implementation stops spawning goroutines and
+locking variables. What the PoC deliberately lacks is the hard half:
+the blocking-retry wake protocol (whose goroutine-per-change is exactly
+the cost being paid), starvation management under hot contention, and
+generic variable types. Those are the difference between an afternoon
+measurement and a library, and the entry's verdict does not move until
+someone needs them.
