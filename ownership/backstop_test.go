@@ -168,14 +168,33 @@ func TestDropNetDropsTheValueTheCellOwnsNow(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	borrow, err := owner.BorrowMut()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := borrow.Update(func(r **netResource) (struct{}, error) {
+		*r = &netResource{name: "third"}
+
+		return struct{}{}, nil
+	}); err != nil {
+		_ = borrow.Release()
+
+		t.Fatal(err)
+	}
+
+	if err := borrow.Release(); err != nil {
+		t.Fatal(err)
+	}
+
 	settle()
 
 	if got := net.drops.Load(); got != 1 {
 		t.Fatalf("drops = %d, want one", got)
 	}
 
-	if name := *net.closed.Load(); name != "second" {
-		t.Fatalf("net dropped %q, want \"second\": the stale value would close a resource the cell gave up", name)
+	if name := *net.closed.Load(); name != "third" {
+		t.Fatalf("net dropped %q, want \"third\": the stale value would close a resource the cell gave up", name)
 	}
 }
 

@@ -233,14 +233,14 @@ func (c *cell[T]) endWriteLocked(h *handle) {
 	c.writer = false
 	h.borrows--
 
+	// Whatever held the write borrow may have replaced c.value in place —
+	// Mutate, MutateAsync, or a WriteBorrow.Update before Release — and the net
+	// drops what the cell owns now.
+	c.syncNetLocked()
 	c.changedLocked()
 	c.signalDrainedLocked()
 }
 
-// changedLocked wakes every goroutine waiting for admission to re-read the
-// cell's state. Closing a channel is not a wait, so this adds a signal without
-// adding a blocking operation — and builds nothing when nobody is waiting,
-// which is the path every non-async caller takes.
 // settlePending drops one submission's count. Called on every path a submitted
 // mutation can finish, because a count that only falls on the happy path
 // blocks Release and Move for good — and the paths that are easiest to forget
@@ -251,6 +251,10 @@ func (c *cell[T]) settlePending() {
 	c.mu.Unlock()
 }
 
+// changedLocked wakes every goroutine waiting for admission to re-read the
+// cell's state. Closing a channel is not a wait, so this adds a signal without
+// adding a blocking operation — and builds nothing when nobody is waiting,
+// which is the path every non-async caller takes.
 func (c *cell[T]) changedLocked() {
 	if c.wait == nil {
 		return

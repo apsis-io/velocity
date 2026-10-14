@@ -1671,11 +1671,12 @@ convention-instead-of-structure the rest of this repository argues against. So:
 
   - `Try() (Result[R], bool)` — the second return is *readiness*, not an error.
     Unknown, succeeded and failed are three different answers.
-  - `Await(ctx) (Result[R], error)` — and the returned error is the **wait's**,
-    while `Result.Err` is the **work's**. Giving up on the wait says something
-    about the caller's patience and nothing about the work, which still runs
-    and still resolves the Future for anyone else watching. That is what makes a
-    Future droppable: nothing is abandoned, so nothing needs cleaning up.
+  - `Await(ctx) (R, error)` — returns the work's value and whichever error
+    applies: the work's failure, or the context's cause when the wait ended
+    first. Giving up on the wait says something about the caller's patience and
+    nothing about the work, which still runs and still resolves the Future for
+    anyone else watching. That is what makes a Future droppable: nothing is
+    abandoned, so nothing needs cleaning up.
 
 **Correction: the reason given for migrating `dedupe.Result` was wrong.** It
 claimed the zero `Result` was ambiguous — "indistinguishable from a key whose
@@ -1699,13 +1700,14 @@ reports and leaves the cell usable — the last because the borrow is released
 *before* the panic is converted, which is the failure the no-panic-callbacks
 rule exists to prevent.
 
-The earlier version of this entry recorded `Await` as returning only the wait's
-error, and the author revised it: a caller writing the ordinary `if err != nil`
-after a callback failed would have seen success, which is the footgun the split
-was meant to remove. Reporting the work's failure too closes it without
-collapsing the two facts — the wrap preserves `errors.Is` and `errors.As`
-against the original, so a typed failure like `*Panic` or `ErrConflict` is
-still reachable.
+The first version of this entry recorded `Await` as returning `(Result[R],
+error)` with only the wait's error, then revised it to also wrap the work's
+failure so `if err != nil` caught a failed callback, and finally simplified
+`Await(ctx)` to `(R, error)` returning the work's error directly (with `Try()`
+remaining `(Result[R], bool)` for non-blocking readiness inspection): once
+`Await`'s error channel carried the work's failure too, wrapping a `Result`
+alongside it duplicated the error in two places and added a `fmt.Errorf`
+allocation on every failed await.
 
 ## velocityvet's own dead-end hint, found by a consumer following it (implemented)
 

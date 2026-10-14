@@ -83,9 +83,10 @@ func (c *cell[T]) disarmNetLocked() {
 	c.net.Stop()
 }
 
-// syncNetLocked records the value the net would drop. Called after anything
-// that wrote c.value in place — the scoped and queued mutations — with the
-// lock that ordered the write.
+// syncNetLocked records the value the net would drop. Called from
+// endWriteLocked whenever a write borrow ends — scoped Mutate, queued
+// MutateAsync, or an advanced WriteBorrow.Release — under the lock that orders
+// the write.
 func (c *cell[T]) syncNetLocked() {
 	if c.netArg != nil {
 		c.netArg.value = c.value
