@@ -18,13 +18,13 @@ func TestMutateAsyncReportsTheCallbackOutcome(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	f := owner.MutateAsync(context.Background(), func(v *int) (int, error) {
+	f := owner.MutateAsync(t.Context(), func(v *int) (int, error) {
 		*v = 42
 		return *v + 1, nil
 	})
 
-	res, err := f.Await(context.Background())
-	if err != nil || res.Value != 43 || !res.Ok() {
+	res, err := f.Await(t.Context())
+	if err != nil || res != 43 {
 		t.Fatalf("Await = (%+v, %v), want a succeeded 43", res, err)
 	}
 
@@ -42,17 +42,17 @@ func TestMutateAsyncReportsAnErroredCallback(t *testing.T) {
 
 	boom := errors.New("boom")
 
-	res, err := owner.MutateAsync(context.Background(), func(*int) (int, error) { return 0, boom }).
-		Await(context.Background())
+	_, err = owner.MutateAsync(t.Context(), func(*int) (int, error) { return 0, boom }).
+		Await(t.Context())
 	if !errors.Is(err, boom) {
 		t.Fatalf("Await = %v, want an error wrapping the callback's failure", err)
 	}
 
-	if !errors.Is(res.Err, boom) {
-		t.Fatalf("Result.Err = %v, want the callback's error", res.Err)
+	if !errors.Is(err, boom) {
+		t.Fatalf("Result.Err = %v, want the callback's error", err)
 	}
 
-	if res.Ok() {
+	if err == nil {
 		t.Fatal("a failed callback reported Ok")
 	}
 }
@@ -71,7 +71,7 @@ func TestMutateAsyncQueuesBehindAWriteBorrow(t *testing.T) {
 	}
 
 	ran := make(chan struct{})
-	f := owner.MutateAsync(context.Background(), func(v *int) (int, error) {
+	f := owner.MutateAsync(t.Context(), func(v *int) (int, error) {
 		close(ran)
 
 		*v = 7
@@ -95,7 +95,7 @@ func TestMutateAsyncQueuesBehindAWriteBorrow(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := f.Await(context.Background()); err != nil {
+	if _, err := f.Await(t.Context()); err != nil {
 		t.Fatalf("Await = %v, want the queued mutation to succeed", err)
 	}
 
@@ -122,7 +122,7 @@ func TestMutateAsyncCancelsWhileQueued(t *testing.T) {
 
 	ran := atomic.Bool{}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Millisecond)
 	defer cancel()
 
 	f := owner.MutateAsync(ctx, func(v *int) (int, error) {
@@ -130,7 +130,7 @@ func TestMutateAsyncCancelsWhileQueued(t *testing.T) {
 		return 0, nil
 	})
 
-	res, err := f.Await(context.Background())
+	_, err = f.Await(t.Context())
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Await = %v, want the caller's deadline", err)
 	}
@@ -139,7 +139,7 @@ func TestMutateAsyncCancelsWhileQueued(t *testing.T) {
 		t.Fatal("a cancelled mutation still ran its callback")
 	}
 
-	if res.Ok() {
+	if err == nil {
 		t.Fatal("a cancelled mutation reported a succeeded zero")
 	}
 }
@@ -155,7 +155,7 @@ func TestMutateAsyncReleasesTheBorrowEvenWhenAbandoned(t *testing.T) {
 	// Submit fifty without keeping a handle. Every one queues and runs, so this
 	// is also the queue draining behind an owner that never waits.
 	for range 50 {
-		owner.MutateAsync(context.Background(), func(v *int) (int, error) {
+		owner.MutateAsync(t.Context(), func(v *int) (int, error) {
 			*v++
 			return 0, nil
 		})
@@ -189,8 +189,8 @@ func TestMutateAsyncRecoversAPanicAndReleasesTheBorrow(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := owner.MutateAsync(context.Background(), func(*int) (int, error) { panic("callback") }).
-		Await(context.Background())
+	_, err = owner.MutateAsync(t.Context(), func(*int) (int, error) { panic("callback") }).
+		Await(t.Context())
 
 	// A recovered panic arrives as the returned error too, and stays unwrappable
 	// to the value underneath.
@@ -200,8 +200,8 @@ func TestMutateAsyncRecoversAPanicAndReleasesTheBorrow(t *testing.T) {
 	}
 
 	var p *traits.Panic
-	if !errors.As(res.Err, &p) || p.Value != "callback" {
-		t.Fatalf("Result.Err = %v, want a *Panic carrying the value", res.Err)
+	if !errors.As(err, &p) || p.Value != "callback" {
+		t.Fatalf("Result.Err = %v, want a *Panic carrying the value", err)
 	}
 
 	// Released before the panic was converted, so the cell is usable.
@@ -219,7 +219,7 @@ func TestMutateAsyncTryIsNonBlocking(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 
-	f := owner.MutateAsync(context.Background(), func(*int) (int, error) {
+	f := owner.MutateAsync(t.Context(), func(*int) (int, error) {
 		close(started)
 		<-release
 
@@ -234,7 +234,7 @@ func TestMutateAsyncTryIsNonBlocking(t *testing.T) {
 
 	close(release)
 
-	if _, err := f.Await(context.Background()); err != nil {
+	if _, err := f.Await(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 
@@ -254,7 +254,7 @@ func TestMutateAsyncAwaitTimeoutDoesNotCancelTheWork(t *testing.T) {
 
 	// The callback blocks until this test says so, so the deadline below expires
 	// while the work is genuinely in flight.
-	f := owner.MutateAsync(context.Background(), func(v *int) (int, error) {
+	f := owner.MutateAsync(t.Context(), func(v *int) (int, error) {
 		<-release
 
 		*v = 5
@@ -262,7 +262,7 @@ func TestMutateAsyncAwaitTimeoutDoesNotCancelTheWork(t *testing.T) {
 		return *v, nil
 	})
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Millisecond)
 	defer cancel()
 
 	// The returned error is the wait's. The Result alongside it is the zero
@@ -276,13 +276,9 @@ func TestMutateAsyncAwaitTimeoutDoesNotCancelTheWork(t *testing.T) {
 
 	close(release)
 
-	after, err := f.Await(context.Background())
-	if err != nil || after.Value != 5 {
+	after, err := f.Await(t.Context())
+	if after != 5 {
 		t.Fatalf("the Future did not resolve with the real outcome: (%+v, %v)", after, err)
-	}
-
-	if !after.Ok() {
-		t.Fatalf("the resolved Result reports a failure: %+v", after)
 	}
 }
 
@@ -307,7 +303,7 @@ func TestMutateAsyncQueuesWithoutWeakeningTheBound(t *testing.T) {
 
 	for range total {
 		wg.Go(func() {
-			f := owner.MutateAsync(context.Background(), func(v *int) (int, error) {
+			f := owner.MutateAsync(t.Context(), func(v *int) (int, error) {
 				n := running.Add(1)
 
 				for {
@@ -339,7 +335,7 @@ func TestMutateAsyncQueuesWithoutWeakeningTheBound(t *testing.T) {
 	mu.Unlock()
 
 	for _, f := range collected {
-		if _, err := f.Await(context.Background()); err != nil {
+		if _, err := f.Await(t.Context()); err != nil {
 			t.Fatalf("a queued mutation failed: %v", err)
 		}
 	}
@@ -362,7 +358,7 @@ func TestMutateAsyncNilArguments(t *testing.T) {
 	}
 
 	// A nil function is a rejected mutation, finished rather than pending.
-	res, ready := owner.MutateAsync[int](context.Background(), nil).Try()
+	res, ready := owner.MutateAsync[int](t.Context(), nil).Try()
 	if !ready {
 		t.Fatal("a nil-function mutation is pending")
 	}
@@ -377,7 +373,7 @@ func TestMutateAsyncNilArguments(t *testing.T) {
 	// applying.
 
 	//lint:ignore SA1012 a nil context is exactly what is under test
-	nilCtx := owner.MutateAsync[int](nil, func(*int) (int, error) { return 0, nil })
+	nilCtx := owner.MutateAsync(nil, func(*int) (int, error) { return 0, nil })
 
 	if res, _ := nilCtx.Try(); !errors.Is(res.Err, traits.ErrNilContext) {
 		t.Fatalf("nil ctx = %v, want traits.ErrNilContext", res.Err)
@@ -385,7 +381,7 @@ func TestMutateAsyncNilArguments(t *testing.T) {
 
 	var none *ownership.Owner[int]
 
-	if res, _ := none.MutateAsync(context.Background(), func(*int) (int, error) { return 0, nil }).
+	if res, _ := none.MutateAsync(t.Context(), func(*int) (int, error) { return 0, nil }).
 		Try(); res.Ok() {
 		t.Fatal("a nil owner reported success")
 	}
@@ -400,6 +396,7 @@ func TestMutateAsyncNilArguments(t *testing.T) {
 
 	select {
 	case <-absent.Done():
+
 	default:
 		t.Fatal("a nil Future is not done")
 	}

@@ -54,12 +54,12 @@ func (o *Owner[T]) Map[U any](fn func(T) (U, error), opts ...Option[U]) (*Owner[
 	// other borrow can begin.
 	derived, err := fn(value)
 	if err != nil {
-		c.releaseLease(lease)
+		c.releaseLease(lease, OpMap)
 		return nil, err
 	}
 
 	c.mu.Lock()
-	c.releaseLeaseLocked(lease)
+	c.releaseLeaseLocked(lease, OpMap)
 
 	o.h.state = handleMoved
 

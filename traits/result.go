@@ -6,15 +6,17 @@ package traits
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"sync/atomic"
 )
 
-// ErrNilContext is what Future.Await returns for a nil context. A Future is
-// often carried by a caller that has no context of its own, and the panic a nil
-// ctx.Done() would produce is a poor answer to that.
-var ErrNilContext = errors.New("traits: nil context")
+// A Future's state: nothing has completed it, a Complete has claimed the
+// sole writer role and is writing the Result, or the Result is published
+// and readable by any load.
+const (
+	stateUnresolved int32 = iota
+	stateClaimed
+	statePublished
+)
 
 // Result is the outcome of work: succeeded with a value, or failed with an
 // error. It is deliberately not a third state. "Not finished yet" is a property
@@ -56,15 +58,16 @@ type Future[R any] struct {
 	state atomic.Int32
 
 	// Written by whoever completes the future before done is closed, and read
-	// by whoever observes the close. The happens-before comes from the close, so
-	// nothing guards it and a Future nobody ever reads still completes.
+	// by whoever observes the close.
 	res Result[R]
 }
 
 // NewFuture returns an unresolved Future. Whoever owns the work calls Complete
 // exactly once on it.
 func NewFuture[R any]() *Future[R] {
-	return &Future[R]{done: make(chan struct{})}
+	return &Future[R]{
+		done: make(chan struct{}),
+	}
 }
 
 // Complete resolves the Future. It is safe to call more than once and only the
@@ -73,9 +76,9 @@ func NewFuture[R any]() *Future[R] {
 //
 // There is no way to un-resolve a Future, and none is needed: a Future that
 // resolved to a failure is finished, not abandoned.
-func (f *Future[R]) Complete(value R, err error) {
+func (f *Future[R]) Complete(value R, err error) bool {
 	if f == nil {
-		return
+		return true
 	}
 
 	// Claim first: the winner is the sole writer of res, so the write
@@ -83,17 +86,18 @@ func (f *Future[R]) Complete(value R, err error) {
 	// before the close — is what lets a reading load of published see the
 	// Result; Go's atomics are sequentially consistent.
 	if !f.state.CompareAndSwap(stateUnresolved, stateClaimed) {
-		return
+		return false
 	}
 
 	f.res = Result[R]{Value: value, Err: err}
 	f.state.Store(statePublished)
 	close(f.done)
+
+	return true
 }
 
-// CompleteResult resolves the Future with a Result already in hand.
-func (f *Future[R]) CompleteResult(res Result[R]) {
-	f.Complete(res.Value, res.Err)
+func (f *Future[R]) CompleteResult(res Result[R]) bool {
+	return f.Complete(res.Value, res.Err)
 }
 
 // Done returns a channel closed once the work has finished, one way or the
@@ -107,15 +111,6 @@ func (f *Future[R]) Done() <-chan struct{} {
 
 	return f.done
 }
-
-// A Future's state: nothing has completed it, a Complete has claimed the
-// sole writer role and is writing the Result, or the Result is published
-// and readable by any load.
-const (
-	stateUnresolved int32 = iota
-	stateClaimed
-	statePublished
-)
 
 var closedDone = func() <-chan struct{} {
 	ch := make(chan struct{})
@@ -141,12 +136,7 @@ func (f *Future[R]) Try() (Result[R], bool) {
 		return f.res, true
 	}
 
-	select {
-	case <-f.done:
-		return f.res, true
-	default:
-		return Result[R]{}, false
-	}
+	return Result[R]{}, false
 }
 
 // Await waits for the work to finish, or for ctx to end, and returns its
@@ -165,72 +155,34 @@ func (f *Future[R]) Try() (Result[R], bool) {
 // non-nil and the zero Result reports `Ok()`, because the Result is not to be
 // read when the wait did not complete. A caller that wants the work's fate
 // waits for it, or watches Done.
-func (f *Future[R]) Await(ctx context.Context) (Result[R], error) {
-	if f == nil {
-		return Result[R]{}, nil
-	}
-
-	if ctx == nil {
-		return Result[R]{}, ErrNilContext
-	}
+func (f *Future[R]) Await(ctx context.Context) (R, error) {
+	var zero R
 
 	if f.state.Load() == statePublished {
-		return f.awaitResult()
+		return f.result()
 	}
 
 	select {
 	case <-f.done:
-		return f.awaitResult()
+		return f.result()
+
 	case <-ctx.Done():
 		// Not wrapped: a context cause is already a typed, comparable error,
 		// and errors.Is against context.Canceled or DeadlineExceeded is a
 		// caller's first move with it.
-		return Result[R]{}, context.Cause(ctx)
+		return zero, context.Cause(ctx)
 	}
 }
 
-// awaitResult shapes a resolved Future's Result for Await: the work's
+// result shapes a resolved Future's Result for Await: the work's
 // failure is wrapped so a caller's `if err != nil` catches it without
 // looking inside the Result first.
-func (f *Future[R]) awaitResult() (Result[R], error) {
+func (f *Future[R]) result() (R, error) {
+	var zero R
+
 	if f.res.Err != nil {
-		return f.res, fmt.Errorf("traits: work failed: %w", f.res.Err)
+		return zero, f.res.Err
 	}
 
-	return f.res, nil
+	return f.res.Value, nil
 }
-
-// ErrInvalidConfig is the shared cause for a rejected option. Every package
-// that takes one aliases it — `ownership.ErrInvalidConfig`,
-// `dedupe.ErrInvalidConfig`, `pool.ErrInvalidConfig` — so a caller writes
-// `errors.Is(err, <their package>.ErrInvalidConfig)` and gets the same value
-// either way, and a caller matching this one directly gets one answer across
-// all of them.
-//
-// The aliasing is the point, so a package that grows an option-taking
-// constructor has to alias rather than declare: a second sentinel for the same
-// condition is invisible to every check written against the first, and it fails
-// only where nobody was looking. pool did exactly that, and the check that
-// caught it is in pool's own test.
-var ErrInvalidConfig = errors.New("invalid configuration")
-
-// ConfigError reports a rejected option. One definition serves every package
-// whose options are named, so "which option was refused" is answered the same
-// way everywhere — including pool, where what is refused is a Config field
-// rather than an element of an option list, and which is the same thing under
-// a different spelling.
-//
-// It is deliberately not the same type as TraitError, which describes a
-// composition failure rather than an option: they have different fields and
-// different readers, and merging them would mean a type with an Index that is
-// always -1 in one use and the trait position in the other.
-type ConfigError struct {
-	Option string
-	Reason error
-}
-
-func (e *ConfigError) Error() string {
-	return fmt.Sprintf("option %q: %v", e.Option, e.Reason)
-}
-
-func (e *ConfigError) Unwrap() []error { return []error{ErrInvalidConfig, e.Reason} }

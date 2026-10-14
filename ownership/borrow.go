@@ -47,17 +47,13 @@ func (l *lease[T]) withWrite[R any](op Operation, fn func(*T) (R, error)) (R, er
 	if l.released || l.kind != borrowWrite {
 		l.mu.Unlock()
 
-		var zero R
-
-		return zero, &ReleasedError{Operation: op}
+		return zero[R](), &ReleasedError{Operation: op}
 	}
 
 	if l.active != 0 {
 		l.mu.Unlock()
 
-		var zero R
-
-		return zero, l.cell.conflict(op)
+		return zero[R](), l.cell.conflict(op)
 	}
 
 	l.active++
@@ -65,26 +61,13 @@ func (l *lease[T]) withWrite[R any](op Operation, fn func(*T) (R, error)) (R, er
 	l.mu.Unlock()
 	defer l.end()
 
-	l.cell.mu.Lock()
 	value := &l.cell.value
-	l.cell.mu.Unlock()
 
 	return fn(value)
 }
 
 func (l *lease[T]) release(op Operation) (released bool, err error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	if l.released {
-		return false, nil
-	}
-
-	if l.active != 0 {
-		return false, l.cell.conflict(op)
-	}
-
-	return l.cell.releaseLease(l), nil
+	return l.cell.releaseLease(l, op)
 }
 
 // ReadBorrow is an explicitly released shared read borrow. It must not be
@@ -114,26 +97,21 @@ func newReadBorrow[T any](lease *lease[T]) *ReadBorrow[T] {
 // Project invokes fn with a shallow copy of T while this borrow remains live.
 func (b *ReadBorrow[T]) Project[R any](fn func(T) (R, error)) (R, error) {
 	if fn == nil {
-		var zero R
-		return zero, &ProjectionError{Operation: OpProject}
+		return zero[R](), &ProjectionError{Operation: OpProject}
 	}
 
 	if b == nil || b.lease == nil {
-		var zero R
-		return zero, &ReleasedError{Operation: OpProject}
+		return zero[R](), &ReleasedError{Operation: OpProject}
 	}
 
 	if err := b.lease.begin(borrowRead, OpProject); err != nil {
-		var zero R
-		return zero, err
+		return zero[R](), err
 	}
 	defer b.lease.end()
 
-	b.lease.cell.mu.Lock()
-	value := b.lease.cell.value
-	b.lease.cell.mu.Unlock()
+	value := &b.lease.cell.value
 
-	result, err := fn(value)
+	result, err := fn(*value)
 
 	runtime.KeepAlive(b)
 

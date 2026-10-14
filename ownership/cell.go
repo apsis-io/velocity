@@ -297,30 +297,39 @@ func (c *cell[T]) acquireWrite(h *handle, expected mode) (*lease[T], error) {
 	return &lease[T]{cell: c, issuer: h, id: c.nextID, kind: borrowWrite}, nil
 }
 
-func (c *cell[T]) releaseLease(l *lease[T]) bool {
+func (c *cell[T]) releaseLease(l *lease[T], op Operation) (bool, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	return c.releaseLeaseLocked(l)
+	return c.releaseLeaseLocked(l, op)
 }
 
-// releaseLeaseLocked assumes c.mu is held. Map needs to release its lease and
-// commit the transfer in one critical section, so that no borrow can be
-// acquired in between.
-func (c *cell[T]) releaseLeaseLocked(l *lease[T]) bool {
+// releaseLeaseLocked assumes [c.mu] is held.
+// Map needs to release its lease and commit the transfer in one critical section,
+// so that no borrow can be acquired in between.
+func (c *cell[T]) releaseLeaseLocked(l *lease[T], op Operation) (bool, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
 	if l.released {
-		return false
+		return false, nil
+	}
+
+	if l.active != 0 {
+		return false, c.conflictLocked(op)
 	}
 
 	l.released = true
+
 	switch l.kind {
 	case borrowRead:
 		c.endReadLocked(l.issuer)
+
 	case borrowWrite:
 		c.endWriteLocked(l.issuer)
 	}
 
-	return true
+	return true, nil
 }
 
 // drainedChanLocked returns the drain channel, creating it on first use.

@@ -55,9 +55,11 @@ func (o *Owner[T]) MutateAsync[R any](ctx context.Context, fn func(*T) (R, error
 	case fn == nil:
 		f.Complete(zero[R](), &ProjectionError{Operation: OpUpdate})
 		return f
+
 	case o == nil || o.c == nil:
 		f.Complete(zero[R](), &ReleasedError{Operation: OpBorrowMut})
 		return f
+
 	case ctx == nil:
 		// A goroutine panicking on a nil ctx would take the process with it, so
 		// one is refused here rather than dereferenced there.
@@ -154,11 +156,13 @@ func (o *Owner[T]) mutateAsync[R any](ctx context.Context, f *traits.Future[R], 
 				switch {
 				case panicked != nil:
 					f.Complete(zero[R](), &traits.Panic{Value: panicked, Stack: debug.Stack()})
+
 				case !returned:
 					// runtime.Goexit. The release above ran, so the cell is
 					// fine, but nothing came back — and reporting the zero
 					// value would be a success the work never had.
 					f.Complete(zero[R](), traits.ErrCallbackExit)
+
 				default:
 					f.Complete(r, err)
 				}
@@ -176,5 +180,6 @@ func (o *Owner[T]) mutateAsync[R any](ctx context.Context, f *traits.Future[R], 
 
 func zero[R any]() R {
 	var zero R
+
 	return zero
 }

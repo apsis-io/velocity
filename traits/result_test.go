@@ -68,7 +68,7 @@ func TestFutureAwaitSeparatesTheWaitFromTheWork(t *testing.T) {
 	boom := errors.New("boom")
 	f.Complete(0, boom)
 
-	res, err := f.Await(context.Background())
+	_, err := f.Await(context.Background())
 
 	// The returned error is the WORK's failure, wrapped, so the common
 	// `if err != nil` catches it without reading the Result first — and it is
@@ -77,8 +77,8 @@ func TestFutureAwaitSeparatesTheWaitFromTheWork(t *testing.T) {
 		t.Fatalf("Await = %v, want an error wrapping the work's failure", err)
 	}
 
-	if !errors.Is(res.Err, boom) {
-		t.Fatalf("Result.Err = %v, want the work's failure", res.Err)
+	if !errors.Is(err, boom) {
+		t.Fatalf("Result.Err = %v, want the work's failure", err)
 	}
 }
 
@@ -124,7 +124,7 @@ func TestFutureNilIsFinished(t *testing.T) {
 
 	// The zero Result is a succeeded zero, and that is the reading.
 	res, err := f.Await(context.Background())
-	if err != nil || !res.Ok() || res.Value != 0 {
+	if err != nil || res != 0 {
 		t.Fatalf("Await = (%+v, %v), want a finished zero Result", res, err)
 	}
 }

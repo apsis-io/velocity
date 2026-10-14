@@ -22,7 +22,12 @@ type Clone[T any] func(value T) (T, error)
 // **What would retire it:** anyone who finds this loop written by hand at two
 // or more sites, or who composes drops inline without noticing they have.
 func ComposeDrops[T any](drops ...Drop[T]) (Drop[T], error) {
-	if err := validate("drops", drops, func(drop Drop[T]) bool { return drop == nil }); err != nil {
+	if err := validate(
+		"drops",
+		drops,
+		func(drop Drop[T]) bool {
+			return drop == nil
+		}); err != nil {
 		return nil, err
 	}
 
@@ -50,7 +55,12 @@ func ComposeDrops[T any](drops ...Drop[T]) (Drop[T], error) {
 // caller composing clones in a loop, which is eight lines and wrong in the
 // same way every time it is written again.
 func ComposeClones[T any](clones ...Clone[T]) (Clone[T], error) {
-	if err := validate("clones", clones, func(clone Clone[T]) bool { return clone == nil }); err != nil {
+	if err := validate(
+		"clones",
+		clones,
+		func(clone Clone[T]) bool {
+			return clone == nil
+		}); err != nil {
 		return nil, err
 	}
 
@@ -99,7 +109,12 @@ func (d Drop[T]) Clone(clones ...Clone[T]) (Clone[T], error) {
 		return nil, &TraitError{Trait: "clones with drop", Index: 0, Cause: ErrNilTrait}
 	}
 
-	if err := validate("clones", clones, func(clone Clone[T]) bool { return clone == nil }); err != nil {
+	if err := validate(
+		"clones",
+		clones,
+		func(clone Clone[T]) bool {
+			return clone == nil
+		}); err != nil {
 		return nil, err
 	}
 

@@ -82,7 +82,7 @@ func TestReleaseRefusesWhileAMutationIsQueued(t *testing.T) {
 	close(releaseFn)
 
 	res, err := queued.Await(ctx)
-	if err != nil || res.Value != 99 {
+	if err != nil || res != 99 {
 		t.Fatalf("the mutation = (%+v, %v), want 99 and no error", res, err)
 	}
 

@@ -95,7 +95,7 @@ func BenchmarkFutureCompleteAwaitResolved(b *testing.B) {
 		f.Complete(7, nil)
 
 		res, err := f.Await(ctx)
-		if err != nil || res.Value != 7 {
+		if err != nil || res != 7 {
 			b.Fatal("Await after Complete failed")
 		}
 	}
