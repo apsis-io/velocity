@@ -81,6 +81,11 @@ func (o *Owner[T]) MutateAsync[R any](ctx context.Context, fn func(*T) (R, error
 	return f
 }
 
+// WithWriteAsync is MutateAsync for callbacks that report only an error.
+func (o *Owner[T]) WithWriteAsync(ctx context.Context, fn func(*T) error) *traits.Future[struct{}] {
+	return o.MutateAsync(ctx, errOnly(fn))
+}
+
 // mutateAsync waits for the write borrow, then runs fn, and resolves f either
 // way. The loop is the whole of the queue: try to be admitted, and on a
 // conflict wait for the cell to say something moved.

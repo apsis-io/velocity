@@ -97,7 +97,9 @@ func (o *Owner[T]) Borrow() (*ReadBorrow[T], error)
 func (o *Owner[T]) BorrowMut() (*WriteBorrow[T], error)
 
 func (b *ReadBorrow[T]) Project[R any](fn func(T) (R, error)) (R, error)
+func (b *ReadBorrow[T]) WithRead(fn func(T) error) error
 func (b *WriteBorrow[T]) Update[R any](fn func(*T) (R, error)) (R, error)
+func (b *WriteBorrow[T]) WithWrite(fn func(*T) error) error
 func (b *ReadBorrow[T]) Release() error   // idempotent; Close is an alias
 ```
 
@@ -106,6 +108,13 @@ held is logged through `slog.Default()` and released. Production builds have
 no such net; that is deliberate, and why `Borrow` is cheap there. The static
 net is `just lint`: the `lostrelease` analyzer reports a handle not released
 on every path.
+
+## Queued async mutation
+
+```go
+func (o *Owner[T]) MutateAsync[R any](ctx context.Context, fn func(*T) (R, error)) *traits.Future[R]
+func (o *Owner[T]) WithWriteAsync(ctx context.Context, fn func(*T) error) *traits.Future[struct{}]
+```
 
 ## Capabilities
 
@@ -116,8 +125,8 @@ func View[T, R any](v Viewer[T], fn func(T) (R, error)) (R, error)
 func Mutate[T, R any](m Mutator[T], fn func(*T) (R, error)) (R, error)
 ```
 
-Owner and Shared are Mutators; Frozen is a Viewer only. Ask for the
-capability you need in the signature.
+Owner and Shared are Mutators; Frozen and ReadBorrow are Viewers only. Ask for
+the capability you need in the signature.
 
 ## Transfer
 
@@ -133,11 +142,11 @@ func (f *Frozen[T]) Clone() (*Frozen[T], error)
 func (f *Frozen[T]) IntoOwner() (*Owner[T], error)
 ```
 
-Every transfer requires no outstanding borrows and fails with `ErrConflict`
-otherwise. `Detach` is the only exit that skips `Drop`; reaching for it to
-pass a bare `T` through an API is how resources leak. `Map`'s callback must
-not close the source value — the source `Drop` still runs, after the derived
-one.
+Every transfer requires no outstanding borrows or queued mutations and fails
+with `ErrConflict` otherwise. `Detach` is the only exit that skips `Drop`;
+reaching for it to pass a bare `T` through an API is how resources leak. `Map`'s
+callback must not close the source value — the source `Drop` still runs, after
+the derived one.
 
 ## Retirement
 
@@ -190,7 +199,7 @@ return &Bundle{conn, raw}, nil
 ```go
 type State struct {
     Shared, Frozen, Sealed, Released, Moved bool
-    Readers, Shares int
+    Readers, Shares, Pending int
     Writer    bool
     DropError error
 }

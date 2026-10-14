@@ -69,6 +69,10 @@ func TestReleaseRefusesWhileAMutationIsQueued(t *testing.T) {
 	// is not a borrow — no address is exposed and nothing is excluded by it —
 	// so it carries its own count; without it, whether the Drop ran before or
 	// after the submitted mutation was a race the caller could not see.
+	if state := owner.State(); state.Pending != 1 {
+		t.Fatalf("State.Pending = %d, want 1", state.Pending)
+	}
+
 	if err := owner.Release(); !errors.Is(err, ownership.ErrConflict) {
 		t.Fatalf("Release with a queued mutation = %v, want a conflict", err)
 	}
@@ -94,6 +98,59 @@ func TestReleaseRefusesWhileAMutationIsQueued(t *testing.T) {
 
 	if !dropped {
 		t.Fatal("the Drop did not run once nothing was outstanding")
+	}
+}
+
+// Every operation that consumes or transitions the Owner handle — Move, Detach,
+// IntoShared, Freeze, Map, Release — must refuse while a submitted mutation is
+// still pending, even before its goroutine has acquired the write borrow.
+func TestTransitionsRefuseWhileAMutationIsPending(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	owner := ownership.Own(10)
+	defer owner.Release()
+
+	releaseFn := make(chan struct{})
+	f := owner.WithWriteAsync(ctx, func(v *int) error {
+		<-releaseFn
+
+		*v = 20
+
+		return nil
+	})
+
+	for _, tc := range []struct {
+		name string
+		call func() error
+	}{
+		{"Move", func() error { _, err := owner.Move(); return err }},
+		{"Detach", func() error { _, err := owner.Detach(); return err }},
+		{"IntoShared", func() error { _, err := owner.IntoShared(); return err }},
+		{"Freeze", func() error { _, err := owner.Freeze(); return err }},
+		{"Map", func() error { _, err := owner.Map(func(v int) (int, error) { return v, nil }); return err }},
+		{"Release", owner.Release},
+	} {
+		err := tc.call()
+		if !errors.Is(err, ownership.ErrConflict) {
+			t.Fatalf("%s with a pending mutation = %v, want ErrConflict", tc.name, err)
+		}
+
+		var ce *ownership.ConflictError
+		if !errors.As(err, &ce) || ce.Pending != 1 {
+			t.Fatalf("%s ConflictError = %+v, want Pending=1", tc.name, ce)
+		}
+	}
+
+	close(releaseFn)
+
+	if _, err := f.Await(ctx); err != nil {
+		t.Fatalf("WithWriteAsync Await = %v", err)
+	}
+
+	got, err := owner.View(func(v int) (int, error) { return v, nil })
+	if err != nil || got != 20 {
+		t.Fatalf("value after WithWriteAsync = (%d, %v), want 20", got, err)
 	}
 }
 

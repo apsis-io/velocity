@@ -60,9 +60,14 @@ type ConflictError struct {
 	Readers   int
 	Writer    bool
 	Shares    int
+	Pending   int
 }
 
 func (e *ConflictError) Error() string {
+	if e.Pending != 0 {
+		return fmt.Sprintf("%s: %v (readers=%d writer=%t shares=%d pending=%d)", e.Operation, ErrConflict, e.Readers, e.Writer, e.Shares, e.Pending)
+	}
+
 	return fmt.Sprintf("%s: %v (readers=%d writer=%t shares=%d)", e.Operation, ErrConflict, e.Readers, e.Writer, e.Shares)
 }
 

@@ -211,7 +211,7 @@ func (o *Owner[T]) Move() (*Owner[T], error) {
 		return nil, &MovedError{Operation: OpMove}
 	}
 
-	if o.h.borrows != 0 || c.readers != 0 || c.writer {
+	if o.h.borrows != 0 || c.readers != 0 || c.writer || c.pending > 0 {
 		return nil, c.conflictLocked(OpMove)
 	}
 
@@ -243,7 +243,7 @@ func (o *Owner[T]) Detach() (T, error) {
 		return zero, err
 	}
 
-	if c.mode != modeUnique || o.h.borrows != 0 || c.readers != 0 || c.writer {
+	if c.mode != modeUnique || o.h.borrows != 0 || c.readers != 0 || c.writer || c.pending > 0 {
 		var zero T
 		return zero, c.conflictLocked(OpDetach)
 	}
@@ -276,7 +276,7 @@ func (o *Owner[T]) IntoShared() (*Shared[T], error) {
 		return nil, err
 	}
 
-	if c.mode != modeUnique || o.h.borrows != 0 || c.readers != 0 || c.writer {
+	if c.mode != modeUnique || o.h.borrows != 0 || c.readers != 0 || c.writer || c.pending > 0 {
 		return nil, c.conflictLocked(OpIntoShared)
 	}
 

@@ -35,6 +35,7 @@ type State struct {
 	Readers   int
 	Writer    bool
 	Shares    int
+	Pending   int
 	DropError error
 }
 
@@ -130,6 +131,7 @@ func (c *cell[T]) stateFor(h *handle) State {
 		Readers:   c.readers,
 		Writer:    c.writer,
 		Shares:    c.shares,
+		Pending:   c.pending,
 		DropError: c.dropErr,
 	}
 	if h != nil {
@@ -148,7 +150,7 @@ func (c *cell[T]) conflict(op Operation) error {
 }
 
 func (c *cell[T]) conflictLocked(op Operation) error {
-	return &ConflictError{Operation: op, Readers: c.readers, Writer: c.writer, Shares: c.shares}
+	return &ConflictError{Operation: op, Readers: c.readers, Writer: c.writer, Shares: c.shares, Pending: c.pending}
 }
 
 func (c *cell[T]) checkHandle(h *handle, op Operation) error {

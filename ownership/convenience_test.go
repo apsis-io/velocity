@@ -112,6 +112,35 @@ func TestWithReadAndWithWrite(t *testing.T) {
 	if seen != 7 {
 		t.Fatalf("seen = %d, want 7", seen)
 	}
+
+	wb, err := owner.BorrowMut()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := wb.WithWrite(func(value *int) error { *value += 3; return nil }); err != nil {
+		_ = wb.Release()
+
+		t.Fatal(err)
+	}
+
+	if err := wb.Release(); err != nil {
+		t.Fatal(err)
+	}
+
+	rb, err := owner.Borrow()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rb.Release()
+
+	if err := rb.WithRead(func(value int) error { seen = value; return nil }); err != nil {
+		t.Fatal(err)
+	}
+
+	if seen != 10 {
+		t.Fatalf("seen via ReadBorrow.WithRead = %d, want 10", seen)
+	}
 }
 
 func TestConvenienceNilCallbacks(t *testing.T) {
@@ -133,6 +162,32 @@ func TestConvenienceNilCallbacks(t *testing.T) {
 	if err := owner.WithWrite(nil); !errors.Is(err, ownership.ErrProjection) {
 		t.Fatalf("WithWrite(nil) = %v", err)
 	}
+
+	rb, err := owner.Borrow()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := rb.WithRead(nil); !errors.Is(err, ownership.ErrProjection) {
+		_ = rb.Release()
+
+		t.Fatalf("ReadBorrow.WithRead(nil) = %v", err)
+	}
+
+	_ = rb.Release()
+
+	wb, err := owner.BorrowMut()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := wb.WithWrite(nil); !errors.Is(err, ownership.ErrProjection) {
+		_ = wb.Release()
+
+		t.Fatalf("WriteBorrow.WithWrite(nil) = %v", err)
+	}
+
+	_ = wb.Release()
 }
 
 func TestSharedAndFrozenConvenience(t *testing.T) {

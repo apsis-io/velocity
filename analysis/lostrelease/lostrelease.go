@@ -397,7 +397,7 @@ func probesError(info *types.Info, stack []ast.Node, names []*ast.Ident) bool {
 // the obligation to release it. Every other mention of the handle counts as a
 // use, since responsibility may have moved with it.
 var nonReleasing = map[string]bool{
-	"Project": true, "Update": true, // borrows
+	"Project": true, "Update": true, "WithRead": true, "WithWrite": true, // borrows
 	"Value": true, "Held": true, // leases and checkouts
 	"State": true,
 }

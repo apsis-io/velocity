@@ -118,6 +118,12 @@ func (b *ReadBorrow[T]) Project[R any](fn func(T) (R, error)) (R, error) {
 	return result, err
 }
 
+// WithRead is Project for callbacks that report only an error.
+func (b *ReadBorrow[T]) WithRead(fn func(T) error) error {
+	_, err := b.Project(errOnly(fn))
+	return err
+}
+
 // Release ends the borrow. It is idempotent.
 func (b *ReadBorrow[T]) Release() error {
 	if b == nil || b.lease == nil {
@@ -157,19 +163,23 @@ func newWriteBorrow[T any](lease *lease[T]) *WriteBorrow[T] {
 // live. Mutations are not rolled back when fn returns an error.
 func (b *WriteBorrow[T]) Update[R any](fn func(*T) (R, error)) (R, error) {
 	if fn == nil {
-		var zero R
-		return zero, &ProjectionError{Operation: OpUpdate}
+		return zero[R](), &ProjectionError{Operation: OpUpdate}
 	}
 
 	if b == nil || b.lease == nil {
-		var zero R
-		return zero, &ReleasedError{Operation: OpUpdate}
+		return zero[R](), &ReleasedError{Operation: OpUpdate}
 	}
 
 	result, err := b.lease.withWrite(OpUpdate, fn)
 	runtime.KeepAlive(b)
 
 	return result, err
+}
+
+// WithWrite is Update for callbacks that report only an error.
+func (b *WriteBorrow[T]) WithWrite(fn func(*T) error) error {
+	_, err := b.Update(errOnly(fn))
+	return err
 }
 
 // Release ends the borrow. It is idempotent.

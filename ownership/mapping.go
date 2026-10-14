@@ -39,6 +39,15 @@ func (o *Owner[T]) Map[U any](fn func(T) (U, error), opts ...Option[U]) (*Owner[
 	// the value outright, keeps the Owner recoverable if fn fails.
 	c := o.c
 
+	c.mu.Lock()
+	if c.pending > 0 {
+		err := c.conflictLocked(OpMap)
+		c.mu.Unlock()
+
+		return nil, err
+	}
+	c.mu.Unlock()
+
 	lease, err := c.acquireWrite(&o.h, modeUnique)
 	if err != nil {
 		return nil, err
@@ -59,15 +68,13 @@ func (o *Owner[T]) Map[U any](fn func(T) (U, error), opts ...Option[U]) (*Owner[
 	}
 
 	c.mu.Lock()
+	// Releasing the lease wakes any MutateAsync that queued while fn ran, and
+	// setting the handle and cell terminal in the same critical section ensures
+	// the woken waiter sees the MovedError immediately rather than sleeping
+	// until its context ends.
 	_, _ = c.releaseLeaseLocked(lease, OpMap)
 
 	o.h.state = handleMoved
-
-	// A queued MutateAsync cannot reach its own cancellation branch while it is
-	// asleep, and nothing else will change this cell again. Without the wake it
-	// sleeps until its context ends and then reports the context's cause, which
-	// is a different failure from the one that happened.
-	c.changedLocked()
 
 	var zero T
 
@@ -76,7 +83,6 @@ func (o *Owner[T]) Map[U any](fn func(T) (U, error), opts ...Option[U]) (*Owner[
 	// The source value's Drop is now chained into the derived cell's; this
 	// cell owns nothing and its net must not fire over it later.
 	c.disarmNetLocked()
-	c.changedLocked()
 	c.mu.Unlock()
 
 	derivedCell := newCell(derived, modeUnique, 0, chainDrop(cfg.drop, sourceDrop, value), cfg.clone)

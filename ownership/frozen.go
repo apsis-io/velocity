@@ -58,7 +58,7 @@ func (o *Owner[T]) Freeze() (*Frozen[T], error) {
 		return nil, err
 	}
 
-	if c.mode != modeUnique || o.h.borrows != 0 || c.readers != 0 || c.writer {
+	if c.mode != modeUnique || o.h.borrows != 0 || c.readers != 0 || c.writer || c.pending > 0 {
 		return nil, c.conflictLocked(OpFreeze)
 	}
 

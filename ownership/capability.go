@@ -22,6 +22,7 @@ var (
 	_ Mutator[int] = (*Owner[int])(nil)
 	_ Mutator[int] = (*Shared[int])(nil)
 	_ Viewer[int]  = (*Frozen[int])(nil)
+	_ Viewer[int]  = (*ReadBorrow[int])(nil)
 )
 
 // View projects a value out through any Viewer, restoring the (R, error)

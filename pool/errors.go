@@ -10,6 +10,8 @@ var (
 	// ErrInvalidConfig is the shared cause behind a rejected Config; see
 	// traits.ErrInvalidConfig.
 	ErrInvalidConfig = traits.ErrInvalidConfig
+	// ErrNilContext is returned when Get receives a nil context.
+	ErrNilContext = traits.ErrNilContext
 
 	ErrInvalidMax = errors.New("pool max must be positive")
 	ErrClosed     = errors.New("pool closed")

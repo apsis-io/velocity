@@ -149,7 +149,7 @@ type Checkout[T any] struct {
 // the value when the checkout releases. It reads this checkout's discard
 // flag, which after a Move is shared with the original handle — see Move.
 func (c *Checkout[T]) ReleaseLease(value T) error {
-	return c.p.put(value, c.flag.Load())
+	return c.p.put(value, c.discard.Load())
 }
 
 // Move transfers the checkout to a fresh handle and spends this one, exactly
@@ -210,7 +210,58 @@ func (p *Pool[T]) Get(ctx context.Context) (*Checkout[T], error) {
 	return checkout, err
 }
 
+// With checks out a resource under ctx, invokes fn with it, and releases the
+// checkout before returning. It is the scoped form of Get for the common case
+// where the checkout does not outlive the call; use Get directly when the
+// caller needs to Discard a broken resource or Move the checkout across a
+// boundary.
+func (p *Pool[T]) With(ctx context.Context, fn func(context.Context, T) error) error {
+	if fn == nil {
+		return &ownership.ProjectionError{Operation: ownership.OpProject}
+	}
+
+	_, err := Use(ctx, p, func(ctx context.Context, value T) (struct{}, error) {
+		return struct{}{}, fn(ctx, value)
+	})
+
+	return err
+}
+
+// Use is With for callbacks that return a value alongside their error. It is a
+// package-level function because Go methods cannot introduce a type parameter
+// of their own.
+func Use[T, R any](ctx context.Context, p *Pool[T], fn func(context.Context, T) (R, error)) (R, error) {
+	var zero R
+	if fn == nil {
+		return zero, &ownership.ProjectionError{Operation: ownership.OpProject}
+	}
+
+	if p == nil {
+		return zero, &ownership.ReleasedError{Operation: ownership.OpBorrow}
+	}
+
+	checkout, err := p.Get(ctx)
+	if err != nil {
+		return zero, err
+	}
+
+	value, err := checkout.Value()
+	if err != nil {
+		_ = checkout.Release()
+		return zero, err
+	}
+
+	result, fnErr := fn(ctx, value)
+	relErr := checkout.Release()
+
+	return result, errors.Join(fnErr, relErr)
+}
+
 func (p *Pool[T]) get(ctx context.Context) (*Checkout[T], bool, error) {
+	if ctx == nil {
+		return nil, false, ErrNilContext
+	}
+
 	// A free permit is taken even when ctx is already done — a Get that can
 	// return instantly should — and waiting honours the context. Either way
 	// the pool reports the context's cause, not the semaphore's error shape.

@@ -98,13 +98,14 @@ The shapes that pay for themselves:
 - **`Map`** transforms an owned value into another type while chaining Drop
   (flush the writer, then close the file). **`Detach`** is the one exit that
   skips Drop, named for what it does to cleanup responsibility.
-- **`MutateAsync`** runs a mutation on its own goroutine and hands back a
-  `traits.Future`, with the write borrow **queued** rather than refused:
+- **`MutateAsync` / `WithWriteAsync`** run a mutation on its own goroutine and
+  hand back a `traits.Future`, with the write borrow **queued** rather than
+  refused:
 
   ```go
-  mutation := owner.MutateAsync(ctx, func(c *Config) error { c.Retries++; return nil })
+  mutation := owner.WithWriteAsync(ctx, func(c *Config) error { c.Retries++; return nil })
   // ... elsewhere, whenever:
-  result, err := mutation.Await(ctx)          // the work's outcome, or the wait's error
+  _, err := mutation.Await(ctx)          // the work's outcome, or the wait's error
   ```
 
   `ctx` bounds the wait for the borrow, so cancelling stops a mutation that
@@ -115,14 +116,16 @@ The shapes that pay for themselves:
   caller waiting inside a critical section it owns, and a deadline turns it into
   an error where the caller is already looking.
 
-  A submitted mutation is counted separately from a borrow, and `Release` and
-  `Move` **refuse with `ErrConflict` while one is outstanding**. A submission is
+  A submitted mutation is counted separately from a borrow (`State.Pending`),
+  and `Release` and every transfer (`Move`, `Detach`, `IntoShared`, `Freeze`,
+  `Map`) **refuse with `ErrConflict` while one is outstanding**. A submission is
   not a borrow — no address is exposed and nothing is excluded by it — so
-  without a count of its own, ending a handle was a race the caller could not
-  see: the `Drop` could run while the mutation it exists to clean up after was
-  still queued, surfacing later as a file descriptor that outlives its owner.
-  Ending a handle is therefore a choice — await the mutation and release, or
-  `Seal` to discard it deliberately and have the submission report `ErrSealed`:
+  without a count of its own, ending or transferring a handle was a race the
+  caller could not see: the `Drop` or transfer could run while the mutation was
+  still queued, surfacing later as a file descriptor that outlives its owner or
+  a `Future` failing with `ErrMoved`. Ending a handle is therefore a choice —
+  await the mutation and release, or `Seal` to discard it deliberately and have
+  the submission report `ErrSealed`:
 
   ```go
   mutation := owner.MutateAsync(ctx, mutate)
@@ -176,7 +179,8 @@ released so tests keep going.
 
 A bounded set of made, held, and returned resources. A `Checkout` *is* an
 `ownership.Lease`, so use-after-return and double return are caught, and it
-is an `io.Closer` a `Scope` can own.
+is an `io.Closer` a `Scope` can own. `With` and `pool.Use` acquire a checkout,
+pass the resource to the callback, and release it when the callback returns.
 
 ```go
 clients, err := pool.New(pool.Config[*Client]{
@@ -188,6 +192,11 @@ clients, err := pool.New(pool.Config[*Client]{
 checkout, err := clients.Get(ctx)     // waits for capacity under ctx
 defer checkout.Release()              // or checkout.Discard() if it turned out broken
 client, err := checkout.Value()
+
+// Or scoped to a callback:
+resp, err := pool.Use(ctx, clients, func(ctx context.Context, client *Client) (*Response, error) {
+    return client.Do(ctx, req)
+})
 ```
 
 ## async

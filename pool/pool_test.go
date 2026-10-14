@@ -658,3 +658,48 @@ func TestStatsReuseRateNearZeroOnChurn(t *testing.T) {
 		t.Fatalf("failed passes = %d, want 4", stats.FailedPasses)
 	}
 }
+
+func TestPoolWithAndUse(t *testing.T) {
+	var f factory
+
+	p := newPool(t, f.config(1))
+	defer p.Close()
+
+	ctx := context.Background()
+
+	id, err := pool.Use(ctx, p, func(_ context.Context, v *conn) (int, error) {
+		return v.id, nil
+	})
+	if err != nil || id != 1 {
+		t.Fatalf("Use = (%d, %v), want (1, nil)", id, err)
+	}
+
+	// Subsequent With reuses conn 1 and releases it when fn returns.
+	if err := p.With(ctx, func(_ context.Context, v *conn) error {
+		if v.id != 1 {
+			t.Fatalf("With got conn %d, want 1", v.id)
+		}
+
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	if stats := p.Stats(); stats.PassesServed != 2 || stats.Created != 1 || stats.Idle != 1 || stats.InUse != 0 {
+		t.Fatalf("stats after Use + With = %+v", stats)
+	}
+
+	var nilCtx context.Context
+	if _, err := p.Get(nilCtx); !errors.Is(err, pool.ErrNilContext) {
+		t.Fatalf("Get(nil) = %v, want ErrNilContext", err)
+	}
+
+	if err := p.With(ctx, nil); !errors.Is(err, ownership.ErrProjection) {
+		t.Fatalf("With(nil) = %v, want ErrProjection", err)
+	}
+
+	var nilPool *pool.Pool[*conn]
+	if _, err := pool.Use(ctx, nilPool, func(context.Context, *conn) (int, error) { return 0, nil }); !errors.Is(err, ownership.ErrReleased) {
+		t.Fatalf("Use(nilPool) = %v, want ErrReleased", err)
+	}
+}
