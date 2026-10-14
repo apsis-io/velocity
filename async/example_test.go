@@ -48,12 +48,13 @@ func ExampleRunner_Submit() {
 
 	// The handles are independent and order-free: read them in any order, or
 	// not at all — a Submit whose handle is dropped still runs to completion.
-	res, _ := bad.Await(context.Background())
-	fmt.Println(res.Err)
-	res, _ = fast.Await(context.Background())
-	fmt.Println(res.Value)
+	_, err := bad.Await(context.Background())
+	fmt.Println(err)
+
+	res, _ := fast.Await(context.Background())
+	fmt.Println(res)
 	res, _ = slow.Await(context.Background())
-	fmt.Println(res.Value)
+	fmt.Println(res)
 	// Output:
 	// no route
 	// fast

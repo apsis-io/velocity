@@ -103,7 +103,7 @@ func TestHooksCarrySpanCompletion(t *testing.T) {
 	})
 
 	res, err := f.Await(context.Background())
-	if err != nil || res.Value != 7 {
+	if err != nil || res != 7 {
 		t.Fatalf("Await = (%+v, %v)", res, err)
 	}
 

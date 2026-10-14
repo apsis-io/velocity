@@ -357,8 +357,8 @@ property of the handle, not of the outcome**, so an unresolved `Future` has no
 
 - `Try() (Result[R], bool)` — the second return is **readiness**, so unknown,
   succeeded and failed are three different answers rather than one error channel.
-- `Await(ctx) (Result[R], error)` — the error reports whichever applies: the
-  work's failure wrapped, or the context's cause when the wait ended first.
+- `Await(ctx) (R, error)` — the error reports whichever applies: the
+  work's failure, or the context's cause when the wait ended first.
 
 Giving up on the wait does not give up on the work. It still completes, the
 handle still resolves for anyone watching, and nothing needs cleaning up by

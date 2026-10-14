@@ -6,6 +6,9 @@ import (
 )
 
 var (
+	// ErrNilContext is what Future.Await returns for a nil context. A Future is
+	// often carried by a caller that has no context of its own, and the panic a nil
+	// ctx.Done() would produce is a poor answer to that.
 	ErrNilContext = errors.New("traits: nil context")
 
 	// ErrInvalidComposition identifies a trait composition that cannot run.

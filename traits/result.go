@@ -41,11 +41,11 @@ func (r Result[R]) Ok() bool { return r.Err == nil }
 // unresolved, or it carries a Result.
 //
 // The distinction a Future exists to keep: **a Result's Err is the work's
-// failure, and a timeout is the wait's** — and Await's error reports whichever
-// of the two applies, wrapping the work's so `if err != nil` catches a failure
-// without a caller digging into the Result. A caller that gives up waiting has
-// learned something about its own patience, not about the work, which is why
-// the two facts never collapse into one.
+// failure, and a timeout is the wait's** — Try reports the Result and whether
+// it is ready, while Await returns the value and whichever error applies (the
+// work's failure, or the context's cause when the wait ended first). A caller
+// that gives up waiting has learned something about its own patience, not about
+// the work, which is why the two facts never collapse into one.
 type Future[R any] struct {
 	done chan struct{}
 
@@ -96,6 +96,7 @@ func (f *Future[R]) Complete(value R, err error) bool {
 	return true
 }
 
+// CompleteResult resolves the Future with a Result already in hand.
 func (f *Future[R]) CompleteResult(res Result[R]) bool {
 	return f.Complete(res.Value, res.Err)
 }
@@ -140,23 +141,26 @@ func (f *Future[R]) Try() (Result[R], bool) {
 }
 
 // Await waits for the work to finish, or for ctx to end, and returns its
-// Result with a second value saying whether it succeeded:
+// outcome:
 //
-//   - work succeeded, wait completed — (Result, nil)
-//   - work failed, wait completed — (Result carrying the failure, an error
-//     wrapping it), so `if err != nil` catches a failure without the caller
-//     having to look inside the Result first
-//   - ctx ended first — (the zero Result, ctx's cause), and **the work still
+//   - work succeeded, wait completed — (value, nil)
+//   - work failed, wait completed — (the zero value, the work's error)
+//   - ctx ended first — (the zero value, ctx's cause), and **the work still
 //     runs** and still resolves the Future for anyone else watching
 //
 // The last is the property that makes a Future droppable: nothing is abandoned,
-// so nothing needs cleaning up by whoever let go. It is also the one case
-// where the two values disagree, and deliberately so — on a timeout `err` is
-// non-nil and the zero Result reports `Ok()`, because the Result is not to be
-// read when the wait did not complete. A caller that wants the work's fate
-// waits for it, or watches Done.
+// so nothing needs cleaning up by whoever let go. A caller that wants the
+// work's fate waits for it, or watches Done.
 func (f *Future[R]) Await(ctx context.Context) (R, error) {
 	var zero R
+
+	if f == nil {
+		return zero, nil
+	}
+
+	if ctx == nil {
+		return zero, ErrNilContext
+	}
 
 	if f.state.Load() == statePublished {
 		return f.result()
@@ -174,9 +178,7 @@ func (f *Future[R]) Await(ctx context.Context) (R, error) {
 	}
 }
 
-// result shapes a resolved Future's Result for Await: the work's
-// failure is wrapped so a caller's `if err != nil` catches it without
-// looking inside the Result first.
+// result shapes a resolved Future's Result for Await.
 func (f *Future[R]) result() (R, error) {
 	var zero R
 

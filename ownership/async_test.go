@@ -45,15 +45,7 @@ func TestMutateAsyncReportsAnErroredCallback(t *testing.T) {
 	_, err = owner.MutateAsync(t.Context(), func(*int) (int, error) { return 0, boom }).
 		Await(t.Context())
 	if !errors.Is(err, boom) {
-		t.Fatalf("Await = %v, want an error wrapping the callback's failure", err)
-	}
-
-	if !errors.Is(err, boom) {
-		t.Fatalf("Result.Err = %v, want the callback's error", err)
-	}
-
-	if err == nil {
-		t.Fatal("a failed callback reported Ok")
+		t.Fatalf("Await = %v, want the callback's failure", err)
 	}
 }
 
@@ -138,10 +130,6 @@ func TestMutateAsyncCancelsWhileQueued(t *testing.T) {
 	if ran.Load() {
 		t.Fatal("a cancelled mutation still ran its callback")
 	}
-
-	if err == nil {
-		t.Fatal("a cancelled mutation reported a succeeded zero")
-	}
 }
 
 // The borrow is released whatever happens, so a Future the caller drops is not
@@ -197,11 +185,6 @@ func TestMutateAsyncRecoversAPanicAndReleasesTheBorrow(t *testing.T) {
 	var raised *traits.Panic
 	if !errors.As(err, &raised) || raised.Value != "callback" {
 		t.Fatalf("Await = %v, want a *Panic carrying the value", err)
-	}
-
-	var p *traits.Panic
-	if !errors.As(err, &p) || p.Value != "callback" {
-		t.Fatalf("Result.Err = %v, want a *Panic carrying the value", err)
 	}
 
 	// Released before the panic was converted, so the cell is usable.
@@ -265,11 +248,6 @@ func TestMutateAsyncAwaitTimeoutDoesNotCancelTheWork(t *testing.T) {
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Millisecond)
 	defer cancel()
 
-	// The returned error is the wait's. The Result alongside it is the zero
-	// Result, which is a succeeded zero and therefore reports Ok — so there is
-	// nothing to assert about it. That is the shape of every Go function
-	// returning a value and an error, and the reason Await returns the wait's
-	// failure separately rather than folding it into the Result.
 	if _, err := f.Await(ctx); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("Await = %v, want the caller's deadline", err)
 	}
@@ -277,7 +255,7 @@ func TestMutateAsyncAwaitTimeoutDoesNotCancelTheWork(t *testing.T) {
 	close(release)
 
 	after, err := f.Await(t.Context())
-	if after != 5 {
+	if err != nil || after != 5 {
 		t.Fatalf("the Future did not resolve with the real outcome: (%+v, %v)", after, err)
 	}
 }

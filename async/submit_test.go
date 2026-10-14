@@ -50,7 +50,7 @@ func TestSubmitResolvesWithTheFunctionsOutcome(t *testing.T) {
 	close(release)
 
 	res, err := f.Await(ctx)
-	if err != nil || res.Value != 42 || !res.Ok() {
+	if err != nil || res != 42 {
 		t.Fatalf("Await = (%+v, %v), want 42 and no error", res, err)
 	}
 }
@@ -64,14 +64,11 @@ func TestSubmitReportsTheFunctionsFailure(t *testing.T) {
 	})
 
 	res, err := f.Await(context.Background())
-	// The error is the work's failure, reachable through both channels: the
-	// Result carries it and Await's wraps it, so `if err != nil` catches a
-	// failure without the caller looking inside the Result first.
-	if !errors.Is(err, boom) || !errors.Is(res.Err, boom) {
-		t.Fatalf("Await = (%+v, %v), want the function's own error in both", res, err)
+	if !errors.Is(err, boom) {
+		t.Fatalf("Await = (%+v, %v), want the function's own error", res, err)
 	}
 
-	if res.Value != "" {
+	if res != "" {
 		t.Fatalf("Await = %+v, want the zero value beside a failure", res)
 	}
 }
@@ -131,7 +128,7 @@ func TestSubmitReportsAPanicAsAFailedTask(t *testing.T) {
 		panic("boom")
 	})
 
-	res, err := f.Await(context.Background())
+	_, err := f.Await(context.Background())
 
 	var panicked *traits.Panic
 	if !errors.As(err, &panicked) {
@@ -143,6 +140,7 @@ func TestSubmitReportsAPanicAsAFailedTask(t *testing.T) {
 	}
 
 	// The failure is in the Result too, not only in the wait's error.
+	res, _ := f.Try()
 	if !errors.Is(res.Err, error(panicked)) {
 		t.Fatalf("Result.Err = %v, want the panic", res.Err)
 	}
@@ -166,8 +164,8 @@ func TestSubmitReportsAExitWithoutReturning(t *testing.T) {
 		t.Fatalf("Await = %v, want ErrCallbackExit", err)
 	}
 
-	if res.Value != 0 || res.Ok() {
-		t.Fatalf("Await = %+v, want a zero value reported as not-succeeded", res)
+	if res != 0 {
+		t.Fatalf("Await = %+v, want a zero value", res)
 	}
 }
 
@@ -210,8 +208,8 @@ func TestSubmitRefusesMalformedSubmissions(t *testing.T) {
 				t.Fatalf("Await = %v, want %v", err, tt.want)
 			}
 
-			if res.Ok() {
-				t.Fatalf("Await = %+v, want a refusal reported as not-succeeded", res)
+			if res != 0 {
+				t.Fatalf("Await = %+v, want the zero value", res)
 			}
 		})
 	}
@@ -270,11 +268,8 @@ func TestAwaitTimeoutLeavesTheWorkRunning(t *testing.T) {
 		t.Fatalf("Await = %v, want the deadline", err)
 	}
 
-	// The wait's failure is not the work's: the zero Result reports Ok, and the
-	// doc says so, because the Result is not to be read when the wait did not
-	// complete.
-	if !res.Ok() {
-		t.Fatalf("Await = %+v, want the zero Result, which is a succeeded zero", res)
+	if res != 0 {
+		t.Fatalf("Await = %+v, want the zero value", res)
 	}
 
 	// And the work is untouched — asserted by the work finishing at all, not by
@@ -299,8 +294,8 @@ func TestAwaitTimeoutLeavesTheWorkRunning(t *testing.T) {
 		t.Fatalf("the work never became readable after finishing: %v", err)
 	}
 
-	if got.Value != 5 || got.Err != nil {
-		t.Fatalf("the work = %+v, want 5 with no error once it finished", got)
+	if got != 5 {
+		t.Fatalf("the work = %+v, want 5 once it finished", got)
 	}
 }
 

@@ -42,8 +42,13 @@ func TestFutureTrySeparatesUnknownFromFailed(t *testing.T) {
 // finishing and a deferred cleanup racing to signal is an ordinary shape.
 func TestFutureCompleteIsFirstWins(t *testing.T) {
 	f := traits.NewFuture[int]()
-	f.Complete(1, nil)
-	f.Complete(2, errors.New("later"))
+	if !f.Complete(1, nil) {
+		t.Fatal("first Complete reported false")
+	}
+
+	if f.Complete(2, errors.New("later")) {
+		t.Fatal("second Complete reported true")
+	}
 
 	res, _ := f.Try()
 	if res.Value != 1 || !res.Ok() {
@@ -69,16 +74,8 @@ func TestFutureAwaitSeparatesTheWaitFromTheWork(t *testing.T) {
 	f.Complete(0, boom)
 
 	_, err := f.Await(context.Background())
-
-	// The returned error is the WORK's failure, wrapped, so the common
-	// `if err != nil` catches it without reading the Result first — and it is
-	// still the work's error underneath, not a replacement for it.
 	if !errors.Is(err, boom) {
-		t.Fatalf("Await = %v, want an error wrapping the work's failure", err)
-	}
-
-	if !errors.Is(err, boom) {
-		t.Fatalf("Result.Err = %v, want the work's failure", err)
+		t.Fatalf("Await = %v, want the work's failure", err)
 	}
 }
 
