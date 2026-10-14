@@ -166,8 +166,20 @@ func (r *hedgeRun[T]) launch() {
 	r.schedule()
 }
 
-// schedule arms the timer for the next hedge, if another is allowed.
+// schedule arms the timer for the next hedge, if another is allowed. Any
+// timer left over from an earlier attempt that failed before its delay
+// elapsed is disarmed first, so it cannot fire into the next attempt's window.
 func (r *hedgeRun[T]) schedule() {
+	if r.timer != nil {
+		r.timer.Stop()
+		r.timer = nil
+	}
+
+	select {
+	case <-r.due:
+	default:
+	}
+
 	if r.launched >= r.policy.MaxAttempts {
 		return
 	}
@@ -304,7 +316,7 @@ type HedgeBudget struct {
 // percent — allowing up to burst of them back to back. The budget starts
 // empty, so hedging begins only once traffic has paid for it.
 func NewHedgeBudget(ratio float64, burst int) (*HedgeBudget, error) {
-	if ratio <= 0 || ratio > 1 || burst <= 0 {
+	if math.IsNaN(ratio) || ratio <= 0 || ratio > 1 || burst <= 0 {
 		return nil, &PolicyError{Cause: ErrInvalidBudget}
 	}
 
@@ -392,7 +404,7 @@ type LatencyDelay struct {
 // nothing to estimate from and warmup is used instead; pass a warmup longer
 // than any plausible response to hold hedging off entirely until then.
 func NewLatencyDelay(quantile float64, window, minSamples int, warmup time.Duration) (*LatencyDelay, error) {
-	if quantile <= 0 || quantile >= 1 || window <= 0 || minSamples <= 0 || minSamples > window || warmup < 0 {
+	if math.IsNaN(quantile) || quantile <= 0 || quantile >= 1 || window <= 0 || minSamples <= 0 || minSamples > window || warmup < 0 {
 		return nil, &PolicyError{Cause: ErrInvalidBackoff}
 	}
 

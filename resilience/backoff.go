@@ -15,7 +15,7 @@ type Backoff func(attempt int) time.Duration
 // ExponentialBackoff returns capped exponential backoff with multiplicative
 // jitter in [1-jitter, 1+jitter].
 func ExponentialBackoff(base, max time.Duration, jitter float64) (Backoff, error) {
-	if base < 0 || max < base || jitter < 0 || jitter > 1 {
+	if base < 0 || max < base || math.IsNaN(jitter) || jitter < 0 || jitter > 1 {
 		return nil, &PolicyError{Cause: ErrInvalidBackoff}
 	}
 

@@ -3,6 +3,7 @@ package resilience_test
 import (
 	"context"
 	"errors"
+	"math"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -601,5 +602,92 @@ func TestHedgeWithLatencyDelay(t *testing.T) {
 
 	if err != nil || value != 2 {
 		t.Fatalf("Hedge = (%d, %v), want the hedge to have overtaken", value, err)
+	}
+}
+
+// When an earlier attempt fails before its hedge timer fires, the immediate
+// launch of the next attempt must disarm that earlier timer so it does not
+// fire later and launch a subsequent hedge prematurely.
+func TestHedgeEarlyFailureDisarmsPreviousTimer(t *testing.T) {
+	clock := resilience.NewManualClock(time.Unix(0, 0))
+
+	var launched atomic.Int32
+
+	attempt1Started := make(chan struct{})
+	releaseAttempt1 := make(chan struct{})
+
+	policy := resilience.HedgePolicy[int]{
+		MaxAttempts: 3,
+		Clock:       clock,
+		Delay: func(hedge int) time.Duration {
+			if hedge == 1 {
+				return 5 * time.Second
+			}
+
+			return 20 * time.Second
+		},
+		Hooks: resilience.HedgeHooks{
+			OnAttempt: func(attempt int, _ bool) {
+				launched.Add(1)
+
+				if attempt == 1 {
+					close(attempt1Started)
+				}
+			},
+		},
+	}
+
+	done := make(chan int, 1)
+
+	go func() {
+		v, err := resilience.Hedge(context.Background(), policy, func(_ context.Context, attempt int) (int, error) {
+			if attempt == 0 {
+				return 0, errors.New("fast fail")
+			}
+
+			if attempt == 1 {
+				<-releaseAttempt1
+				return 1, nil
+			}
+
+			return 2, nil
+		})
+		if err != nil {
+			t.Error(err)
+		}
+
+		done <- v
+	}()
+
+	<-attempt1Started
+	// Give the collector goroutine a moment to arm hedge 2's 20s timer.
+	time.Sleep(5 * time.Millisecond)
+
+	// Advancing past hedge 1's 5s deadline must not trigger hedge 2 (which is due at 20s).
+	clock.Advance(5 * time.Second)
+	time.Sleep(5 * time.Millisecond)
+
+	if got := launched.Load(); got != 2 {
+		t.Fatalf("launched = %d after 5s, want 2 (attempt 0's 5s timer should have been disarmed)", got)
+	}
+
+	close(releaseAttempt1)
+
+	if got := <-done; got != 1 {
+		t.Fatalf("winner = %d, want 1", got)
+	}
+}
+
+func TestNaNFloatParametersRejected(t *testing.T) {
+	if _, err := resilience.NewHedgeBudget(math.NaN(), 1); !errors.Is(err, resilience.ErrInvalidBudget) {
+		t.Fatalf("NewHedgeBudget(NaN) = %v, want ErrInvalidBudget", err)
+	}
+
+	if _, err := resilience.NewLatencyDelay(math.NaN(), 10, 1, time.Second); !errors.Is(err, resilience.ErrInvalidBackoff) {
+		t.Fatalf("NewLatencyDelay(NaN) = %v, want ErrInvalidBackoff", err)
+	}
+
+	if _, err := resilience.ExponentialBackoff(time.Millisecond, time.Second, math.NaN()); !errors.Is(err, resilience.ErrInvalidBackoff) {
+		t.Fatalf("ExponentialBackoff(NaN) = %v, want ErrInvalidBackoff", err)
 	}
 }
