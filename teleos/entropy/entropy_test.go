@@ -140,3 +140,80 @@ func TestHarnessTotalEntropyReachesADiagnosis(t *testing.T) {
 		}
 	})
 }
+
+// TestHarnessDriftRecoveryPreservesConvergedStateAndAudits verifies Bug #3:
+// Recover drifts first.Final (not the initial un-converged world), reuses and
+// Resets the same engine instance, and runs Audit on recovery passes.
+func TestHarnessDriftRecoveryPreservesConvergedStateAndAudits(t *testing.T) {
+	var recoveryAudits int
+
+	v := entropy.Recover(t, entropy.Config[stackWorld, string]{
+		Stages: stackStages(),
+		Apply:  stackApply,
+		Audit: func(pass int, w stackWorld, want []string) error {
+			if pass > 3 {
+				recoveryAudits++
+			}
+
+			return nil
+		},
+	}, stackWorld{wantNet: true, wantProcUp: true}, func(w stackWorld) stackWorld {
+		if !w.hasNet || !w.procUp {
+			t.Fatalf("drift received un-converged world %+v, want first.Final", w)
+		}
+
+		w.procUp = false // only the process crashes; netns stays up
+
+		return w
+	})
+
+	if !v.Converged || !v.Final.hasNet || !v.Final.procUp {
+		t.Fatalf("recovery verdict = %+v", v)
+	}
+
+	if v.Effects != 1 {
+		t.Fatalf("recovery effects = %d, want 1 (only START_PROCESS, not full rebuild)", v.Effects)
+	}
+
+	if recoveryAudits == 0 {
+		t.Fatal("cfg.Audit was not called during recovery passes")
+	}
+}
+
+// TestHarnessEntropyRunsOncePerPassAndAdvancesHolds verifies Bug #4:
+// Entropy is invoked once per pass (not once per effect inside a batch) and
+// can advance an in-flight hold (Frontier with len(Want) == 0).
+func TestHarnessEntropyRunsOncePerPassAndAdvancesHolds(t *testing.T) {
+	var entropyCalls int
+
+	v := entropy.Run(t, entropy.Config[stackWorld, string]{
+		Stages: []teleos.Stage[stackWorld, string]{
+			{Name: "Both", Check: teleos.Concurrent(
+				stackStages()[0].Check,
+				stackStages()[1].Check,
+			)},
+			{Name: "WaitSettle", Check: teleos.Rule(
+				func(w stackWorld) bool { return entropyCalls >= 2 },
+				func(stackWorld) []string { return nil }, // hold until Entropy advances
+			)},
+		},
+		Apply: stackApply,
+		Entropy: func(_ int, w stackWorld, _ *rand.Rand) stackWorld {
+			entropyCalls++
+
+			return w
+		},
+		MaxPasses: 8,
+	}, stackWorld{wantNet: true, wantProcUp: true})
+
+	if !v.Converged {
+		t.Fatalf("verdict = %+v, want convergence after hold advanced", v)
+	}
+
+	// Pass 1 emits 2 concurrent effects (CREATE_NETNS, START_PROCESS) -> 1 Entropy call.
+	// Pass 2 hits the WaitSettle hold (0 effects) -> 2nd Entropy call.
+	// Pass 3 observes entropyCalls == 2 -> Converged.
+	if entropyCalls != 2 {
+		t.Fatalf("entropyCalls = %d, want 2 (once per Frontier pass, not per effect)", entropyCalls)
+	}
+}

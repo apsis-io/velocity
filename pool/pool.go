@@ -220,17 +220,16 @@ func (p *Pool[T]) With(ctx context.Context, fn func(context.Context, T) error) e
 		return &ownership.ProjectionError{Operation: ownership.OpProject}
 	}
 
-	_, err := Use(ctx, p, func(ctx context.Context, value T) (struct{}, error) {
+	_, err := p.Use(ctx, func(ctx context.Context, value T) (struct{}, error) {
 		return struct{}{}, fn(ctx, value)
 	})
 
 	return err
 }
 
-// Use is With for callbacks that return a value alongside their error. It is a
-// package-level function because Go methods cannot introduce a type parameter
-// of their own.
-func Use[T, R any](ctx context.Context, p *Pool[T], fn func(context.Context, T) (R, error)) (R, error) {
+// Use checks out a resource under ctx, invokes fn with it, and releases the
+// checkout before returning fn's result.
+func (p *Pool[T]) Use[R any](ctx context.Context, fn func(context.Context, T) (R, error)) (R, error) {
 	var zero R
 	if fn == nil {
 		return zero, &ownership.ProjectionError{Operation: ownership.OpProject}
@@ -255,6 +254,11 @@ func Use[T, R any](ctx context.Context, p *Pool[T], fn func(context.Context, T) 
 	relErr := checkout.Release()
 
 	return result, errors.Join(fnErr, relErr)
+}
+
+// Use is the package-level form of Pool.Use.
+func Use[T, R any](ctx context.Context, p *Pool[T], fn func(context.Context, T) (R, error)) (R, error) {
+	return p.Use(ctx, fn)
 }
 
 func (p *Pool[T]) get(ctx context.Context) (*Checkout[T], bool, error) {
@@ -303,6 +307,8 @@ func (p *Pool[T]) get(ctx context.Context) (*Checkout[T], bool, error) {
 	if p.closed {
 		// Closed while constructing; the pool will never hand this out.
 		p.mu.Unlock()
+		p.created.Add(1)
+		p.retired.Add(1)
 		p.permits.Release()
 
 		return nil, true, errors.Join(ErrClosed, p.destroy(value))

@@ -283,3 +283,50 @@ func TestChainReleasePreemptsAnUnrelatedAcquire(t *testing.T) {
 		t.Fatalf("after the release: (%v, %v), want the acquire next", done, want)
 	}
 }
+
+// TestChainDesiredRepairsInPlaceDriftRootToLeaf verifies Bug #6: when Desired
+// is set on links, in-place configuration drift on existing links that remain
+// desired is repaired root-to-leaf rather than triggering leaf-to-root release.
+func TestChainDesiredRepairsInPlaceDriftRootToLeaf(t *testing.T) {
+	type driftWorld struct {
+		hasNet, wantNet, netConfigured   bool
+		hasProc, wantProc, procConfigured bool
+	}
+
+	chain := Chain(
+		Resource[driftWorld, string]{
+			Exists:  func(w driftWorld) bool { return w.hasNet },
+			Desired: func(w driftWorld) bool { return w.wantNet },
+			Invariant: Rule(
+				func(w driftWorld) bool { return w.hasNet == w.wantNet && (!w.wantNet || w.netConfigured) },
+				func(w driftWorld) []string {
+					if !w.wantNet {
+						return []string{"DELETE_NET"}
+					}
+					return []string{"CONFIGURE_NET"}
+				},
+			),
+		},
+		Resource[driftWorld, string]{
+			Exists:  func(w driftWorld) bool { return w.hasProc },
+			Desired: func(w driftWorld) bool { return w.wantProc },
+			Invariant: Rule(
+				func(w driftWorld) bool { return w.hasProc == w.wantProc && (!w.wantProc || w.procConfigured) },
+				func(w driftWorld) []string {
+					if !w.wantProc {
+						return []string{"STOP_PROC"}
+					}
+					return []string{"RELOAD_PROC"}
+				},
+			),
+		},
+	)
+
+	// Both links exist and remain desired, and both have in-place drift:
+	// root (CONFIGURE_NET) must run before leaf (RELOAD_PROC).
+	w := driftWorld{hasNet: true, wantNet: true, hasProc: true, wantProc: true}
+	done, want := chain(w)
+	if done || !slices.Equal(want, []string{"CONFIGURE_NET"}) {
+		t.Fatalf("first pass = (%v, %v), want CONFIGURE_NET (root-to-leaf drift repair)", done, want)
+	}
+}

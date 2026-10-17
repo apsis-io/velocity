@@ -143,6 +143,9 @@ func (m *RWMutex) Lock(ctx context.Context) (*Permit, error) {
 
 			if counted {
 				m.waiting--
+				if m.waiting == 0 && !m.held {
+					m.wake()
+				}
 			}
 			m.mu.Unlock()
 

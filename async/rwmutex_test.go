@@ -332,3 +332,69 @@ func waitFor(t *testing.T, cond func() bool) {
 		time.Sleep(time.Millisecond)
 	}
 }
+
+// TestRWMutexCancelledWriterWakesQueuedReadersWhileReaderHoldsLock verifies
+// Bug #5: when Reader 1 holds RLock, Writer 1 blocks in Lock, and Reader 2
+// queues behind Writer 1 due to writer priority, cancelling Writer 1's context
+// while Reader 1 still holds RLock must immediately wake Reader 2.
+func TestRWMutexCancelledWriterWakesQueuedReadersWhileReaderHoldsLock(t *testing.T) {
+	mu := async.NewRWMutex()
+	ctx := context.Background()
+
+	r1, err := mu.RLock(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r1.Release()
+
+	wCtx, cancelW := context.WithCancel(ctx)
+	writerDone := make(chan error, 1)
+
+	go func() {
+		_, lerr := mu.Lock(wCtx)
+		writerDone <- lerr
+	}()
+
+	// Wait until Writer 1 is registered as waiting (TryRLock reports false).
+	deadline := time.After(5 * time.Second)
+	for {
+		if p, ok := mu.TryRLock(); !ok {
+			break
+		} else {
+			p.Release()
+		}
+		select {
+		case <-deadline:
+			t.Fatal("writer never blocked on Lock")
+		case <-time.After(time.Millisecond):
+		}
+	}
+
+	// Reader 2 now calls RLock and queues behind Writer 1.
+	r2Acquired := make(chan *async.Permit, 1)
+	go func() {
+		p, rerr := mu.RLock(ctx)
+		if rerr != nil {
+			t.Error(rerr)
+			return
+		}
+		r2Acquired <- p
+	}()
+
+	time.Sleep(15 * time.Millisecond)
+
+	// Cancel Writer 1 while Reader 1 still holds RLock.
+	cancelW()
+
+	if werr := <-writerDone; !errors.Is(werr, context.Canceled) {
+		t.Fatalf("writer Lock = %v, want context.Canceled", werr)
+	}
+
+	// Reader 2 must wake and acquire RLock without waiting for Reader 1 to release.
+	select {
+	case r2 := <-r2Acquired:
+		r2.Release()
+	case <-time.After(2 * time.Second):
+		t.Fatal("Reader 2 stayed blocked after the only waiting writer cancelled")
+	}
+}

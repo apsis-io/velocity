@@ -105,6 +105,12 @@ func Run[S, E any](t *testing.T, cfg Config[S, E], world S) Verdict[S] {
 		t.Fatalf("entropy: %v", err)
 	}
 
+	return runEngine(t, engine, cfg, world, 0)
+}
+
+func runEngine[S, E any](t *testing.T, engine *teleos.Engine[S, E], cfg Config[S, E], world S, passOffset int) Verdict[S] {
+	t.Helper()
+
 	rng := rand.New(rand.NewSource(cfg.Seed))
 
 	pass := 0
@@ -119,22 +125,22 @@ func Run[S, E any](t *testing.T, cfg Config[S, E], world S) Verdict[S] {
 		report := engine.Step(world)
 
 		if report.Status == teleos.Frontier {
-			if len(report.Want) == 0 {
-				t.Fatalf("entropy: pass %d on the frontier with no effects — a hold is an open gap, not an empty batch", pass)
+			if len(report.Want) == 0 && cfg.Entropy == nil && cfg.MaxPasses <= 0 {
+				t.Fatalf("entropy: pass %d on the frontier with no effects and no Entropy or MaxPasses to advance or bound the hold", passOffset+pass)
 			}
 
 			if cfg.Audit != nil {
-				if err := cfg.Audit(pass, world, report.Want); err != nil {
-					t.Fatalf("entropy: pass %d audit: %v", pass, err)
+				if err := cfg.Audit(passOffset+pass, world, report.Want); err != nil {
+					t.Fatalf("entropy: pass %d audit: %v", passOffset+pass, err)
 				}
 			}
 
 			for _, eff := range report.Want {
 				world = cfg.Apply(world, eff)
+			}
 
-				if cfg.Entropy != nil {
-					world = cfg.Entropy(pass, world, rng)
-				}
+			if cfg.Entropy != nil {
+				world = cfg.Entropy(passOffset+pass, world, rng)
 			}
 
 			continue
@@ -145,7 +151,7 @@ func Run[S, E any](t *testing.T, cfg Config[S, E], world S) Verdict[S] {
 		again := engine.Step(world)
 
 		if again.Status != report.Status || again.Passes != report.Passes {
-			t.Fatalf("entropy: terminal %v at pass %d became %v on re-Step", report.Status, pass, again.Status)
+			t.Fatalf("entropy: terminal %v at pass %d became %v on re-Step", report.Status, passOffset+pass, again.Status)
 		}
 
 		return Verdict[S]{
@@ -169,13 +175,6 @@ func Recover[S, E any](t *testing.T, cfg Config[S, E], world S, drift func(S) S)
 
 	t.Helper()
 
-	first := Run(t, cfg, world)
-	if !first.Converged {
-		t.Fatalf("entropy: the initial run never converged (%v)", first.Status)
-	}
-
-	cfg.Seed++ // the recovery pass gets its own entropy stream
-
 	engine, err := teleos.New(teleos.Config[S, E]{
 		Plan:       cfg.Stages,
 		Same:       cfg.Same,
@@ -183,12 +182,19 @@ func Recover[S, E any](t *testing.T, cfg Config[S, E], world S, drift func(S) S)
 		MaxEffects: cfg.MaxEffects,
 	})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("entropy: %v", err)
 	}
+
+	first := runEngine(t, engine, cfg, world, 0)
+	if !first.Converged {
+		t.Fatalf("entropy: the initial run never converged (%v)", first.Status)
+	}
+
+	cfg.Seed++ // the recovery pass gets its own entropy stream
 
 	rng := rand.New(rand.NewSource(cfg.Seed))
 
-	drifted := world
+	drifted := first.Final
 
 	if drift != nil {
 		drifted = drift(drifted)
@@ -200,37 +206,10 @@ func Recover[S, E any](t *testing.T, cfg Config[S, E], world S, drift func(S) S)
 
 	engine.Reset()
 
-	pass := 0
-
-	for {
-		pass++
-
-		if cfg.MaxPasses > 0 && pass > cfg.MaxPasses+1 {
-			t.Fatalf("entropy: the drifted world never re-converged in %d passes", cfg.MaxPasses)
-		}
-
-		report := engine.Step(drifted)
-
-		if report.Status == teleos.Converged {
-			return Verdict[S]{
-				Converged: true,
-				Status:    report.Status,
-				Passes:    pass,
-				Effects:   report.Effects,
-				Final:     drifted,
-			}
-		}
-
-		if report.Status != teleos.Frontier {
-			t.Fatalf("entropy: the drifted world reached %v, want gravity to pull it back", report.Status)
-		}
-
-		for _, eff := range report.Want {
-			drifted = cfg.Apply(drifted, eff)
-
-			if cfg.Entropy != nil {
-				drifted = cfg.Entropy(first.Passes+pass, drifted, rng)
-			}
-		}
+	recovered := runEngine(t, engine, cfg, drifted, first.Passes)
+	if !recovered.Converged {
+		t.Fatalf("entropy: the drifted world reached %v, want gravity to pull it back", recovered.Status)
 	}
+
+	return recovered
 }

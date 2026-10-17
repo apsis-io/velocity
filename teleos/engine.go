@@ -252,11 +252,13 @@ func (e *Engine[S, E]) Step(state S) Report[S, E] {
 	e.sigBack = e.sigPrev
 	e.sigPrev = sig
 
-	// A stall is the opposite failure: the same frontier, the same effects,
+	// A stall is the opposite failure: the same frontier, effects emitted,
 	// and an observation that does not move. Something the plan cannot see is
-	// holding reality still.
+	// holding reality still. A hold (len(want) == 0) emits no effects by
+	// design while waiting for an asynchronous transition, so an unchanged
+	// observation across wakes during a hold is not an effect stall.
 	if e.cfg.Same != nil {
-		if frontier == e.lastFront && e.cfg.Same(e.prevState, state) {
+		if len(want) > 0 && frontier == e.lastFront && e.cfg.Same(e.prevState, state) {
 			e.stalls++
 		} else {
 			e.stalls = 0

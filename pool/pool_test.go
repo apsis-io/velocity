@@ -667,11 +667,18 @@ func TestPoolWithAndUse(t *testing.T) {
 
 	ctx := context.Background()
 
-	id, err := pool.Use(ctx, p, func(_ context.Context, v *conn) (int, error) {
+	id, err := p.Use(ctx, func(_ context.Context, v *conn) (int, error) {
 		return v.id, nil
 	})
 	if err != nil || id != 1 {
-		t.Fatalf("Use = (%d, %v), want (1, nil)", id, err)
+		t.Fatalf("p.Use = (%d, %v), want (1, nil)", id, err)
+	}
+
+	id, err = pool.Use(ctx, p, func(_ context.Context, v *conn) (int, error) {
+		return v.id, nil
+	})
+	if err != nil || id != 1 {
+		t.Fatalf("pool.Use = (%d, %v), want (1, nil)", id, err)
 	}
 
 	// Subsequent With reuses conn 1 and releases it when fn returns.
@@ -685,7 +692,7 @@ func TestPoolWithAndUse(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if stats := p.Stats(); stats.PassesServed != 2 || stats.Created != 1 || stats.Idle != 1 || stats.InUse != 0 {
+	if stats := p.Stats(); stats.PassesServed != 3 || stats.Created != 1 || stats.Idle != 1 || stats.InUse != 0 {
 		t.Fatalf("stats after Use + With = %+v", stats)
 	}
 
@@ -701,5 +708,44 @@ func TestPoolWithAndUse(t *testing.T) {
 	var nilPool *pool.Pool[*conn]
 	if _, err := pool.Use(ctx, nilPool, func(context.Context, *conn) (int, error) { return 0, nil }); !errors.Is(err, ownership.ErrReleased) {
 		t.Fatalf("Use(nilPool) = %v, want ErrReleased", err)
+	}
+}
+
+func TestCloseDuringNewCountsCreatedAndRetired(t *testing.T) {
+	inNew := make(chan struct{})
+	releaseNew := make(chan struct{})
+
+	p, err := pool.New(pool.Config[string]{
+		New: func(context.Context) (string, error) {
+			close(inNew)
+			<-releaseNew
+			return "r", nil
+		},
+		Max:   1,
+		Close: func(string) error { return nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	getErr := make(chan error, 1)
+	go func() {
+		_, gerr := p.Get(context.Background())
+		getErr <- gerr
+	}()
+
+	<-inNew
+	if err := p.Close(); err != nil {
+		t.Fatal(err)
+	}
+	close(releaseNew)
+
+	if err := <-getErr; !errors.Is(err, pool.ErrClosed) {
+		t.Fatalf("Get = %v, want ErrClosed", err)
+	}
+
+	stats := p.Stats()
+	if stats.Created != 1 || stats.Retired != 1 {
+		t.Fatalf("stats = %+v, want Created=1 and Retired=1 after Close-during-New", stats)
 	}
 }

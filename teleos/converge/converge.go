@@ -191,7 +191,13 @@ func (c *Converger[S, E]) pass(ctx context.Context) error {
 			c.onReport(ctx, report)
 		}
 
-		if report.Status != teleos.Frontier {
+		if report.Status == teleos.Converged {
+			c.engine.Reset()
+
+			return nil
+		}
+
+		if report.Status != teleos.Frontier || len(report.Want) == 0 {
 			return nil
 		}
 

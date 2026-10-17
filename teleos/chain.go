@@ -9,11 +9,21 @@ import "slices"
 // mount under a process. Exists reports whether the resource is physically
 // present on the host right now — the one fact the atom deliberately does
 // not carry, because existence is the author's structural knowledge of the
-// chain, not something every invariant can derive from its own gap. Its
+// chain, not something every invariant can derive from its own gap.
+//
+// Desired optionally reports whether the resource is intended to exist in S.
+// When set, the leaf-to-root release sweep only fires on a link that
+// physically exists (Exists(s)) AND is no longer desired (!Desired(s)) — so
+// in-place configuration drift on a still-desired resource (Exists(s) &&
+// Desired(s)) is repaired root-to-leaf in the acquire sweep rather than
+// leaf-to-root. When Desired is nil, any open invariant on an existing link
+// is treated conservatively as a release.
+//
 // Invariant is the resource's equilibrium, closing its gap in whichever
 // direction the observation demands.
 type Resource[S, E any] struct {
 	Exists    func(S) bool
+	Desired   func(S) bool
 	Invariant Invariant[S, E]
 }
 
@@ -35,9 +45,12 @@ type Resource[S, E any] struct {
 // that breaks the order emits its violation against a live dependency, and
 // the behavioral test names what happened.
 //
-// A link that exists but is not at rest is treated as a release too: an
-// in-place change to a foundation preempts building downstream on it, which
-// is the conservative reading of "the foundation is moving".
+// When Desired is nil on a link, a link that exists but is not at rest is
+// treated as a release too: an in-place change to a foundation preempts
+// building downstream on it, which is the conservative reading of "the
+// foundation is moving". When Desired is set, a link that is both existing
+// and desired is repaired root-to-leaf during the acquire sweep instead of
+// leaf-to-root during the release sweep.
 //
 // The sweeps are independent per link, so a chain can acquire some links
 // while releasing others — a rolling replacement is one chain doing both,
@@ -54,14 +67,19 @@ func Chain[S, E any](resources ...Resource[S, E]) Invariant[S, E] {
 		// Release first, leaf to root: what stands above must be gone
 		// before what stands below may go.
 		for _, r := range slices.Backward(resources) {
+			if r.Desired != nil && r.Desired(s) {
+				continue
+			}
+
 			done, want := r.Invariant(s)
 			if !done && r.Exists(s) {
 				return false, want
 			}
 		}
 
-		// Then acquire, root to leaf: what stands below must hold before
-		// what stands above may come into being.
+		// Then acquire (and repair in-place drift), root to leaf: what
+		// stands below must hold before what stands above may come into
+		// being or be reconfigured on top of it.
 		for i := range resources {
 			done, want := resources[i].Invariant(s)
 			if !done {

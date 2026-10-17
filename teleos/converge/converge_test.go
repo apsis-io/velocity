@@ -1127,3 +1127,163 @@ func TestConcurrentWakesAreRaceFree(t *testing.T) {
 		t.Fatal("the wake storm never converged")
 	}
 }
+
+// TestConvergerReconcilesDriftOnSubsequentWakeAfterConvergence verifies Bug #1:
+// once a Converger reaches teleos.Converged on its first wake, a subsequent
+// Wake after reality drifts must re-evaluate the plan and repair the drift
+// rather than returning a memoized Converged report forever.
+func TestConvergerReconcilesDriftOnSubsequentWakeAfterConvergence(t *testing.T) {
+	h := &podHarness{world: pod{wantNet: true, wantUnit: "running"}}
+
+	engine, err := teleos.New(teleos.Config[pod, string]{Plan: anonStages(podInvariants())})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	converged := make(chan teleos.Report[pod, string], 4)
+
+	c, err := converge.New(engine, h.observe, h.apply, converge.Config[pod, string]{
+		OnReport: func(_ context.Context, r teleos.Report[pod, string]) {
+			if r.Status == teleos.Converged {
+				converged <- r
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background()) //nolint:modernize
+	defer cancel()
+
+	go c.Run(ctx)
+
+	c.Wake()
+
+	select {
+	case <-converged:
+	case <-time.After(5 * time.Second):
+		t.Fatal("initial wake never converged")
+	}
+
+	// Simulate external drift after convergence: the unit crashes.
+	h.mu.Lock()
+	h.world.unitState = "stopped"
+	h.mu.Unlock()
+
+	c.Wake()
+
+	select {
+	case <-converged:
+	case <-time.After(5 * time.Second):
+		t.Fatal("second wake never converged")
+	}
+
+	world, applied := h.snapshot()
+	if world.unitState != "running" {
+		t.Fatalf("world.unitState = %q after drift wake, want running", world.unitState)
+	}
+
+	if want := []string{"NETNS_CREATE", "UNIT_START", "UNIT_START"}; !slices.Equal(applied, want) {
+		t.Fatalf("applied = %v, want %v", applied, want)
+	}
+}
+
+// TestConvergerYieldsOnHoldUntilNextWake verifies Bug #2: an in-transit hold
+// (Frontier with len(Want) == 0) yields the pass loop until the next Wake
+// rather than tight-spinning into Stalled or Exhausted on a single wake.
+func TestConvergerYieldsOnHoldUntilNextWake(t *testing.T) {
+	h := &podHarness{world: pod{wantUnit: "running", unitState: "activating"}}
+
+	engine, err := teleos.New(teleos.Config[pod, string]{
+		Plan: []teleos.Stage[pod, string]{
+			{Name: "UnitReady", Check: teleos.Rule(
+				func(w pod) bool { return w.unitState == "running" },
+				func(w pod) []string {
+					if w.unitState == "activating" {
+						return nil // hold: waiting for async activation
+					}
+
+					return []string{"UNIT_START"}
+				},
+			)},
+		},
+		Same:      func(a, b pod) bool { return a == b },
+		MaxStalls: 2,
+		MaxPasses: 8,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	held := make(chan struct{}, 4)
+	converged := make(chan struct{}, 1)
+	terminal := make(chan teleos.Status, 1)
+
+	c, err := converge.New(engine, h.observe, h.apply, converge.Config[pod, string]{
+		OnReport: func(_ context.Context, r teleos.Report[pod, string]) {
+			switch r.Status {
+			case teleos.Frontier:
+				if len(r.Want) == 0 {
+					select {
+					case held <- struct{}{}:
+					default:
+					}
+				}
+			case teleos.Converged:
+				select {
+				case converged <- struct{}{}:
+				default:
+				}
+			default:
+				select {
+				case terminal <- r.Status:
+				default:
+				}
+			}
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background()) //nolint:modernize
+	defer cancel()
+
+	go c.Run(ctx)
+
+	// Wake 1: observes "activating", emits a hold (Frontier, Want=nil), and parks.
+	c.Wake()
+
+	select {
+	case <-held:
+	case s := <-terminal:
+		t.Fatalf("hold tripped terminal %v on first wake", s)
+	case <-time.After(5 * time.Second):
+		t.Fatal("first wake never reported the hold")
+	}
+
+	// Give the loop time to prove it is parked, not tight-spinning.
+	time.Sleep(30 * time.Millisecond)
+
+	select {
+	case s := <-terminal:
+		t.Fatalf("hold tight-spun into terminal %v while waiting for async completion", s)
+	default:
+	}
+
+	// External async activation completes and wakes the converger.
+	h.mu.Lock()
+	h.world.unitState = "running"
+	h.mu.Unlock()
+
+	c.Wake()
+
+	select {
+	case <-converged:
+	case s := <-terminal:
+		t.Fatalf("reached terminal %v instead of converging after hold completed", s)
+	case <-time.After(5 * time.Second):
+		t.Fatal("never converged after hold completed")
+	}
+}
