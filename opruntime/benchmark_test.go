@@ -9,41 +9,57 @@ import (
 
 func BenchmarkTable(b *testing.B) {
 	b.Run("direct", func(b *testing.B) {
-		handler := func(opcodes.Instruction) error { return nil }
+		handler := func(_ struct{}, _ opcodes.Instruction, in *demoIn, out *demoOut) error {
+			out.Y = in.X
+			return nil
+		}
 		inst := opcodes.Instruction{Op: opDemo}
+		in := demoIn{X: 1}
+		out := demoOut{}
 
 		b.ReportAllocs()
 
 		for b.Loop() {
-			_ = handler(inst)
+			_ = handler(struct{}{}, inst, &in, &out)
 		}
 	})
 
 	b.Run("dispatch", func(b *testing.B) {
-		table := opruntime.NewTable()
-		_ = table.Register(opDemo, func(opcodes.Instruction) error { return nil })
+		table := opruntime.NewTable[struct{}, demoIn, demoOut]()
+		_ = table.Register(opDemo, func(_ struct{}, _ opcodes.Instruction, in *demoIn, out *demoOut) error {
+			out.Y = in.X
+			return nil
+		})
 		inst := opcodes.Instruction{Op: opDemo}
+		in := demoIn{X: 1}
+		out := demoOut{}
 
 		b.ReportAllocs()
 
 		for b.Loop() {
-			_ = table.Dispatch(inst)
+			_ = table.Dispatch(struct{}{}, inst, &in, &out)
 		}
 	})
 
 	b.Run("run", func(b *testing.B) {
-		table := opruntime.NewTable()
-		_ = table.Register(opDemo, func(opcodes.Instruction) error { return nil })
+		table := opruntime.NewTable[struct{}, demoIn, demoOut]()
+		_ = table.Register(opDemo, func(_ struct{}, _ opcodes.Instruction, in *demoIn, out *demoOut) error {
+			out.Y += in.X
+			return nil
+		})
 
 		program := make([]opcodes.Instruction, 16)
 		for i := range program {
 			program[i] = opcodes.Instruction{Op: opDemo}
 		}
 
+		in := demoIn{X: 1}
+		out := demoOut{}
+
 		b.ReportAllocs()
 
 		for b.Loop() {
-			_ = opruntime.Run(program, table)
+			_ = opruntime.Run(struct{}{}, program, table, &in, &out)
 		}
 	})
 }
@@ -91,20 +107,25 @@ func BenchmarkSwitchVsTable(b *testing.B) {
 	})
 
 	b.Run("table", func(b *testing.B) {
-		table := opruntime.NewTable()
+		table := opruntime.NewTable[struct{}, demoIn, demoOut]()
 		for _, op := range switchOps {
-			_ = table.Register(op, func(opcodes.Instruction) error {
-				dispatchSink += int(op)
+			_ = table.Register(op, func(_ struct{}, _ opcodes.Instruction, _ *demoIn, out *demoOut) error {
+				out.Y += int(op)
 				return nil
 			})
 		}
+
+		in := demoIn{}
+		out := demoOut{}
 
 		b.ReportAllocs()
 
 		i := 0
 		for b.Loop() {
-			_ = table.Dispatch(opcodes.Instruction{Op: switchOps[i%len(switchOps)]})
+			_ = table.Dispatch(struct{}{}, opcodes.Instruction{Op: switchOps[i%len(switchOps)]}, &in, &out)
 			i++
 		}
+
+		dispatchSink = out.Y
 	})
 }

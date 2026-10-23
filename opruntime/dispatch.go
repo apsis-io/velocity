@@ -2,16 +2,16 @@ package opruntime
 
 import "github.com/apsis-io/velocity/opcodes"
 
-// Dispatch looks up the handler registered for inst.Op and calls it. It
-// returns a DispatchError if no handler is registered or if the handler
-// itself returns an error.
-func (t *Table) Dispatch(inst opcodes.Instruction) error {
+// Dispatch looks up the handler registered for inst.Op and calls it with
+// (ctx, inst, in, out). It returns a DispatchError if no handler is
+// registered or if the handler itself returns an error.
+func (t *Table[Ctx, In, Out]) Dispatch(ctx Ctx, inst opcodes.Instruction, in *In, out *Out) error {
 	h, ok := t.Handler(inst.Op)
 	if !ok {
 		return newDispatchError(inst.Op, ErrNoHandler)
 	}
 
-	if err := h(inst); err != nil {
+	if err := h(ctx, inst, in, out); err != nil {
 		return newDispatchError(inst.Op, err)
 	}
 

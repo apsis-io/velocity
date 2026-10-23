@@ -10,9 +10,17 @@ import (
 
 const opDemo opcodes.Op = 1
 
+type demoIn struct {
+	X int
+}
+
+type demoOut struct {
+	Y int
+}
+
 func TestTableRegister(t *testing.T) {
 	t.Run("nil handler", func(t *testing.T) {
-		table := opruntime.NewTable()
+		table := opruntime.NewTable[struct{}, demoIn, demoOut]()
 
 		err := table.Register(opDemo, nil)
 		if !errors.Is(err, opruntime.ErrNilHandler) {
@@ -21,9 +29,9 @@ func TestTableRegister(t *testing.T) {
 	})
 
 	t.Run("duplicate handler", func(t *testing.T) {
-		table := opruntime.NewTable()
+		table := opruntime.NewTable[struct{}, demoIn, demoOut]()
 
-		noop := func(opcodes.Instruction) error { return nil }
+		noop := func(struct{}, opcodes.Instruction, *demoIn, *demoOut) error { return nil }
 		if err := table.Register(opDemo, noop); err != nil {
 			t.Fatalf("first Register: %v", err)
 		}
@@ -35,15 +43,13 @@ func TestTableRegister(t *testing.T) {
 	})
 
 	t.Run("lookup", func(t *testing.T) {
-		table := opruntime.NewTable()
+		table := opruntime.NewTable[struct{}, demoIn, demoOut]()
 		if _, ok := table.Handler(opDemo); ok {
 			t.Fatalf("Handler found before Register")
 		}
 
-		called := false
-
-		if err := table.Register(opDemo, func(opcodes.Instruction) error {
-			called = true
+		if err := table.Register(opDemo, func(_ struct{}, _ opcodes.Instruction, in *demoIn, out *demoOut) error {
+			out.Y = in.X * 2
 			return nil
 		}); err != nil {
 			t.Fatalf("Register: %v", err)
@@ -54,12 +60,33 @@ func TestTableRegister(t *testing.T) {
 			t.Fatalf("Handler not found after Register")
 		}
 
-		if err := h(opcodes.Instruction{Op: opDemo}); err != nil {
+		in := demoIn{X: 21}
+		out := demoOut{}
+
+		if err := h(struct{}{}, opcodes.Instruction{Op: opDemo}, &in, &out); err != nil {
 			t.Fatalf("handler returned error: %v", err)
 		}
 
-		if !called {
-			t.Fatalf("handler was not invoked")
+		if out.Y != 42 {
+			t.Fatalf("out.Y = %d, want 42", out.Y)
+		}
+	})
+
+	t.Run("atom bind and call", func(t *testing.T) {
+		raw := opruntime.BindAtom(func(_ struct{}, in *demoIn, out *demoOut) error {
+			out.Y = in.X + 10
+			return nil
+		})
+
+		in := demoIn{X: 32}
+		out := demoOut{}
+
+		if err := opruntime.CallAtom(raw, struct{}{}, &in, &out); err != nil {
+			t.Fatalf("CallAtom: %v", err)
+		}
+
+		if out.Y != 42 {
+			t.Fatalf("out.Y = %d, want 42", out.Y)
 		}
 	})
 }

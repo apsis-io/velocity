@@ -10,12 +10,23 @@ import (
 func ExampleTable_Dispatch() {
 	const opPrint opcodes.Op = 1
 
-	table := opruntime.NewTable()
-	_ = table.Register(opPrint, func(inst opcodes.Instruction) error {
-		fmt.Println("printed", inst.A)
+	type inFrame struct {
+		Base uint32
+	}
+
+	type outFrame struct {
+		Sum uint32
+	}
+
+	table := opruntime.NewTable[struct{}, inFrame, outFrame]()
+	_ = table.Register(opPrint, func(_ struct{}, inst opcodes.Instruction, in *inFrame, out *outFrame) error {
+		out.Sum = in.Base + inst.A
+		fmt.Println("printed", out.Sum)
 		return nil
 	})
 
-	_ = table.Dispatch(opcodes.Instruction{Op: opPrint, A: 42})
+	in := inFrame{Base: 40}
+	out := outFrame{}
+	_ = table.Dispatch(struct{}{}, opcodes.Instruction{Op: opPrint, A: 2}, &in, &out)
 	// Output: printed 42
 }
