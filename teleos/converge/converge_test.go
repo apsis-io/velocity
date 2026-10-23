@@ -183,7 +183,7 @@ func TestConvergerAppliesOpcodesThroughATable(t *testing.T) {
 
 	h := &podHarness{world: pod{wantNet: true, wantUnit: "running"}}
 
-	table := opruntime.NewTable()
+	table := opruntime.NewTable[context.Context, podHarness, struct{}]()
 
 	for _, reg := range []struct {
 		op   opcodes.Op
@@ -195,8 +195,8 @@ func TestConvergerAppliesOpcodesThroughATable(t *testing.T) {
 	} {
 		eff := reg.eff
 
-		if err := table.Register(reg.op, func(opcodes.Instruction) error {
-			return h.apply(context.Background(), eff)
+		if err := table.Register(reg.op, func(ctx context.Context, _ opcodes.Instruction, in *podHarness, _ *struct{}) error {
+			return in.apply(ctx, eff)
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -247,7 +247,7 @@ func TestConvergerAppliesOpcodesThroughATable(t *testing.T) {
 
 	converged := make(chan struct{}, 1)
 
-	c, err := converge.New(engine, h.observe, converge.Dispatch(table), converge.Config[pod, opcodes.Instruction]{
+	c, err := converge.New(engine, h.observe, converge.Dispatch(table, h, &struct{}{}), converge.Config[pod, opcodes.Instruction]{
 		Runner:   runner,
 		Coalesce: group,
 		Key:      converge.InstructionKey,

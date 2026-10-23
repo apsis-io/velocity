@@ -33,17 +33,11 @@ import (
 )
 
 // Dispatch is the apply function for a plan whose effects are opcodes: it
-// hands each Instruction to the table registered for its domain. This is the
-// velocity-native effect shape — the invariant emits pure, unexecuted data
-// (Op plus its operand slots), the table is the only thing that runs them,
-// and the handlers themselves are where op composition lives.
-//
-// The context is accepted and ignored: handlers are synchronous today, and an
-// effect that needs cancellation encodes it in the opcode's operand slots or
-// carries it in the handler's closure.
-func Dispatch(table *opruntime.Table) func(context.Context, opcodes.Instruction) error {
-	return func(_ context.Context, inst opcodes.Instruction) error {
-		return table.Dispatch(inst)
+// hands each Instruction to the table registered for its domain along with
+// the active context and input/output struct frames.
+func Dispatch[In, Out any](table *opruntime.Table[context.Context, In, Out], in *In, out *Out) func(context.Context, opcodes.Instruction) error {
+	return func(ctx context.Context, inst opcodes.Instruction) error {
+		return table.Dispatch(ctx, inst, in, out)
 	}
 }
 
