@@ -137,6 +137,46 @@ Model, invariants, and the "when not to use this" list:
 [`docs/ownership.md`](docs/ownership.md). Full API:
 [`docs/ownership-cheatsheet.md`](docs/ownership-cheatsheet.md).
 
+### Frozen in practice: an immutable array that refused to lie
+
+[`ocaml_of_go`](https://github.com/apsis-io/ocaml_of_go) — a pure-Go OxCaml
+compiler and register VM — backs its OxCaml `'a iarray` (immutable array) with
+a `Frozen[[]Value]`: the slice is published read-only *by type*, so no
+`Mutate` even exists to call by mistake.
+
+That design is what turned a latent bug into a loud one. Five of the VM's
+`Array.*` builtins reached past the wrapper with a bare type assertion:
+
+```go
+in := args[0].Obj.([]Value)            // panics: Obj is *Frozen[[]Value]
+```
+
+For a boxed array that assertion succeeds; for an iarray it cannot, so the
+program died with `interface conversion` at the exact builtin that would
+otherwise have read — or, for `Array.set`, silently mutated — a
+published-immutable slice. The type error everyone sees at the boundary is
+the point: bypassing `Frozen` is not a convention violation you discover as a
+data race in production, it is a crash at the instruction that lies. The fix
+collapsed the hand-rolled Frozen dance in every builtin into one generic
+viewer, and mutation of an iarray became a clean error instead of a success:
+
+```go
+// one helper per package, not seven copies of the borrow/unborrow ritual
+func viewArrayElems[R any](v Value, fn func([]Value) (R, error)) (R, error) {
+    if v.Kind == KindIArray {
+        return v.Obj.(*Frozen[[]Value]).View(fn)
+    }
+    return fn(v.Obj.([]Value))
+}
+
+n, err := viewArrayElems(args[0], func(s []Value) (int64, error) { return int64(len(s)), nil })
+```
+
+`Array.set` on an iarray now reports `Invalid_argument("Array.set: iarray is
+immutable")`. Without the wrapper the same code would have compiled, run, and
+mutated — which is the difference between read-only *by type* and read-only
+*by convention*.
+
 ### The leak check is static
 
 The [`analysis`](analysis) module (separate `go.mod`, so the library does not
