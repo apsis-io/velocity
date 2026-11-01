@@ -169,7 +169,7 @@ scoped read), the read stream's serialized constant only dropped ~300 to
 the counters' shared cache lines, not the lock, bound aggregate read
 throughput. The full record is in docs/decisions.md; the instruments are how
 the next candidate gets judged. On the shipped cell — whose mutex has been
-`nsync.TryMutex` since the follow-up the RWMutex record points to — the
+`nexty.TryMutex` since the follow-up the RWMutex record points to — the
 table reads: pure reads ~42 ns/op solo and ~45 ns/op at four workers (the
 barging lock removes the parking cliff a `sync.Mutex` pays under
 contention), mixes 127-199 ns/op with 1-2 conflict allocations per

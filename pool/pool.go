@@ -6,7 +6,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/apsis-io/nsync"
+	"github.com/apsis-io/nexty"
 	"github.com/apsis-io/velocity/ownership"
 )
 
@@ -36,9 +36,9 @@ type Pool[T any] struct {
 	// permits is one slot per resource that may exist. Acquiring it is the
 	// capacity wait; releasing it is the last thing a put does, so a waiter
 	// admitted by a release finds the idle set already updated.
-	permits *nsync.Semaphore
+	permits *nexty.Semaphore
 
-	mu     nsync.TryMutex
+	mu     nexty.TryMutex
 	idle   []T
 	total  int // idle plus checked out
 	closed bool
@@ -62,7 +62,7 @@ func New[T any](cfg Config[T]) (*Pool[T], error) {
 		return nil, &ConfigError{Option: "Max", Reason: ErrInvalidMax}
 	}
 
-	return &Pool[T]{cfg: cfg, permits: nsync.NewSemaphore(cfg.Max), mu: *nsync.NewTryMutex()}, nil
+	return &Pool[T]{cfg: cfg, permits: nexty.NewSemaphore(cfg.Max), mu: *nexty.NewTryMutex()}, nil
 }
 
 // Must is New for a Config that cannot fail, in the manner of

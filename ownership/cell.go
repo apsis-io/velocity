@@ -3,7 +3,7 @@ package ownership
 import (
 	"runtime"
 
-	"github.com/apsis-io/nsync"
+	"github.com/apsis-io/nexty"
 	"github.com/apsis-io/velocity/traits"
 )
 
@@ -40,7 +40,7 @@ type State struct {
 }
 
 type cell[T any] struct {
-	mu nsync.TryMutex
+	mu nexty.TryMutex
 
 	value T
 	mode  mode
@@ -106,7 +106,7 @@ type handle struct {
 // public handle with its shared state in one allocation.
 func newCell[T any](value T, m mode, shares int, drop traits.Drop[T], clone traits.Clone[T]) *cell[T] {
 	return &cell[T]{
-		mu:     *nsync.NewTryMutex(),
+		mu:     *nexty.NewTryMutex(),
 		value:  value,
 		mode:   m,
 		shares: shares,

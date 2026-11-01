@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/apsis-io/nsync"
+	"github.com/apsis-io/nexty"
 )
 
 // Semaphore is a counting semaphore whose Acquire waits under the caller's
@@ -18,7 +18,7 @@ import (
 //	}
 //	defer permit.Release()
 type Semaphore struct {
-	permits *nsync.Semaphore
+	permits *nexty.Semaphore
 }
 
 // NewSemaphore returns a semaphore admitting n holders at once.
@@ -27,7 +27,7 @@ func NewSemaphore(n int) (*Semaphore, error) {
 		return nil, &TaskError{Index: -1, Cause: ErrInvalidLimit}
 	}
 
-	return &Semaphore{permits: nsync.NewSemaphore(n)}, nil
+	return &Semaphore{permits: nexty.NewSemaphore(n)}, nil
 }
 
 // Acquire takes a permit, waiting under ctx for one to be released. A
@@ -73,7 +73,7 @@ func (s *Semaphore) TryAcquire() (*Permit, bool) {
 // write lock of an RWMutex. Release hands it back exactly once; later calls do
 // nothing.
 type Permit struct {
-	permits *nsync.Semaphore
+	permits *nexty.Semaphore
 	once    sync.Once
 	// rw is set only by RWMutex, whose read and write locks are not tokens in a
 	// channel. It is nil on the Semaphore path, which is the hot one, and
@@ -139,7 +139,7 @@ type Mutex struct {
 
 // NewMutex returns an unlocked Mutex.
 func NewMutex() *Mutex {
-	return &Mutex{sem: Semaphore{permits: nsync.NewSemaphore(1)}}
+	return &Mutex{sem: Semaphore{permits: nexty.NewSemaphore(1)}}
 }
 
 // Lock takes the lock, waiting under ctx.

@@ -20,7 +20,7 @@ import (
 // outcome is deterministic and the Try assertions are exact rather than
 // racy.
 //
-// These are the internals the nsync swaps moved; the hand-written tests
+// These are the internals the nexty swaps moved; the hand-written tests
 // stayed green through that change, and this is the instrument that would
 // not have.
 //

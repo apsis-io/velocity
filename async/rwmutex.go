@@ -3,7 +3,7 @@ package async
 import (
 	"context"
 
-	"github.com/apsis-io/nsync"
+	"github.com/apsis-io/nexty"
 )
 
 // RWMutex is a read/write lock whose RLock and Lock both wait under the
@@ -46,7 +46,7 @@ import (
 // lock for as long as the write lock waits for it. The context bounds the wait;
 // it does not break the cycle.
 type RWMutex struct {
-	mu      nsync.Mutex
+	mu      nexty.Mutex
 	readers int  // read permits currently held
 	waiting int  // writers blocked in Lock
 	held    bool // a writer holds the lock
