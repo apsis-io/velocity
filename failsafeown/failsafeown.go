@@ -38,7 +38,7 @@ package failsafeown
 
 import (
 	"context"
-	"sync"
+	"github.com/apsis-io/nexty"
 
 	"github.com/apsis-io/velocity/ownership"
 	failsafe "github.com/failsafe-go/failsafe-go"
@@ -153,7 +153,7 @@ func executionContext[T any](ctx context.Context, e failsafe.Execution[*ownershi
 type tracker[T any] struct {
 	hooks Hooks[T]
 
-	mu      sync.Mutex
+	mu      nexty.Mutex
 	pending []*ownership.Owner[T]
 	winner  *ownership.Owner[T]
 	settled bool

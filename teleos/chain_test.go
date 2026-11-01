@@ -289,7 +289,7 @@ func TestChainReleasePreemptsAnUnrelatedAcquire(t *testing.T) {
 // desired is repaired root-to-leaf rather than triggering leaf-to-root release.
 func TestChainDesiredRepairsInPlaceDriftRootToLeaf(t *testing.T) {
 	type driftWorld struct {
-		hasNet, wantNet, netConfigured   bool
+		hasNet, wantNet, netConfigured    bool
 		hasProc, wantProc, procConfigured bool
 	}
 

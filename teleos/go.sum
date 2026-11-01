@@ -1,6 +1,6 @@
-github.com/apsis-io/nexty v1.2.3 h1:YAtHxfKB0OG5/s6+LEfX8LAkschKrQCgyifZ6Fky2SM=
-github.com/apsis-io/nexty v1.2.3/go.mod h1:y6HqzvXfgYW6P7M7DmDIs5YxMpI7+325o9u3cj0eh80=
-github.com/apsis-io/velocity v0.15.3 h1:1+DyP7/FcTzltiS3Bx61aH0Wd71AxR6w+RRyWGm0UOY=
-github.com/apsis-io/velocity v0.15.3/go.mod h1:UXwbAeC7pNPdI5vjvRMy4VxD/Hua3F0CR3mYpMa+f+Y=
+github.com/apsis-io/nexty v1.3.0 h1:BApl/I3yrpVT2R05EJsm0LjclSZ8Vs5slsqCZ1JIIcM=
+github.com/apsis-io/nexty v1.3.0/go.mod h1:y6HqzvXfgYW6P7M7DmDIs5YxMpI7+325o9u3cj0eh80=
+github.com/apsis-io/velocity v0.16.0 h1:/+1urq+yJF1OJ1NNMmUUqL44SZRxGDJ/fahDv3IaFvI=
+github.com/apsis-io/velocity v0.16.0/go.mod h1:LuCOlBhNiWEAjQj8iyhJwxqlF5xo/9moDb4lLCktgyI=
 github.com/puzpuzpuz/xsync/v4 v4.5.0 h1:vOSWu6b57/emh+L/Cw0BeQfvxa/cogFywXHeGUxQxAg=
 github.com/puzpuzpuz/xsync/v4 v4.5.0/go.mod h1:VJDmTCJMBt8igNxnkQd86r+8KUeN1quSfNKu5bLYFQo=
