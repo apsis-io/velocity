@@ -2,16 +2,16 @@ package async
 
 import (
 	"context"
+	"github.com/apsis-io/nexty"
 	"runtime/debug"
-	"sync"
 
 	"github.com/apsis-io/velocity/traits"
 )
 
 // Group owns callback goroutines and propagates the first panic from Wait.
 type Group struct {
-	mu sync.Mutex
-	wg sync.WaitGroup
+	mu nexty.Mutex
+	wg nexty.WaitGroup
 
 	active  int
 	closing bool

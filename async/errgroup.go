@@ -3,9 +3,9 @@ package async
 import (
 	"context"
 	"errors"
+	"github.com/apsis-io/nexty"
 	"runtime/debug"
 	"slices"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -48,10 +48,10 @@ type ErrGroup struct {
 	cancel  context.CancelCauseFunc
 	permits chan struct{} // nil when unlimited
 
-	wg      sync.WaitGroup
+	wg      nexty.WaitGroup
 	started atomic.Int64
 
-	mu       sync.Mutex
+	mu       nexty.Mutex
 	errs     []indexedErr
 	done     chan struct{} // closed once every started function has returned
 	watching bool          // a goroutine is waiting to close done

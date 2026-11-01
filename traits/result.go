@@ -37,6 +37,12 @@ type Result[R any] struct {
 // Ok reports whether the work succeeded.
 func (r Result[R]) Ok() bool { return r.Err == nil }
 
+type futureSub[R any] struct {
+	fn     func(Result[R])
+	next   *futureSub[R]
+	closed bool
+}
+
 // Future is a handle on work that may not have finished. It is either
 // unresolved, or it carries a Result.
 //
@@ -47,7 +53,14 @@ func (r Result[R]) Ok() bool { return r.Err == nil }
 // that gives up waiting has learned something about its own patience, not about
 // the work, which is why the two facts never collapse into one.
 type Future[R any] struct {
-	done chan struct{}
+	// done is allocated lazily when Done or Await blocks on an unresolved
+	// Future. A Future resolved before anyone waits points done at closedDone
+	// and never allocates a channel.
+	done atomic.Pointer[chan struct{}]
+
+	// subs is a lock-free Treiber stack of OnComplete callbacks, swapped to a
+	// closed sentinel when Complete publishes the Result.
+	subs atomic.Pointer[futureSub[R]]
 
 	// state carries the round a Future is in: unresolved, claimed by the
 	// one Complete that won, or published with its Result readable. The
@@ -58,16 +71,33 @@ type Future[R any] struct {
 	state atomic.Int32
 
 	// Written by whoever completes the future before done is closed, and read
-	// by whoever observes the close.
+	// by whoever observes the close or statePublished.
 	res Result[R]
 }
 
 // NewFuture returns an unresolved Future. Whoever owns the work calls Complete
-// exactly once on it.
+// exactly once on it. No channel is allocated unless a caller waits on Done or
+// Await before Complete runs.
 func NewFuture[R any]() *Future[R] {
-	return &Future[R]{
-		done: make(chan struct{}),
+	return &Future[R]{}
+}
+
+// NewResolvedFuture returns a Future that is already resolved with (value, err)
+// without allocating a channel.
+func NewResolvedFuture[R any](value R, err error) *Future[R] {
+	f := &Future[R]{
+		res: Result[R]{Value: value, Err: err},
 	}
+	f.state.Store(statePublished)
+	f.done.Store(&closedDoneChan)
+
+	return f
+}
+
+// NewResolvedResultFuture returns a Future that is already resolved with res
+// without allocating a channel.
+func NewResolvedResultFuture[R any](res Result[R]) *Future[R] {
+	return NewResolvedFuture(res.Value, res.Err)
 }
 
 // Complete resolves the Future. It is safe to call more than once and only the
@@ -91,7 +121,25 @@ func (f *Future[R]) Complete(value R, err error) bool {
 
 	f.res = Result[R]{Value: value, Err: err}
 	f.state.Store(statePublished)
-	close(f.done)
+
+	if !f.done.CompareAndSwap(nil, &closedDoneChan) {
+		close(*f.done.Load())
+	}
+
+	closedSentinel := &futureSub[R]{closed: true}
+	if head := f.subs.Swap(closedSentinel); head != nil && !head.closed {
+		var rev *futureSub[R]
+		for cur := head; cur != nil; {
+			next := cur.next
+			cur.next = rev
+			rev = cur
+			cur = next
+		}
+
+		for cur := rev; cur != nil; cur = cur.next {
+			cur.fn(f.res)
+		}
+	}
 
 	return true
 }
@@ -99,6 +147,59 @@ func (f *Future[R]) Complete(value R, err error) bool {
 // CompleteResult resolves the Future with a Result already in hand.
 func (f *Future[R]) CompleteResult(res Result[R]) bool {
 	return f.Complete(res.Value, res.Err)
+}
+
+// OnComplete registers fn to be called with the Result once the Future
+// resolves. If the Future is already resolved, fn is invoked immediately on
+// the calling goroutine.
+func (f *Future[R]) OnComplete(fn func(Result[R])) {
+	if fn == nil {
+		return
+	}
+
+	if f == nil {
+		fn(Result[R]{})
+
+		return
+	}
+
+	if f.state.Load() == statePublished {
+		fn(f.res)
+
+		return
+	}
+
+	node := &futureSub[R]{fn: fn}
+	for {
+		old := f.subs.Load()
+		if old != nil && old.closed {
+			fn(f.res)
+
+			return
+		}
+
+		node.next = old
+		if f.subs.CompareAndSwap(old, node) {
+			return
+		}
+	}
+}
+
+func (f *Future[R]) doneChan() <-chan struct{} {
+	if p := f.done.Load(); p != nil {
+		return *p
+	}
+
+	if f.state.Load() == statePublished {
+		return closedDone
+	}
+
+	ch := make(chan struct{})
+	if f.done.CompareAndSwap(nil, &ch) {
+		return ch
+	}
+
+	return *f.done.Load()
 }
 
 // Done returns a channel closed once the work has finished, one way or the
@@ -110,19 +211,21 @@ func (f *Future[R]) Done() <-chan struct{} {
 		return closedDone
 	}
 
-	return f.done
+	return f.doneChan()
 }
 
-var closedDone = func() <-chan struct{} {
+var closedDoneChan = func() chan struct{} {
 	ch := make(chan struct{})
 	close(ch)
 
 	return ch
 }()
 
+var closedDone <-chan struct{} = closedDoneChan
+
 // Try returns the Result and whether the work has finished. It never blocks, so
 // a caller polling in a loop can starve the goroutine it is polling for; use
-// Await or select on Done when the answer matters.
+// Await, OnComplete, or select on Done when the answer matters.
 //
 // A false second return is not an error and has no sentinel: the outcome is
 // unknown, which is a different statement from "the outcome was an error", and
@@ -167,7 +270,7 @@ func (f *Future[R]) Await(ctx context.Context) (R, error) {
 	}
 
 	select {
-	case <-f.done:
+	case <-f.doneChan():
 		return f.result()
 
 	case <-ctx.Done():

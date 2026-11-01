@@ -3,8 +3,8 @@ package async
 import (
 	"context"
 	"errors"
+	"github.com/apsis-io/nexty"
 	"slices"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -68,7 +68,7 @@ func (r *Runner) Map[T, R any](ctx context.Context, items []T, fn func(context.C
 	var (
 		next     atomic.Int64
 		failures itemErrors
-		wg       sync.WaitGroup
+		wg       nexty.WaitGroup
 	)
 	for range r.limit.workers(len(items)) {
 		wg.Go(func() {
@@ -206,7 +206,7 @@ func (r *Runner) ForEach[T any](ctx context.Context, items []T, fn func(context.
 // itemErrors collects failures from workers. Failures are rare, so the
 // success path touches only the atomic counter and the result slot.
 type itemErrors struct {
-	mu   sync.Mutex
+	mu   nexty.Mutex
 	errs []error
 }
 

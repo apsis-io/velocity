@@ -3,7 +3,7 @@ package resilience
 import (
 	"context"
 	"errors"
-	"sync"
+	"github.com/apsis-io/nexty"
 	"time"
 )
 
@@ -108,7 +108,7 @@ type Breaker struct {
 	policy BreakerPolicy
 	clock  Clock
 
-	mu         sync.Mutex
+	mu         nexty.Mutex
 	state      State
 	counts     Counts
 	inflight   int    // HalfOpen probes admitted and not yet reported
@@ -202,7 +202,7 @@ func (b *Breaker) Allow() (report func(error), err error) {
 		return nil, err
 	}
 
-	var once sync.Once
+	var once nexty.Once
 
 	return func(err error) {
 		once.Do(func() { b.report(generation, err) })

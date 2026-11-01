@@ -2,8 +2,8 @@ package dedupe
 
 import (
 	"context"
+	"github.com/apsis-io/nexty"
 	"runtime/debug"
-	"sync"
 	"time"
 
 	"github.com/apsis-io/velocity/ownership"
@@ -13,7 +13,7 @@ import (
 type Group[K comparable, V any] struct {
 	// once installs defaults into a zero-value Group on first use, so a
 	// Group field in a struct literal works as singleflight.Group does.
-	once    sync.Once
+	once    nexty.Once
 	baseCtx context.Context
 	backend backend[K, V]
 	drop    func(V) error
@@ -41,7 +41,7 @@ func NewSingleflight[K comparable, V any](opts ...Option[K, V]) (*Group[K, V], e
 type execution struct {
 	ctx    context.Context
 	cancel context.CancelFunc
-	mu     sync.Mutex
+	mu     nexty.Mutex
 	active int
 }
 
@@ -79,7 +79,7 @@ type call[V any] struct {
 	exec *execution
 	own  execution
 
-	mu        sync.Mutex
+	mu        nexty.Mutex
 	accepting bool
 	waiting   int
 	left      int

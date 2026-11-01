@@ -1,6 +1,6 @@
 package ownership
 
-import "sync"
+import "github.com/apsis-io/nexty"
 
 // Lease owns a resource that is held and then handed back, where the resource
 // is identified by a value rather than represented by one: a network permit, an
@@ -19,7 +19,7 @@ import "sync"
 type Lease[T any] struct {
 	_ noCopy
 
-	mu       sync.Mutex
+	mu       nexty.Mutex
 	value    T
 	release  func(T) error
 	handler  LeaseHandler[T]

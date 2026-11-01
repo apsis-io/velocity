@@ -3,7 +3,7 @@ package async
 import (
 	"context"
 	"errors"
-	"sync"
+	"github.com/apsis-io/nexty"
 	"time"
 
 	"github.com/apsis-io/velocity/traits"
@@ -41,7 +41,7 @@ func (r *Runner) Gather[T any](ctx context.Context, tasks ...Task[T]) ([]Outcome
 	outcomes := make([]Outcome[T], len(tasks))
 
 	var (
-		wg      sync.WaitGroup
+		wg      nexty.WaitGroup
 		permits chan struct{}
 	)
 	if !r.limit.unlimited {
@@ -216,7 +216,7 @@ func race[T any](ctx context.Context, r *Runner, tasks []Task[T], successOnly bo
 	completions := make(chan Outcome[T], len(tasks))
 
 	var (
-		wg      sync.WaitGroup
+		wg      nexty.WaitGroup
 		permits chan struct{}
 	)
 	if !r.limit.unlimited {

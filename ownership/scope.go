@@ -2,9 +2,9 @@ package ownership
 
 import (
 	"errors"
+	"github.com/apsis-io/nexty"
 	"io"
 	"slices"
-	"sync"
 )
 
 // Scope collects heterogeneous resources acquired during a multi-step
@@ -38,7 +38,7 @@ import (
 // A Scope is safe for concurrent use, though the construction it guards is
 // usually sequential.
 type Scope struct {
-	mu       sync.Mutex
+	mu       nexty.Mutex
 	releases []func() error
 	closed   bool
 	disarmed bool

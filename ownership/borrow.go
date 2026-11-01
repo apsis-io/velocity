@@ -1,8 +1,8 @@
 package ownership
 
 import (
+	"github.com/apsis-io/nexty"
 	"runtime"
-	"sync"
 )
 
 type borrowKind uint8
@@ -13,7 +13,7 @@ const (
 )
 
 type lease[T any] struct {
-	mu sync.Mutex
+	mu nexty.Mutex
 
 	cell     *cell[T]
 	issuer   *handle

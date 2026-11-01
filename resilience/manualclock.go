@@ -2,8 +2,8 @@ package resilience
 
 import (
 	"context"
+	"github.com/apsis-io/nexty"
 	"slices"
-	"sync"
 	"time"
 )
 
@@ -19,7 +19,7 @@ import (
 //
 // It is safe for concurrent use.
 type ManualClock struct {
-	mu     sync.Mutex
+	mu     nexty.Mutex
 	now    time.Time
 	sleeps int
 	timers []*manualTimer

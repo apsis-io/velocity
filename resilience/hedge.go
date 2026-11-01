@@ -3,9 +3,9 @@ package resilience
 import (
 	"context"
 	"errors"
+	"github.com/apsis-io/nexty"
 	"math"
 	"slices"
-	"sync"
 	"time"
 )
 
@@ -306,7 +306,7 @@ func (r *hedgeRun[T]) reap() {
 // A nil *HedgeBudget permits every hedge, which is the right choice only
 // when the operation is cheap or the caller is the only client.
 type HedgeBudget struct {
-	mu     sync.Mutex
+	mu     nexty.Mutex
 	tokens float64
 	ratio  float64
 	burst  float64
@@ -392,7 +392,7 @@ type LatencyDelay struct {
 	minSamples int
 	warmup     time.Duration
 
-	mu      sync.Mutex
+	mu      nexty.Mutex
 	samples []time.Duration // ring buffer of recent successful durations
 	next    int
 	filled  bool

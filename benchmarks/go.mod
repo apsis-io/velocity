@@ -14,7 +14,7 @@ require (
 )
 
 require (
-	github.com/apsis-io/nexty v1.2.3 // indirect
+	github.com/apsis-io/nexty v1.3.0 // indirect
 	github.com/puzpuzpuz/xsync/v4 v4.5.0 // indirect
 	go.uber.org/atomic v1.7.0 // indirect
 	go.uber.org/multierr v1.9.0 // indirect

@@ -1,8 +1,8 @@
 package dedupe
 
 import (
+	"github.com/apsis-io/nexty"
 	"hash/maphash"
-	"sync"
 
 	"github.com/puzpuzpuz/xsync/v4"
 )
@@ -15,7 +15,7 @@ type backend[K comparable, V any] interface {
 }
 
 type mutexBackend[K comparable, V any] struct {
-	mu    sync.Mutex
+	mu    nexty.Mutex
 	calls map[K]*call[V]
 }
 

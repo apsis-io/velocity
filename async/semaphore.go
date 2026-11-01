@@ -2,7 +2,6 @@ package async
 
 import (
 	"context"
-	"sync"
 
 	"github.com/apsis-io/nexty"
 )
@@ -74,7 +73,7 @@ func (s *Semaphore) TryAcquire() (*Permit, bool) {
 // nothing.
 type Permit struct {
 	permits *nexty.Semaphore
-	once    sync.Once
+	once    nexty.Once
 	// rw is set only by RWMutex, whose read and write locks are not tokens in a
 	// channel. It is nil on the Semaphore path, which is the hot one, and
 	// Release's nil check is the whole cost of sharing the type.
@@ -109,7 +108,7 @@ func (p *Permit) Release() {
 }
 
 // Mutex is an exclusive lock whose Lock waits under the caller's context —
-// the thing sync.Mutex cannot do and x/sync/semaphore.NewWeighted(1) is
+// the thing nexty.Mutex cannot do and x/sync/semaphore.NewWeighted(1) is
 // usually standing in for. Unlock is Release on the returned Permit, so a
 // lock is released exactly once and a forgotten one is reported by the
 // lostrelease analyzer.
